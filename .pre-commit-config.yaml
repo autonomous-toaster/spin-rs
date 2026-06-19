@@ -32,16 +32,21 @@ repos:
       - id: cargo-crap
         name: cargo crap (coverage gate)
         # NOTE: runs the full test suite — may take 1-2 min on first run.
-        # No live DB required: --features integration is omitted.
-        # Threshold 65 allows ~6 inherently complex functions
-        # (CLI entry point, codegen, runtime) that cannot be further simplified.
+        # Threshold 30 with --allow for 3 functions whose untestable branches
+        # cannot be reached through the current Promela parser:
+        #   - special_expr_to_lua: NFull/NEmpty/Timeout expression types
+        #   - run: trail-save path requires >5 errors
+        #   - emit_stmts: Unless/DStep/Label statement types
         entry: bash -c
           'set -e &&
           cargo llvm-cov --workspace --lcov
           --output-path /tmp/lcov-precommit.info
           --lib --bins --tests &&
           cargo crap --lcov /tmp/lcov-precommit.info
-          --threshold 65
+          --threshold 30
+          --allow "LuaGenerator::special_expr_to_lua"
+          --allow "run"
+          --allow "LuaGenerator::emit_stmts"
           --exclude "tests/**"
           --fail-above'
         language: system
