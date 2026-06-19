@@ -35,7 +35,7 @@ pub struct PorManager<S> {
     deps_cache: HashMap<u64, Vec<TransitionDeps>>,
     /// Transition labels for dependency lookup.
     _marker: std::marker::PhantomData<S>,
-    
+
     // C3 cycle detection fields
     /// States currently on DFS stack (hash -> expanded transitions)
     stack_states: HashMap<u64, HashSet<usize>>,
@@ -233,7 +233,9 @@ impl<S: Clone + Hash + Eq + Send> PorManager<S> {
 
     /// Push a state onto the DFS stack (for C3 tracking).
     pub fn push_stack(&mut self, state_hash: u64, depth: usize) {
-        self.stack_states.entry(state_hash).or_insert_with(HashSet::new);
+        self.stack_states
+            .entry(state_hash)
+            .or_insert_with(HashSet::new);
         self.stack_depth.insert(state_hash, depth);
     }
 
@@ -257,14 +259,14 @@ impl<S: Clone + Hash + Eq + Send> PorManager<S> {
     pub fn check_c3(&self, state_hash: u64, num_transitions: usize) -> bool {
         // C3: If the current state is on the stack (cycle detected),
         // and not all transitions have been expanded, C3 is violated.
-        
+
         if let Some(expanded) = self.stack_states.get(&state_hash) {
             // State is on stack - check if all transitions expanded
             if expanded.len() < num_transitions {
                 return true; // C3 violated
             }
         }
-        
+
         false // C3 satisfied
     }
 
@@ -339,12 +341,8 @@ pub fn check_dfs_por_with_c3<M: Model>(
         let all_transitions = model.transitions(&state);
 
         // Apply POR with C3: compute ample set
-        let ample_indices = por_manager.compute_ample_set_with_c3(
-            model,
-            &state,
-            &all_transitions,
-            state_hash,
-        );
+        let ample_indices =
+            por_manager.compute_ample_set_with_c3(model, &state, &all_transitions, state_hash);
 
         // Only explore transitions in the ample set
         let transitions_to_explore: Vec<_> =
