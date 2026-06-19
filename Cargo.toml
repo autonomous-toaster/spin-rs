@@ -1,0 +1,42 @@
+[package]
+name = "spin-rs"
+version = "0.1.0"
+edition = "2024"
+description = "A Rust-native Promela model checker with Lua runtime"
+license = "MIT"
+
+[dependencies]
+# Parser
+nom = { version = "7", features = ["std"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Hashing
+fxhash = "0.2"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+# Parallelism
+rayon = "1"
+
+# LTL → Büchi
+omega-automata = "0.1"
+
+# Lua runtime
+mlua = { version = "0.10", features = ["lua54", "vendored"], optional = true }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+[features]
+default = ["lua-runtime"]
+lua-runtime = ["dep:mlua"]
