@@ -4,9 +4,9 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::marker::PhantomData;
 
+use crate::engine::checker::{Model, Transition, Violation};
 use crate::property::ltl2ba::buchi::BuchiAutomaton;
 use crate::property::ltl2ba::product::{ProductState, ProductTransition};
-use crate::engine::checker::{Model, Transition, Violation};
 
 /// Nested DFS for LTL verification.
 ///
@@ -68,7 +68,7 @@ where
         M: Model<State = S>,
     {
         let init_hash = init_product.cached_hash();
-        
+
         if let Some(violation) = self.dfs1(model, buchi, init_product, init_hash, 0) {
             return Some(violation);
         }
@@ -90,16 +90,17 @@ where
     {
         // Check depth limit
         if let Some(max) = self.max_depth
-            && depth >= max {
-                return None;
-            }
+            && depth >= max
+        {
+            return None;
+        }
 
         self.visited1.insert(hash);
         self.stack.push(hash);
 
         // Get model transitions
         let model_transitions = model.transitions(&product.model_state);
-        
+
         // Synchronize with Büchi transitions
         let product_transitions = self.sync_with_buchi(
             model,
@@ -115,13 +116,9 @@ where
             if !self.visited1.contains(&next_hash) {
                 // Explore unvisited state
                 self.trail.push(prod_trans.label.clone());
-                if let Some(violation) = self.dfs1(
-                    model,
-                    buchi,
-                    prod_trans.next,
-                    next_hash,
-                    depth + 1,
-                ) {
+                if let Some(violation) =
+                    self.dfs1(model, buchi, prod_trans.next, next_hash, depth + 1)
+                {
                     return Some(violation);
                 }
                 self.trail.pop();
@@ -161,7 +158,7 @@ where
 
         // Get model transitions
         let model_transitions = model.transitions(&product.model_state);
-        
+
         // Synchronize with Büchi transitions
         let product_transitions = self.sync_with_buchi(
             model,
@@ -175,9 +172,10 @@ where
             let next_hash = prod_trans.next.cached_hash();
 
             if !self.visited2.contains(&next_hash)
-                && let Some(violation) = self.dfs2(model, buchi, prod_trans.next, next_hash) {
-                    return Some(violation);
-                }
+                && let Some(violation) = self.dfs2(model, buchi, prod_trans.next, next_hash)
+            {
+                return Some(violation);
+            }
         }
 
         None
@@ -227,5 +225,65 @@ mod tests {
     fn test_nested_dfs_with_max_depth() {
         let dfs: NestedDFS<i32> = NestedDFS::new().with_max_depth(100);
         assert_eq!(dfs.max_depth, Some(100));
+    }
+
+    // Simple model for testing nested DFS
+    struct TestModel;
+    impl crate::engine::checker::Model for TestModel {
+        type State = u64;
+        fn init_states(&self) -> Vec<u64> {
+            vec![0]
+        }
+        fn transitions(&self, state: &u64) -> Vec<crate::engine::checker::Transition<u64>> {
+            match state {
+                0 => vec![
+                    crate::engine::checker::Transition {
+                        label: "a".into(),
+                        next: 1,
+                    },
+                    crate::engine::checker::Transition {
+                        label: "b".into(),
+                        next: 2,
+                    },
+                ],
+                1 => vec![crate::engine::checker::Transition {
+                    label: "c".into(),
+                    next: 0,
+                }],
+                _ => vec![],
+            }
+        }
+        fn hash(&self, state: &u64) -> u64 {
+            *state
+        }
+    }
+
+    #[test]
+    fn test_nested_dfs_check_no_violation() {
+        // Create a Büchi automaton that accepts []p (always p)
+        let mut accepting = std::collections::HashSet::new();
+        accepting.insert(0);
+        let buchi = crate::property::ltl2ba::buchi::BuchiAutomaton {
+            num_states: 2,
+            initial: 0,
+            accepting,
+            transitions: vec![
+                vec![crate::property::ltl2ba::buchi::BuchiTransition {
+                    to: 0,
+                    conditions: vec![("p".to_string(), true)],
+                }],
+                vec![crate::property::ltl2ba::buchi::BuchiTransition {
+                    to: 1,
+                    conditions: vec![],
+                }],
+            ],
+        };
+        let model = TestModel;
+        let init_product =
+            crate::property::ltl2ba::product::ProductState::new(0u64, buchi.initial, 0);
+        let mut dfs = NestedDFS::new().with_max_depth(10);
+        let violation = dfs.check(&model, &buchi, init_product);
+        // Model has no accepting cycle, no violation expected
+        assert!(violation.is_none());
     }
 }

@@ -100,6 +100,10 @@ pub trait StateStore<S> {
     fn insert(&mut self, hash: u64, state: &S) -> bool;
     /// Number of stored states.
     fn len(&self) -> usize;
+    /// Check if store is empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// Exact state storage with collision resolution.
@@ -116,7 +120,10 @@ impl<S: Clone + Hash + Eq + Send> Default for ExactStore<S> {
 
 impl<S: Clone + Hash + Eq + Send> ExactStore<S> {
     pub fn new() -> Self {
-        Self { map: HashMap::new(), count: 0 }
+        Self {
+            map: HashMap::new(),
+            count: 0,
+        }
     }
 }
 
@@ -170,8 +177,7 @@ impl<S> StateStore<S> for BitstateStore {
             let bit1 = h1 % 8;
             let byte2 = h2 / 8;
             let bit2 = h2 % 8;
-            (self.bits[byte1] & (1 << bit1)) != 0
-                && (self.bits[byte2] & (1 << bit2)) != 0
+            (self.bits[byte1] & (1 << bit1)) != 0 && (self.bits[byte2] & (1 << bit2)) != 0
         };
 
         if already_set {
@@ -356,18 +362,19 @@ impl<M: Model> Checker<M> {
 
             // Check for violations (safety properties / assertions)
             if self.config.check_assertions
-                && let Some(desc) = self.model.check_violation(&state) {
-                    let state_trail = self.build_trail(&trail, state_idx);
-                    violations.push(Violation {
-                        property_name: "assertion".to_string(),
-                        trail: state_trail,
-                        description: desc,
-                    });
-                    if violations.len() >= 100 {
-                        break;
-                    }
-                    continue;
+                && let Some(desc) = self.model.check_violation(&state)
+            {
+                let state_trail = self.build_trail(&trail, state_idx);
+                violations.push(Violation {
+                    property_name: "assertion".to_string(),
+                    trail: state_trail,
+                    description: desc,
+                });
+                if violations.len() >= 100 {
+                    break;
                 }
+                continue;
+            }
 
             let trans = self.model.transitions(&state);
             transitions_count += trans.len();
@@ -388,9 +395,10 @@ impl<M: Model> Checker<M> {
             states_explored: storage.len(),
             states_stored: storage.len(),
             transitions: transitions_count,
-            depth_reached: self.config.max_depth.min(
-                stack.iter().map(|(_, d, _)| *d).max().unwrap_or(0)
-            ),
+            depth_reached: self
+                .config
+                .max_depth
+                .min(stack.iter().map(|(_, d, _)| *d).max().unwrap_or(0)),
             errors: violations.len(),
             violations,
             elapsed_secs: elapsed,
@@ -433,18 +441,19 @@ impl<M: Model> Checker<M> {
             }
 
             if self.config.check_assertions
-                && let Some(desc) = self.model.check_violation(&state) {
-                    let state_trail = self.build_trail(&trail, state_idx);
-                    violations.push(Violation {
-                        property_name: "assertion".to_string(),
-                        trail: state_trail,
-                        description: desc,
-                    });
-                    if violations.len() >= 100 {
-                        break;
-                    }
-                    continue;
+                && let Some(desc) = self.model.check_violation(&state)
+            {
+                let state_trail = self.build_trail(&trail, state_idx);
+                violations.push(Violation {
+                    property_name: "assertion".to_string(),
+                    trail: state_trail,
+                    description: desc,
+                });
+                if violations.len() >= 100 {
+                    break;
                 }
+                continue;
+            }
 
             let trans = self.model.transitions(&state);
             transitions_count += trans.len();
@@ -495,9 +504,9 @@ impl<M: Model> Checker<M> {
     fn make_storage(&self) -> Box<dyn StateStore<M::State>> {
         match self.config.storage_mode {
             StorageMode::Exact => Box::new(ExactStore::<M::State>::new()),
-            StorageMode::Bitstate => Box::new(BitstateStore::new(
-                (self.config.max_states / 8).max(1024),
-            )),
+            StorageMode::Bitstate => {
+                Box::new(BitstateStore::new((self.config.max_states / 8).max(1024)))
+            }
             StorageMode::Collapse => Box::new(CollapseStore::<M::State>::new(4)),
         }
     }
@@ -539,9 +548,18 @@ mod tests {
 
         fn transitions(&self, state: &u8) -> Vec<Transition<u8>> {
             match state {
-                0 => vec![Transition { label: "A→B".into(), next: 1 }],
-                1 => vec![Transition { label: "B→C".into(), next: 2 }],
-                2 => vec![Transition { label: "C→C".into(), next: 2 }],
+                0 => vec![Transition {
+                    label: "A→B".into(),
+                    next: 1,
+                }],
+                1 => vec![Transition {
+                    label: "B→C".into(),
+                    next: 2,
+                }],
+                2 => vec![Transition {
+                    label: "C→C".into(),
+                    next: 2,
+                }],
                 _ => vec![],
             }
         }
@@ -596,10 +614,7 @@ mod tests {
     #[test]
     fn test_max_depth_limit() {
         let model = ChainModel;
-        let checker = CheckerBuilder::new()
-            .model(model)
-            .max_depth(1)
-            .build();
+        let checker = CheckerBuilder::new().model(model).max_depth(1).build();
         let result = checker.check_dfs();
         // Should only explore to depth 1: state 0 → state 1
         assert_eq!(result.states_explored, 2);
@@ -608,10 +623,7 @@ mod tests {
     #[test]
     fn test_max_states_limit() {
         let model = ChainModel;
-        let checker = CheckerBuilder::new()
-            .model(model)
-            .max_states(2)
-            .build();
+        let checker = CheckerBuilder::new().model(model).max_states(2).build();
         let result = checker.check_dfs();
         assert_eq!(result.states_explored, 2);
     }
@@ -628,9 +640,18 @@ mod tests {
 
         fn transitions(&self, state: &i32) -> Vec<Transition<i32>> {
             match state {
-                0 => vec![Transition { label: "0→1".into(), next: 1 }],
-                1 => vec![Transition { label: "1→2".into(), next: 2 }],
-                _ => vec![Transition { label: "loop".into(), next: *state }],
+                0 => vec![Transition {
+                    label: "0→1".into(),
+                    next: 1,
+                }],
+                1 => vec![Transition {
+                    label: "1→2".into(),
+                    next: 2,
+                }],
+                _ => vec![Transition {
+                    label: "loop".into(),
+                    next: *state,
+                }],
             }
         }
 

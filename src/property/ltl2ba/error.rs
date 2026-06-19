@@ -106,9 +106,10 @@ mod tests {
     #[test]
     fn test_error_display_nested() {
         let err = LtlError::nested_temporal("[]<>p");
-        assert!(err
-            .to_string()
-            .contains("Nested temporal operators are not supported"));
+        assert!(
+            err.to_string()
+                .contains("Nested temporal operators are not supported")
+        );
         assert!(err.to_string().contains("[]<>p"));
     }
 

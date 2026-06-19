@@ -115,15 +115,17 @@ pub mod trail;
 
 // Re-export core types
 pub use engine::checker::CheckerBuilder;
-pub use engine::checker::{Checker, CheckerConfig, CheckResult, Model, SearchMode, StorageMode, Transition};
+pub use engine::checker::{
+    CheckResult, Checker, CheckerConfig, Model, SearchMode, StorageMode, Transition,
+};
 pub use parser::ast::PromelaModel;
 
 // Re-export runtime types
 pub use runtime::{LuaModel, LuaRuntime, verify as verify_model};
 
 // Re-export property types
-pub use property::{LtlFormula, PropertyChecker, verify_ltl};
 pub use property::buchi::{BuchiAutomaton, BuchiTransition, ProductState, ProductTransition};
+pub use property::{LtlFormula, PropertyChecker, verify_ltl};
 
 // Re-export trail types
 pub use trail::{ErrorTrail, TrailReplayer, TrailStats, TrailStep};
@@ -143,9 +145,7 @@ pub use trail::{ErrorTrail, TrailReplayer, TrailStats, TrailStep};
 /// ```
 pub fn verify(source: &str) -> anyhow::Result<CheckResult> {
     let model = LuaModel::from_source(source)?;
-    let checker = CheckerBuilder::new()
-        .model(model)
-        .build();
+    let checker = CheckerBuilder::new().model(model).build();
     Ok(checker.check())
 }
 
@@ -174,7 +174,7 @@ pub fn verify_with_config(source: &str, config: &CheckerConfig) -> anyhow::Resul
         .search_mode(config.search_mode)
         .por_enabled(config.por_enabled)
         .check_assertions(config.check_assertions);
-    
+
     let checker = builder.build();
     Ok(checker.check())
 }
@@ -248,8 +248,6 @@ mod tests {
         let result = verify(promela).unwrap();
         assert_eq!(result.errors, 0);
     }
-
-    #[test]
 
     #[test]
     fn test_parse_and_generate() {

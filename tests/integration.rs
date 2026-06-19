@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use spin_rs::{verify, CheckResult, CheckerBuilder, LuaModel, SearchMode, StorageMode};
+use spin_rs::{CheckResult, CheckerBuilder, LuaModel, SearchMode, StorageMode, verify};
 
 /// Test model from Spin standard suite.
 struct TestModel {

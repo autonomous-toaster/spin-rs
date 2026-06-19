@@ -194,7 +194,7 @@ pub enum Expression {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum UnaryOp {
     Not,
     BitNot,
@@ -204,7 +204,7 @@ pub enum UnaryOp {
     Eventually, // <> (LTL)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -230,19 +230,90 @@ pub enum BinaryOp {
     Release, // V (LTL)
 }
 
+fn write_vartype(f: &mut fmt::Formatter<'_>, vt: &VarType) -> fmt::Result {
+    use VarType::*;
+    let simple_table: &[(VarType, &str)] = &[
+        (Bit, "bit"),
+        (Bool, "bool"),
+        (Byte, "byte"),
+        (Short, "short"),
+        (Int, "int"),
+        (Chan, "chan"),
+        (Mtype, "mtype"),
+    ];
+    if let Some((_, name)) = simple_table
+        .iter()
+        .find(|(k, _)| std::mem::discriminant(k) == std::mem::discriminant(vt))
+    {
+        return write!(f, "{}", name);
+    }
+    match vt {
+        Unsigned(w) => match w {
+            Some(n) => write!(f, "unsigned({})", n),
+            None => write!(f, "unsigned"),
+        },
+        Named(n) => write!(f, "{}", n),
+        _ => Ok(()),
+    }
+}
+
 impl fmt::Display for VarType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            VarType::Bit => write!(f, "bit"),
-            VarType::Bool => write!(f, "bool"),
-            VarType::Byte => write!(f, "byte"),
-            VarType::Short => write!(f, "short"),
-            VarType::Int => write!(f, "int"),
-            VarType::Unsigned(None) => write!(f, "unsigned"),
-            VarType::Unsigned(Some(w)) => write!(f, "unsigned({})", w),
-            VarType::Chan => write!(f, "chan"),
-            VarType::Mtype => write!(f, "mtype"),
-            VarType::Named(n) => write!(f, "{}", n),
-        }
+        write_vartype(f, self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vartype_display_bit() {
+        assert_eq!(VarType::Bit.to_string(), "bit");
+    }
+
+    #[test]
+    fn test_vartype_display_bool() {
+        assert_eq!(VarType::Bool.to_string(), "bool");
+    }
+
+    #[test]
+    fn test_vartype_display_byte() {
+        assert_eq!(VarType::Byte.to_string(), "byte");
+    }
+
+    #[test]
+    fn test_vartype_display_short() {
+        assert_eq!(VarType::Short.to_string(), "short");
+    }
+
+    #[test]
+    fn test_vartype_display_int() {
+        assert_eq!(VarType::Int.to_string(), "int");
+    }
+
+    #[test]
+    fn test_vartype_display_chan() {
+        assert_eq!(VarType::Chan.to_string(), "chan");
+    }
+
+    #[test]
+    fn test_vartype_display_mtype() {
+        assert_eq!(VarType::Mtype.to_string(), "mtype");
+    }
+
+    #[test]
+    fn test_vartype_display_unsigned_with_width() {
+        assert_eq!(VarType::Unsigned(Some(8)).to_string(), "unsigned(8)");
+    }
+
+    #[test]
+    fn test_vartype_display_unsigned_without_width() {
+        assert_eq!(VarType::Unsigned(None).to_string(), "unsigned");
+    }
+
+    #[test]
+    fn test_vartype_display_named() {
+        assert_eq!(VarType::Named("mytype".to_string()).to_string(), "mytype");
     }
 }

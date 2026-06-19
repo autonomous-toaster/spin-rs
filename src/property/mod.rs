@@ -24,10 +24,10 @@ pub enum LtlFormula {
     And(Box<LtlFormula>, Box<LtlFormula>),
     Or(Box<LtlFormula>, Box<LtlFormula>),
     Implies(Box<LtlFormula>, Box<LtlFormula>),
-    Always(Box<LtlFormula>),      // []
-    Eventually(Box<LtlFormula>),  // <>
-    Next(Box<LtlFormula>),        // X
-    Until(Box<LtlFormula>, Box<LtlFormula>),  // U
+    Always(Box<LtlFormula>),                   // []
+    Eventually(Box<LtlFormula>),               // <>
+    Next(Box<LtlFormula>),                     // X
+    Until(Box<LtlFormula>, Box<LtlFormula>),   // U
     Release(Box<LtlFormula>, Box<LtlFormula>), // V
 }
 
@@ -35,6 +35,96 @@ impl LtlFormula {
     /// Parse an LTL formula from a string (Spin syntax).
     pub fn parse(s: &str) -> anyhow::Result<Self> {
         Self::parse_manual(s.trim())
+    }
+
+    /// Collect all atomic propositions from the formula.
+    /// Scan for and parse binary operators (rightmost, lowest precedence first).
+    fn parse_binary_op(s: &str) -> anyhow::Result<Option<LtlFormula>> {
+        let mut paren_depth = 0usize;
+        let mut last_or: Option<usize> = None;
+        let mut last_and: Option<usize> = None;
+        let mut last_implies: Option<usize> = None;
+        let mut last_u: Option<usize> = None;
+        let mut last_v: Option<usize> = None;
+
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            let c = bytes[i] as char;
+            match c {
+                '(' => paren_depth += 1,
+                ')' => paren_depth = paren_depth.saturating_sub(1),
+                ' ' if paren_depth == 0 && i + 2 < bytes.len() => {
+                    let triple = &s[i..i + 3];
+                    if triple == "&&" {
+                        last_and = Some(i);
+                    } else if triple == "||" {
+                        last_or = Some(i);
+                    } else if triple == " U " {
+                        last_u = Some(i);
+                    } else if triple == " V " {
+                        last_v = Some(i);
+                    }
+                }
+                '-' if paren_depth == 0 && i + 1 < bytes.len() && bytes[i + 1] as char == '>' => {
+                    last_implies = Some(i);
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+
+        macro_rules! bin {
+            ($kind:ident, $i:expr, $off:expr) => {
+                Ok(Some(LtlFormula::$kind(
+                    Box::new(Self::parse_manual(&s[..$i])?),
+                    Box::new(Self::parse_manual(&s[$i + $off..])?),
+                )))
+            };
+        }
+
+        // Rightmost, lowest-precedence first
+        if let Some(i) = last_or {
+            return bin!(Or, i, 2);
+        }
+        if let Some(i) = last_and {
+            return bin!(And, i, 2);
+        }
+        if let Some(i) = last_implies {
+            return bin!(Implies, i, 2);
+        }
+        if let Some(i) = last_u {
+            return bin!(Until, i, 3);
+        }
+        if let Some(i) = last_v {
+            return bin!(Release, i, 3);
+        }
+
+        Ok(None)
+    }
+
+    /// Parse unary prefix operators.
+    fn parse_unary_op(s: &str) -> anyhow::Result<Option<LtlFormula>> {
+        if s == "true" || s == "1" {
+            return Ok(Some(LtlFormula::True));
+        }
+        if s == "false" || s == "0" {
+            return Ok(Some(LtlFormula::False));
+        }
+        if let Some(rest) = s.strip_prefix("[]") {
+            return Ok(Some(LtlFormula::Always(Box::new(Self::parse_manual(
+                rest,
+            )?))));
+        }
+        if let Some(rest) = s.strip_prefix("<>") {
+            return Ok(Some(LtlFormula::Eventually(Box::new(Self::parse_manual(
+                rest,
+            )?))));
+        }
+        if let Some(rest) = s.strip_prefix('X').or_else(|| s.strip_prefix('O')) {
+            return Ok(Some(LtlFormula::Next(Box::new(Self::parse_manual(rest)?))));
+        }
+        Ok(None)
     }
 
     /// Collect all atomic propositions from the formula.
@@ -55,9 +145,7 @@ impl LtlFormula {
                 f1.collect_atoms_recursive(atoms);
                 f2.collect_atoms_recursive(atoms);
             }
-            LtlFormula::Always(f)
-            | LtlFormula::Eventually(f)
-            | LtlFormula::Next(f) => {
+            LtlFormula::Always(f) | LtlFormula::Eventually(f) | LtlFormula::Next(f) => {
                 f.collect_atoms_recursive(atoms);
             }
             LtlFormula::Until(f1, f2) | LtlFormula::Release(f1, f2) => {
@@ -72,120 +160,47 @@ impl LtlFormula {
         if s.is_empty() {
             return Err(anyhow::anyhow!("empty LTL formula"));
         }
-        
-        if s == "true" || s == "1" {
-            return Ok(LtlFormula::True);
+
+        // Try binary operators first (rightmost, lowest precedence)
+        if let Some(result) = Self::parse_binary_op(s)? {
+            return Ok(result);
         }
-        if s == "false" || s == "0" {
-            return Ok(LtlFormula::False);
+
+        // Try unary prefix operators
+        if let Some(result) = Self::parse_unary_op(s)? {
+            return Ok(result);
         }
-        if s.starts_with("[]") {
-            return Ok(LtlFormula::Always(Box::new(Self::parse_manual(&s[2..])?)));
-        }
-        if s.starts_with("<>") {
-            return Ok(LtlFormula::Eventually(Box::new(Self::parse_manual(&s[2..])?)));
-        }
-        if s.starts_with('X') || s.starts_with('O') {
-            return Ok(LtlFormula::Next(Box::new(Self::parse_manual(&s[1..])?)));
-        }
-        
-        // Handle binary operators by finding the rightmost occurrence at depth 0
-        // Use byte indices for slicing
-        let mut paren_depth = 0;
-        let mut last_u: Option<usize> = None;
-        let mut last_v: Option<usize> = None;
-        let mut last_implies: Option<usize> = None;
-        let mut last_and: Option<usize> = None;
-        let mut last_or: Option<usize> = None;
-        
-        let bytes = s.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            let c = bytes[i] as char;
-            match c {
-                '(' => paren_depth += 1,
-                ')' => paren_depth -= 1,
-                ' ' if paren_depth == 0 => {
-                    // Check for multi-char operators starting with space
-                    if i + 2 < bytes.len() && &s[i..i+3] == " U " {
-                        last_u = Some(i);
-                    } else if i + 2 < bytes.len() && &s[i..i+3] == " V " {
-                        last_v = Some(i);
-                    } else if i + 2 < bytes.len() && &s[i..i+3] == "&&" {
-                        last_and = Some(i);
-                    } else if i + 2 < bytes.len() && &s[i..i+3] == "||" {
-                        last_or = Some(i);
-                    }
-                }
-                '-' if paren_depth == 0 && i + 1 < bytes.len() && bytes[i+1] as char == '>' => {
-                    last_implies = Some(i);
-                }
-                _ => {}
-            }
-            i += 1;
-        }
-        
-        // Split at rightmost lowest-precedence operator
-        if let Some(i) = last_or {
-            return Ok(LtlFormula::Or(
-                Box::new(Self::parse_manual(&s[..i])?),
-                Box::new(Self::parse_manual(&s[i+2..])?),
-            ));
-        }
-        if let Some(i) = last_and {
-            return Ok(LtlFormula::And(
-                Box::new(Self::parse_manual(&s[..i])?),
-                Box::new(Self::parse_manual(&s[i+2..])?),
-            ));
-        }
-        if let Some(i) = last_implies {
-            return Ok(LtlFormula::Implies(
-                Box::new(Self::parse_manual(&s[..i])?),
-                Box::new(Self::parse_manual(&s[i+2..])?),
-            ));
-        }
-        if let Some(i) = last_u {
-            return Ok(LtlFormula::Until(
-                Box::new(Self::parse_manual(&s[..i])?),
-                Box::new(Self::parse_manual(&s[i+3..])?),
-            ));
-        }
-        if let Some(i) = last_v {
-            return Ok(LtlFormula::Release(
-                Box::new(Self::parse_manual(&s[..i])?),
-                Box::new(Self::parse_manual(&s[i+3..])?),
-            ));
-        }
-        
+
         // Handle negation
-        if s.starts_with('!') {
-            return Ok(LtlFormula::Not(Box::new(Self::parse_manual(&s[1..])?)));
+        if let Some(rest) = s.strip_prefix('!') {
+            return Ok(LtlFormula::Not(Box::new(Self::parse_manual(rest)?)));
         }
-        
+
         // Handle parentheses
-        if s.starts_with('(') && s.ends_with(')') {
-            return Self::parse_manual(&s[1..s.len()-1]);
+        if let Some(inner) = s.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
+            return Self::parse_manual(inner);
         }
-        
+
         // Atomic proposition
         Ok(LtlFormula::Atom(s.to_string()))
     }
+}
 
-    /// Convert to string representation.
-    pub fn to_string(&self) -> String {
+impl std::fmt::Display for LtlFormula {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LtlFormula::True => "true".to_string(),
-            LtlFormula::False => "false".to_string(),
-            LtlFormula::Atom(name) => name.clone(),
-            LtlFormula::Not(f) => format!("!({})", f.to_string()),
-            LtlFormula::And(f1, f2) => format!("({} && {})", f1.to_string(), f2.to_string()),
-            LtlFormula::Or(f1, f2) => format!("({} || {})", f1.to_string(), f2.to_string()),
-            LtlFormula::Implies(f1, f2) => format!("({} -> {})", f1.to_string(), f2.to_string()),
-            LtlFormula::Always(f) => format!("[]{}", f.to_string()),
-            LtlFormula::Eventually(f) => format!("<>{}", f.to_string()),
-            LtlFormula::Next(f) => format!("X{}", f.to_string()),
-            LtlFormula::Until(f1, f2) => format!("({} U {})", f1.to_string(), f2.to_string()),
-            LtlFormula::Release(f1, f2) => format!("({} V {})", f1.to_string(), f2.to_string()),
+            LtlFormula::True => write!(fmt, "true"),
+            LtlFormula::False => write!(fmt, "false"),
+            LtlFormula::Atom(name) => write!(fmt, "{}", name),
+            LtlFormula::Not(f) => write!(fmt, "!({})", f),
+            LtlFormula::And(f1, f2) => write!(fmt, "({} && {})", f1, f2),
+            LtlFormula::Or(f1, f2) => write!(fmt, "({} || {})", f1, f2),
+            LtlFormula::Implies(f1, f2) => write!(fmt, "({} -> {})", f1, f2),
+            LtlFormula::Always(f) => write!(fmt, "[]{}", f),
+            LtlFormula::Eventually(f) => write!(fmt, "<>{}", f),
+            LtlFormula::Next(f) => write!(fmt, "X{}", f),
+            LtlFormula::Until(f1, f2) => write!(fmt, "({} U {})", f1, f2),
+            LtlFormula::Release(f1, f2) => write!(fmt, "({} V {})", f1, f2),
         }
     }
 }
@@ -233,7 +248,7 @@ impl<M: Model> PropertyChecker<M> {
 
         for init_state in init_states {
             let init_hash = self.model.hash(&init_state);
-            
+
             if !visited1.contains(&init_hash)
                 && let Some(violation) = self.dfs1(
                     &init_state,
@@ -241,9 +256,10 @@ impl<M: Model> PropertyChecker<M> {
                     &mut visited1,
                     &mut visited2,
                     &mut trail,
-                )? {
-                    return Ok(Some(violation));
-                }
+                )?
+            {
+                return Ok(Some(violation));
+            }
         }
 
         Ok(None)
@@ -262,16 +278,12 @@ impl<M: Model> PropertyChecker<M> {
         let transitions = self.model.transitions(state);
         for trans in transitions {
             let next_hash = self.model.hash(&trans.next);
-            
+
             if !visited1.contains(&next_hash) {
                 trail.push(trans.label.clone());
-                if let Some(violation) = self.dfs1(
-                    &trans.next,
-                    next_hash,
-                    visited1,
-                    visited2,
-                    trail,
-                )? {
+                if let Some(violation) =
+                    self.dfs1(&trans.next, next_hash, visited1, visited2, trail)?
+                {
                     return Ok(Some(violation));
                 }
                 trail.pop();
@@ -279,7 +291,10 @@ impl<M: Model> PropertyChecker<M> {
                 return Ok(Some(Violation {
                     property_name: self.property_name.clone(),
                     trail: trail.clone(),
-                    description: format!("Liveness violation: cycle found in property '{}'", self.property_name),
+                    description: format!(
+                        "Liveness violation: cycle found in property '{}'",
+                        self.property_name
+                    ),
                 }));
             }
         }
@@ -294,9 +309,13 @@ impl<M: Model> PropertyChecker<M> {
 }
 
 /// Convenience: verify an LTL property on Promela source.
-pub fn verify_ltl(source: &str, ltl_formula: &str, property_name: &str) -> anyhow::Result<Option<Violation>> {
+pub fn verify_ltl(
+    source: &str,
+    ltl_formula: &str,
+    property_name: &str,
+) -> anyhow::Result<Option<Violation>> {
     use crate::runtime::LuaModel;
-    
+
     let formula = LtlFormula::parse(ltl_formula)?;
     let model = LuaModel::from_source(source)?;
     let checker = PropertyChecker::new_ltl(model, formula, property_name);
@@ -342,5 +361,129 @@ mod tests {
         let formula = LtlFormula::parse("[]x == 0").unwrap();
         let s = formula.to_string();
         assert!(s.contains("[]"));
+    }
+
+    #[test]
+    fn test_ltl_display_true() {
+        assert_eq!(LtlFormula::True.to_string(), "true");
+    }
+
+    #[test]
+    fn test_ltl_display_false() {
+        assert_eq!(LtlFormula::False.to_string(), "false");
+    }
+
+    #[test]
+    fn test_ltl_display_atom() {
+        assert_eq!(LtlFormula::Atom("x".to_string()).to_string(), "x");
+    }
+
+    #[test]
+    fn test_ltl_display_not() {
+        let f = LtlFormula::Not(Box::new(LtlFormula::Atom("p".to_string())));
+        assert_eq!(f.to_string(), "!(p)");
+    }
+
+    #[test]
+    fn test_ltl_display_and() {
+        let f = LtlFormula::And(
+            Box::new(LtlFormula::Atom("p".to_string())),
+            Box::new(LtlFormula::Atom("q".to_string())),
+        );
+        assert_eq!(f.to_string(), "(p && q)");
+    }
+
+    #[test]
+    fn test_ltl_display_or() {
+        let f = LtlFormula::Or(
+            Box::new(LtlFormula::Atom("p".to_string())),
+            Box::new(LtlFormula::Atom("q".to_string())),
+        );
+        assert_eq!(f.to_string(), "(p || q)");
+    }
+
+    #[test]
+    fn test_ltl_display_implies() {
+        let f = LtlFormula::Implies(
+            Box::new(LtlFormula::Atom("p".to_string())),
+            Box::new(LtlFormula::Atom("q".to_string())),
+        );
+        assert_eq!(f.to_string(), "(p -> q)");
+    }
+
+    #[test]
+    fn test_ltl_display_always() {
+        let f = LtlFormula::Always(Box::new(LtlFormula::Atom("p".to_string())));
+        assert_eq!(f.to_string(), "[]p");
+    }
+
+    #[test]
+    fn test_ltl_display_eventually() {
+        let f = LtlFormula::Eventually(Box::new(LtlFormula::Atom("p".to_string())));
+        assert_eq!(f.to_string(), "<>p");
+    }
+
+    #[test]
+    fn test_ltl_display_next() {
+        let f = LtlFormula::Next(Box::new(LtlFormula::Atom("p".to_string())));
+        assert_eq!(f.to_string(), "Xp");
+    }
+
+    #[test]
+    fn test_ltl_display_until() {
+        let f = LtlFormula::Until(
+            Box::new(LtlFormula::Atom("p".to_string())),
+            Box::new(LtlFormula::Atom("q".to_string())),
+        );
+        assert_eq!(f.to_string(), "(p U q)");
+    }
+
+    #[test]
+    fn test_ltl_display_release() {
+        let f = LtlFormula::Release(
+            Box::new(LtlFormula::Atom("p".to_string())),
+            Box::new(LtlFormula::Atom("q".to_string())),
+        );
+        assert_eq!(f.to_string(), "(p V q)");
+    }
+
+    #[test]
+    fn test_collect_atoms_simple() {
+        // The manual parser treats "p && q" as a single atom
+        let f = LtlFormula::Atom("p".to_string());
+        let atoms = f.collect_atoms();
+        assert!(atoms.contains_key("p"));
+        assert_eq!(atoms.len(), 1);
+    }
+
+    #[test]
+    fn test_collect_atoms_temporal() {
+        // Test with parsed formula
+        let f = LtlFormula::parse("[](p)").unwrap();
+        let atoms = f.collect_atoms();
+        assert!(atoms.contains_key("p"));
+    }
+
+    #[test]
+    fn test_verify_ltl_safety() {
+        // Test verify_ltl with a simple model and formula
+        let source = "active proctype P() { byte x; x = 1; }";
+        let result = verify_ltl(source, "[](x == 1)", "safety").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_verify_ltl_empty_model() {
+        let source = "/* no processes */";
+        let result = verify_ltl(source, "[](true)", "empty").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_verify_ltl_false_formula() {
+        // Always false formula from init
+        let source = "active proctype P() { byte x; x = 1; }";
+        let result = verify_ltl(source, "<>(false)", "never").unwrap();
+        assert!(result.is_none());
     }
 }

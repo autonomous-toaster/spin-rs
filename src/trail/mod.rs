@@ -82,7 +82,8 @@ impl ErrorTrail {
     pub fn load_json(path: &Path) -> std::io::Result<Self> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
-        serde_json::from_reader(reader).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        serde_json::from_reader(reader)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 
     /// Save trail in Spin-compatible text format.
@@ -162,7 +163,8 @@ impl<M: crate::engine::checker::Model> TrailReplayer<M> {
         // Find initial state matching first step's hash
         let mut current_state = None;
         for state in &current_states {
-            if self.model.hash(state) == self.trail.steps.first().map(|s| s.state_hash).unwrap_or(0) {
+            if self.model.hash(state) == self.trail.steps.first().map(|s| s.state_hash).unwrap_or(0)
+            {
                 current_state = Some(state.clone());
                 break;
             }
@@ -174,7 +176,7 @@ impl<M: crate::engine::checker::Model> TrailReplayer<M> {
         // Follow trail transitions
         for step in &self.trail.steps {
             let transitions = self.model.transitions(&state);
-            
+
             // Find matching transition
             let mut found = false;
             for trans in &transitions {
@@ -202,7 +204,11 @@ impl<M: crate::engine::checker::Model> TrailReplayer<M> {
     /// Replay a single step, returning the next state.
     pub fn replay_step(&self, state: &M::State, step_idx: usize) -> anyhow::Result<M::State> {
         if step_idx >= self.trail.steps.len() {
-            anyhow::bail!("Step index {} out of bounds (trail has {} steps)", step_idx, self.trail.steps.len());
+            anyhow::bail!(
+                "Step index {} out of bounds (trail has {} steps)",
+                step_idx,
+                self.trail.steps.len()
+            );
         }
 
         let step = &self.trail.steps[step_idx];
@@ -255,9 +261,10 @@ impl TrailStats {
             if let Some(colon_pos) = step.label.find(':') {
                 let process = &step.label[..colon_pos];
                 if let Some(last) = &last_process
-                    && last != process {
-                        process_switches += 1;
-                    }
+                    && last != process
+                {
+                    process_switches += 1;
+                }
                 last_process = Some(process.to_string());
             }
 
@@ -328,13 +335,13 @@ mod tests {
     fn test_trail_json_roundtrip() {
         let trail = sample_trail();
         let temp_path = std::env::temp_dir().join("test_trail.json");
-        
+
         trail.save_json(&temp_path).unwrap();
         let loaded = ErrorTrail::load_json(&temp_path).unwrap();
-        
+
         assert_eq!(loaded.len(), trail.len());
         assert_eq!(loaded.property_name, trail.property_name);
-        
+
         std::fs::remove_file(temp_path).ok();
     }
 
@@ -342,13 +349,13 @@ mod tests {
     fn test_trail_spin_format() {
         let trail = sample_trail();
         let temp_path = std::env::temp_dir().join("test_trail.trail");
-        
+
         trail.save_spin_format(&temp_path).unwrap();
         let content = std::fs::read_to_string(&temp_path).unwrap();
-        
+
         assert!(content.contains("spin trail:"));
         assert!(content.contains("P:x=1"));
-        
+
         std::fs::remove_file(temp_path).ok();
     }
 
@@ -356,7 +363,7 @@ mod tests {
     fn test_trail_stats() {
         let trail = sample_trail();
         let stats = TrailStats::compute(&trail);
-        
+
         assert_eq!(stats.trail_length, 3);
         assert_eq!(stats.unique_states, 3);
         assert_eq!(stats.assertion_checks, 1);
@@ -369,16 +376,29 @@ mod tests {
         struct TestModel;
         impl Model for TestModel {
             type State = u8;
-            fn init_states(&self) -> Vec<u8> { vec![0] }
+            fn init_states(&self) -> Vec<u8> {
+                vec![0]
+            }
             fn transitions(&self, state: &u8) -> Vec<Transition<u8>> {
                 match state {
-                    0 => vec![Transition { label: "P:x=1".into(), next: 1 }],
-                    1 => vec![Transition { label: "Q:y=1".into(), next: 2 }],
-                    2 => vec![Transition { label: "P:assert".into(), next: 3 }],
+                    0 => vec![Transition {
+                        label: "P:x=1".into(),
+                        next: 1,
+                    }],
+                    1 => vec![Transition {
+                        label: "Q:y=1".into(),
+                        next: 2,
+                    }],
+                    2 => vec![Transition {
+                        label: "P:assert".into(),
+                        next: 3,
+                    }],
                     _ => vec![],
                 }
             }
-            fn hash(&self, state: &u8) -> u64 { *state as u64 }
+            fn hash(&self, state: &u8) -> u64 {
+                *state as u64
+            }
         }
 
         let model = TestModel;
@@ -389,10 +409,10 @@ mod tests {
         };
         let hashes = vec![0, 1, 2, 3];
         let trail = ErrorTrail::new(violation, hashes, 4, 3);
-        
+
         let replayer = TrailReplayer::new(model, trail);
         let states = replayer.replay().unwrap();
-        
+
         assert_eq!(states.len(), 4);
         assert_eq!(states, vec![0, 1, 2, 3]);
     }

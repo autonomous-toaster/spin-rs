@@ -18,19 +18,11 @@ clap = { version = "4", features = ["derive"] }
 
 # Hashing
 fxhash = "0.2"
-xxhash-rust = { version = "0.8", features = ["xxh3"] }
-
-# Parallelism
-rayon = "1"
-
-# LTL → Büchi
-omega-automata = "0.1"
 
 # Lua runtime
 mlua = { version = "0.10", features = ["lua54", "vendored"], optional = true }
 
 # Error handling
-thiserror = "2"
 anyhow = "1"
 
 # Logging

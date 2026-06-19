@@ -12,16 +12,16 @@
 //!
 //! For full LTL support, see the full ltl2ba implementation (future work).
 
-pub mod formula;
-pub mod error;
-pub mod parser;
 pub mod buchi;
-pub mod product;
+pub mod error;
+pub mod formula;
 pub mod nested_dfs;
+pub mod parser;
+pub mod product;
 
-pub use formula::LtlFormula;
-pub use error::LtlError;
-pub use parser::parse_ltl;
 pub use buchi::{BuchiAutomaton, BuchiTransition, to_buchi};
-pub use product::{ProductState, ProductTransition, sync_transitions, evaluate_atomic_props};
+pub use error::LtlError;
+pub use formula::LtlFormula;
 pub use nested_dfs::NestedDFS;
+pub use parser::parse_ltl;
+pub use product::{ProductState, ProductTransition, evaluate_atomic_props, sync_transitions};

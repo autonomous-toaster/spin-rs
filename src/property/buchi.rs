@@ -1,11 +1,7 @@
 //! Büchi automaton types for LTL verification.
 //!
 //! This module provides the data structures for representing Büchi automata
-//! constructed from LTL formulas via the omega-automata crate.
-//!
-//! **Note**: The omega-automata crate doesn't expose NBW structure publicly.
-//! For full LTL → Büchi conversion, we need to either contribute extraction methods
-//! to omega-automata or implement our own conversion.
+//! constructed from LTL formulas via the simplified ltl2ba-rs implementation.
 
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
@@ -17,8 +13,7 @@ use crate::property::LtlFormula;
 
 /// Büchi automaton for LTL verification.
 ///
-/// Constructed from LTL formulas via the omega-automata crate:
-/// LTL → VWABW → GBW → NBW (Büchi)
+/// Constructed from LTL formulas via the simplified ltl2ba-rs implementation.
 #[derive(Debug, Clone)]
 pub struct BuchiAutomaton {
     /// Number of states
@@ -238,6 +233,6 @@ mod tests {
         assert!(buchi.is_ok());
         let buchi = buchi.unwrap();
         assert_eq!(buchi.num_states, 1); // Trivial has 1 state
-                                         // TODO: When from_ltl is implemented, verify num_states > 0 for non-trivial formulas
+        // TODO: When from_ltl is implemented, verify num_states > 0 for non-trivial formulas
     }
 }

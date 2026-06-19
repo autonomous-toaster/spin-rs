@@ -233,9 +233,7 @@ impl<S: Clone + Hash + Eq + Send> PorManager<S> {
 
     /// Push a state onto the DFS stack (for C3 tracking).
     pub fn push_stack(&mut self, state_hash: u64, depth: usize) {
-        self.stack_states
-            .entry(state_hash)
-            .or_insert_with(HashSet::new);
+        self.stack_states.entry(state_hash).or_default();
         self.stack_depth.insert(state_hash, depth);
     }
 

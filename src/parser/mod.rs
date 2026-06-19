@@ -48,7 +48,10 @@ fn skip_ws(input: Input) -> IResult<Input, ()> {
     let mut pos = 0;
     loop {
         while pos < input.len()
-            && input[pos..].chars().next().is_some_and(|c| c.is_whitespace())
+            && input[pos..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_whitespace())
         {
             pos += 1;
         }
@@ -87,12 +90,13 @@ fn keyword(s: &'static str) -> impl Fn(Input) -> IResult<Input, Input> {
         let (input, _) = skip_ws(input)?;
         let (input, kw) = tag(s)(input)?;
         if let Some(next) = input.chars().next()
-            && (next.is_alphanumeric() || next == '_') {
-                return Err(nom::Err::Error(nom::error::Error::new(
-                    input,
-                    nom::error::ErrorKind::Tag,
-                )));
-            }
+            && (next.is_alphanumeric() || next == '_')
+        {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Tag,
+            )));
+        }
         Ok((input, kw))
     }
 }
@@ -144,7 +148,11 @@ fn int_literal(input: Input) -> IResult<Input, i64> {
 
 fn string_literal(input: Input) -> IResult<Input, String> {
     let (input, _) = skip_ws(input)?;
-    let (input, s) = delimited(char('"'), nom::bytes::complete::take_while(|c: char| c != '"'), char('"'))(input)?;
+    let (input, s) = delimited(
+        char('"'),
+        nom::bytes::complete::take_while(|c: char| c != '"'),
+        char('"'),
+    )(input)?;
     Ok((input, s.to_string()))
 }
 
@@ -180,7 +188,13 @@ fn var_decl(input: Input) -> IResult<Input, VarDecl> {
     let (input, init) = opt(preceded(symbol("="), expr))(input)?;
     Ok((
         input,
-        VarDecl { var_type: vt, name, array_size: arr, init: init.map(Box::new), line: 0 },
+        VarDecl {
+            var_type: vt,
+            name,
+            array_size: arr,
+            init: init.map(Box::new),
+            line: 0,
+        },
     ))
 }
 
@@ -193,9 +207,14 @@ fn disjunction(input: Input) -> IResult<Input, Expression> {
     let (i, first) = conjunction(input)?;
     // Try to parse || if present
     if let Ok((rest, right)) = preceded(symbol("||"), conjunction)(i) {
-        Ok((rest, Expression::BinaryOp {
-            op: BinaryOp::Or, left: Box::new(first), right: Box::new(right),
-        }))
+        Ok((
+            rest,
+            Expression::BinaryOp {
+                op: BinaryOp::Or,
+                left: Box::new(first),
+                right: Box::new(right),
+            },
+        ))
     } else {
         Ok((i, first))
     }
@@ -205,7 +224,9 @@ fn conjunction(input: Input) -> IResult<Input, Expression> {
     let (input, first) = comparison(input)?;
     if let Ok((rest, right)) = preceded(symbol("&&"), comparison)(input) {
         let result = Expression::BinaryOp {
-            op: BinaryOp::And, left: Box::new(first), right: Box::new(right),
+            op: BinaryOp::And,
+            left: Box::new(first),
+            right: Box::new(right),
         };
         return Ok((rest, result));
     }
@@ -221,10 +242,15 @@ fn comparison(input: Input) -> IResult<Input, Expression> {
         map(pair(symbol("=="), addition), |(_, r)| (BinaryOp::Eq, r)),
         map(pair(symbol("<"), addition), |(_, r)| (BinaryOp::Lt, r)),
         map(pair(symbol(">"), addition), |(_, r)| (BinaryOp::Gt, r)),
-    ))(input) {
+    ))(input)
+    {
         Ok((
             rest,
-            Expression::BinaryOp { op, left: Box::new(first), right: Box::new(right) },
+            Expression::BinaryOp {
+                op,
+                left: Box::new(first),
+                right: Box::new(right),
+            },
         ))
     } else {
         Ok((input, first))
@@ -236,10 +262,15 @@ fn addition(input: Input) -> IResult<Input, Expression> {
     if let Ok((rest, (op, right))) = alt((
         map(pair(symbol("+"), term), |(_, r)| (BinaryOp::Add, r)),
         map(pair(symbol("-"), term), |(_, r)| (BinaryOp::Sub, r)),
-    ))(input) {
+    ))(input)
+    {
         Ok((
             rest,
-            Expression::BinaryOp { op, left: Box::new(first), right: Box::new(right) },
+            Expression::BinaryOp {
+                op,
+                left: Box::new(first),
+                right: Box::new(right),
+            },
         ))
     } else {
         Ok((input, first))
@@ -252,10 +283,15 @@ fn term(input: Input) -> IResult<Input, Expression> {
         map(pair(symbol("*"), unary), |(_, r)| (BinaryOp::Mul, r)),
         map(pair(symbol("/"), unary), |(_, r)| (BinaryOp::Div, r)),
         map(pair(symbol("%"), unary), |(_, r)| (BinaryOp::Mod, r)),
-    ))(input) {
+    ))(input)
+    {
         Ok((
             rest,
-            Expression::BinaryOp { op, left: Box::new(first), right: Box::new(right) },
+            Expression::BinaryOp {
+                op,
+                left: Box::new(first),
+                right: Box::new(right),
+            },
         ))
     } else {
         Ok((input, first))
@@ -266,13 +302,16 @@ fn unary(input: Input) -> IResult<Input, Expression> {
     let (input, _) = skip_ws(input)?;
     alt((
         map(pair(symbol("!"), unary), |(_, e)| Expression::UnaryOp {
-            op: UnaryOp::Not, expr: Box::new(e),
+            op: UnaryOp::Not,
+            expr: Box::new(e),
         }),
         map(pair(symbol("~"), unary), |(_, e)| Expression::UnaryOp {
-            op: UnaryOp::BitNot, expr: Box::new(e),
+            op: UnaryOp::BitNot,
+            expr: Box::new(e),
         }),
         map(pair(symbol("-"), unary), |(_, e)| Expression::UnaryOp {
-            op: UnaryOp::Neg, expr: Box::new(e),
+            op: UnaryOp::Neg,
+            expr: Box::new(e),
         }),
         primary,
     ))(input)
@@ -343,9 +382,15 @@ fn assignment_stmt(input: Input) -> IResult<Input, Stmt> {
     let (input, _) = symbol("=")(input)?;
     let (input, value) = expr(input)?;
     let (input, _) = opt(symbol(";"))(input)?;
-    Ok((input, Stmt::Assignment {
-        target, index: index.map(Box::new), value: Box::new(value), line: 0,
-    }))
+    Ok((
+        input,
+        Stmt::Assignment {
+            target,
+            index: index.map(Box::new),
+            value: Box::new(value),
+            line: 0,
+        },
+    ))
 }
 fn expr_stmt(input: Input) -> IResult<Input, Stmt> {
     let (input, e) = expr(input)?;
@@ -357,10 +402,24 @@ fn guard_body(input: Input) -> IResult<Input, Guard> {
     if let Ok((rest, _)) = keyword("else")(input) {
         if let Ok((rest2, _)) = opt(symbol("->"))(rest) {
             let (rest3, body) = many0(stmt)(rest2)?;
-            return Ok((rest3, Guard { condition: None, body, line: 0 }));
+            return Ok((
+                rest3,
+                Guard {
+                    condition: None,
+                    body,
+                    line: 0,
+                },
+            ));
         }
         let (rest3, body) = many0(stmt)(rest)?;
-        return Ok((rest3, Guard { condition: None, body, line: 0 }));
+        return Ok((
+            rest3,
+            Guard {
+                condition: None,
+                body,
+                line: 0,
+            },
+        ));
     }
     let (input, cond) = opt(expr)(input)?;
     let (input, _) = if cond.is_some() {
@@ -369,7 +428,14 @@ fn guard_body(input: Input) -> IResult<Input, Guard> {
         (input, None)
     };
     let (input, body) = many0(stmt)(input)?;
-    Ok((input, Guard { condition: cond, body, line: 0 }))
+    Ok((
+        input,
+        Guard {
+            condition: cond,
+            body,
+            line: 0,
+        },
+    ))
 }
 fn if_stmt(input: Input) -> IResult<Input, Stmt> {
     let (input, _) = keyword("if")(input)?;
@@ -404,7 +470,10 @@ fn printf_stmt(input: Input) -> IResult<Input, Stmt> {
     let (input, _) = keyword("printf")(input)?;
     let (input, (fmt, args)) = delimited(
         ws_char('('),
-        pair(string_literal, opt(preceded(symbol(","), separated_list0(symbol(","), expr)))),
+        pair(
+            string_literal,
+            opt(preceded(symbol(","), separated_list0(symbol(","), expr))),
+        ),
         ws_char(')'),
     )(input)?;
     let (input, _) = opt(symbol(";"))(input)?;
@@ -418,25 +487,43 @@ fn skip_stmt(input: Input) -> IResult<Input, Stmt> {
 fn send_stmt(input: Input) -> IResult<Input, Stmt> {
     let (input, channel) = ident(input)?;
     let (input, _) = symbol("!")(input)?;
-    let (input, target_val) = alt((
-        map(expr, SendTarget::Value),
-        map(ident, SendTarget::Ident),
+    let (input, target_val) =
+        alt((map(expr, SendTarget::Value), map(ident, SendTarget::Ident)))(input)?;
+    let (input, args) = opt(delimited(
+        ws_char('('),
+        separated_list0(symbol(","), expr),
+        ws_char(')'),
     ))(input)?;
-    let (input, args) = opt(delimited(ws_char('('), separated_list0(symbol(","), expr), ws_char(')')))(input)?;
     let (input, _) = opt(symbol(";"))(input)?;
-    Ok((input, Stmt::Send {
-        channel, target: target_val, args: args.unwrap_or_default(), line: 0,
-    }))
+    Ok((
+        input,
+        Stmt::Send {
+            channel,
+            target: target_val,
+            args: args.unwrap_or_default(),
+            line: 0,
+        },
+    ))
 }
 fn recv_stmt(input: Input) -> IResult<Input, Stmt> {
     let (input, channel) = ident(input)?;
     let (input, _) = symbol("?")(input)?;
     let (input, target) = alt((
-        map(delimited(ws_char('['), expr, ws_char(']')), RecvTarget::Eval),
+        map(
+            delimited(ws_char('['), expr, ws_char(']')),
+            RecvTarget::Eval,
+        ),
         map(separated_list1(symbol(","), ident), RecvTarget::VarList),
     ))(input)?;
     let (input, _) = opt(symbol(";"))(input)?;
-    Ok((input, Stmt::Recv { channel, target, line: 0 }))
+    Ok((
+        input,
+        Stmt::Recv {
+            channel,
+            target,
+            line: 0,
+        },
+    ))
 }
 fn run_stmt(input: Input) -> IResult<Input, Stmt> {
     let (input, _) = keyword("run")(input)?;
@@ -460,10 +547,17 @@ fn proctype_def(input: Input) -> IResult<Input, TopLevel> {
         ws_char(')'),
     )(input)?;
     let (input, body) = delimited(ws_char('{'), many0(stmt), ws_char('}'))(input)?;
-    Ok((input, TopLevel::Proctype(ProctypeDef {
-        name, active: active.is_some(), provided: None,
-        parameters: params.unwrap_or_default(), body, line: 0,
-    })))
+    Ok((
+        input,
+        TopLevel::Proctype(ProctypeDef {
+            name,
+            active: active.is_some(),
+            provided: None,
+            parameters: params.unwrap_or_default(),
+            body,
+            line: 0,
+        }),
+    ))
 }
 fn init_def(input: Input) -> IResult<Input, TopLevel> {
     let (input, _) = keyword("init")(input)?;
@@ -481,18 +575,29 @@ fn ltl_formula(input: Input) -> IResult<Input, TopLevel> {
     let (input, _) = ws_char('{')(input)?;
     let (input, formula) = nom::bytes::complete::take_while(|c: char| c != '}')(input)?;
     let (input, _) = ws_char('}')(input)?;
-    Ok((input, TopLevel::Ltl(LtlFormula {
-        name, formula: formula.trim().to_string(), line: 0,
-    })))
+    Ok((
+        input,
+        TopLevel::Ltl(LtlFormula {
+            name,
+            formula: formula.trim().to_string(),
+            line: 0,
+        }),
+    ))
 }
 fn preprocessor(input: Input) -> IResult<Input, TopLevel> {
     let (input, _) = skip_ws(input)?;
     if !input.starts_with('#') {
-        return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)));
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
     }
     let (input, content) = nom::bytes::complete::take_while(|c: char| c != '\n')(&input[1..])?;
     let (input, _) = opt(char('\n'))(input)?;
-    Ok((input, TopLevel::PreprocessorDirective(format!("#{}", content))))
+    Ok((
+        input,
+        TopLevel::PreprocessorDirective(format!("#{}", content)),
+    ))
 }
 fn top_level(input: Input) -> IResult<Input, TopLevel> {
     let (input, _) = skip_ws(input)?;
@@ -506,8 +611,8 @@ fn top_level(input: Input) -> IResult<Input, TopLevel> {
     ))(input)
 }
 pub fn parse(source: &str) -> anyhow::Result<PromelaModel> {
-    let (_, declarations) = many0(top_level)(source)
-        .map_err(|e| anyhow::anyhow!("parse error: {:?}", e))?;
+    let (_, declarations) =
+        many0(top_level)(source).map_err(|e| anyhow::anyhow!("parse error: {:?}", e))?;
     Ok(PromelaModel {
         declarations,
         source: Some(source.to_string()),

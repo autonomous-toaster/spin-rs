@@ -2,8 +2,8 @@
 
 use std::collections::HashSet;
 
-use crate::property::ltl2ba::formula::LtlFormula;
 use crate::property::ltl2ba::error::LtlError;
+use crate::property::ltl2ba::formula::LtlFormula;
 
 /// Büchi automaton for LTL verification.
 #[derive(Debug, Clone)]
@@ -66,10 +66,12 @@ impl BuchiAutomaton {
 /// - Until/Release operators
 pub fn to_buchi(formula: &LtlFormula) -> Result<BuchiAutomaton, LtlError> {
     // Check for nested temporal operators
-    if let LtlFormula::Always(inner) | LtlFormula::Eventually(inner) | LtlFormula::Next(inner) = formula
-        && inner.is_temporal() {
-            return Err(LtlError::nested_temporal(formula.to_string()));
-        }
+    if let LtlFormula::Always(inner) | LtlFormula::Eventually(inner) | LtlFormula::Next(inner) =
+        formula
+        && inner.is_temporal()
+    {
+        return Err(LtlError::nested_temporal(formula.to_string()));
+    }
 
     // Pattern matching for supported formulas
     match formula {
@@ -80,42 +82,60 @@ pub fn to_buchi(formula: &LtlFormula) -> Result<BuchiAutomaton, LtlError> {
             if inner.is_atomic() {
                 Ok(negation_to_buchi(inner))
             } else {
-                Err(LtlError::unsupported("complex negation", Some("Only !p is supported where p is atomic")))
+                Err(LtlError::unsupported(
+                    "complex negation",
+                    Some("Only !p is supported where p is atomic"),
+                ))
             }
         }
         LtlFormula::Always(inner) => {
             if inner.is_atomic() {
                 Ok(always_to_buchi(inner))
             } else {
-                Err(LtlError::unsupported("complex always", Some("Only []p is supported where p is atomic")))
+                Err(LtlError::unsupported(
+                    "complex always",
+                    Some("Only []p is supported where p is atomic"),
+                ))
             }
         }
         LtlFormula::Eventually(inner) => {
             if inner.is_atomic() {
                 Ok(eventually_to_buchi(inner))
             } else {
-                Err(LtlError::unsupported("complex eventually", Some("Only <>p is supported where p is atomic")))
+                Err(LtlError::unsupported(
+                    "complex eventually",
+                    Some("Only <>p is supported where p is atomic"),
+                ))
             }
         }
         LtlFormula::Next(inner) => {
             if inner.is_atomic() {
                 Ok(next_to_buchi(inner))
             } else {
-                Err(LtlError::unsupported("complex next", Some("Only Xp is supported where p is atomic")))
+                Err(LtlError::unsupported(
+                    "complex next",
+                    Some("Only Xp is supported where p is atomic"),
+                ))
             }
         }
         LtlFormula::And(left, right) => {
             if left.is_atomic() && right.is_atomic() {
                 Ok(conjunction_to_buchi(left, right))
             } else {
-                Err(LtlError::unsupported("complex conjunction", Some("Only p && q is supported where p, q are atomic")))
+                Err(LtlError::unsupported(
+                    "complex conjunction",
+                    Some("Only p && q is supported where p, q are atomic"),
+                ))
             }
         }
         LtlFormula::Or(left, right) => {
             if left.is_atomic() && right.is_atomic() {
                 Ok(disjunction_to_buchi(left, right))
             } else {
-                Err(LtlError::unsupported("complex disjunction", Some("Only p || q is supported where p, q are atomic")))
+                Err(LtlError::unsupported(
+                    "complex disjunction",
+                    Some("Only p || q is supported where p, q are atomic"),
+                ))
             }
         }
     }
@@ -309,7 +329,7 @@ fn product_conjunction(left: &BuchiAutomaton, right: &BuchiAutomaton) -> BuchiAu
     for (l_state, l_trans) in left.transitions.iter().enumerate() {
         for (r_state, r_trans) in right.transitions.iter().enumerate() {
             let prod_state = l_state * right.num_states + r_state;
-            
+
             // Accepting if both components are accepting
             if left.accepting.contains(&l_state) && right.accepting.contains(&r_state) {
                 accepting.insert(prod_state);
@@ -349,7 +369,7 @@ fn product_disjunction(left: &BuchiAutomaton, right: &BuchiAutomaton) -> BuchiAu
     for (l_state, l_trans) in left.transitions.iter().enumerate() {
         for (r_state, r_trans) in right.transitions.iter().enumerate() {
             let prod_state = l_state * right.num_states + r_state;
-            
+
             // Accepting if either component is accepting
             if left.accepting.contains(&l_state) || right.accepting.contains(&r_state) {
                 accepting.insert(prod_state);
@@ -380,19 +400,21 @@ fn product_disjunction(left: &BuchiAutomaton, right: &BuchiAutomaton) -> BuchiAu
     }
 }
 
+use std::fmt;
+
 /// Convert formula to string for error messages.
-impl LtlFormula {
-    fn to_string(&self) -> String {
+impl fmt::Display for LtlFormula {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LtlFormula::True => "true".to_string(),
-            LtlFormula::False => "false".to_string(),
-            LtlFormula::Atom(s) => s.clone(),
-            LtlFormula::Not(f) => format!("!({})", f.to_string()),
-            LtlFormula::And(f1, f2) => format!("({} && {})", f1.to_string(), f2.to_string()),
-            LtlFormula::Or(f1, f2) => format!("({} || {})", f1.to_string(), f2.to_string()),
-            LtlFormula::Always(f) => format!("[]{}", f.to_string()),
-            LtlFormula::Eventually(f) => format!("<>{}", f.to_string()),
-            LtlFormula::Next(f) => format!("X{}", f.to_string()),
+            LtlFormula::True => write!(fmt, "true"),
+            LtlFormula::False => write!(fmt, "false"),
+            LtlFormula::Atom(s) => write!(fmt, "{}", s),
+            LtlFormula::Not(f) => write!(fmt, "!({})", f),
+            LtlFormula::And(f1, f2) => write!(fmt, "({} && {})", f1, f2),
+            LtlFormula::Or(f1, f2) => write!(fmt, "({} || {})", f1, f2),
+            LtlFormula::Always(f) => write!(fmt, "[]{}", f),
+            LtlFormula::Eventually(f) => write!(fmt, "<>{}", f),
+            LtlFormula::Next(f) => write!(fmt, "X{}", f),
         }
     }
 }
@@ -436,7 +458,9 @@ mod tests {
 
     #[test]
     fn test_nested_temporal_error() {
-        let formula = LtlFormula::Always(Box::new(LtlFormula::Eventually(Box::new(LtlFormula::Atom("p".to_string())))));
+        let formula = LtlFormula::Always(Box::new(LtlFormula::Eventually(Box::new(
+            LtlFormula::Atom("p".to_string()),
+        ))));
         let result = to_buchi(&formula);
         assert!(matches!(result, Err(LtlError::NestedTemporal { .. })));
     }
@@ -459,5 +483,78 @@ mod tests {
         );
         let auto = to_buchi(&formula).unwrap();
         assert_eq!(auto.num_states, 1); // Product of two 1-state automata
+    }
+
+    #[test]
+    fn test_true_false() {
+        assert!(to_buchi(&LtlFormula::True).unwrap().is_accepting(0));
+        assert!(!to_buchi(&LtlFormula::False).unwrap().is_accepting(0));
+    }
+
+    #[test]
+    fn test_complex_negation() {
+        let formula = LtlFormula::Not(Box::new(LtlFormula::Always(Box::new(LtlFormula::Atom(
+            "p".to_string(),
+        )))));
+        let result = to_buchi(&formula);
+        assert!(matches!(result, Err(LtlError::UnsupportedOperator { .. })));
+    }
+
+    #[test]
+    fn test_complex_always() {
+        let formula = LtlFormula::Always(Box::new(LtlFormula::And(
+            Box::new(LtlFormula::Atom("p".to_string())),
+            Box::new(LtlFormula::Atom("q".to_string())),
+        )));
+        let result = to_buchi(&formula);
+        assert!(matches!(result, Err(LtlError::UnsupportedOperator { .. })));
+    }
+
+    #[test]
+    fn test_complex_eventually() {
+        let formula = LtlFormula::Eventually(Box::new(LtlFormula::And(
+            Box::new(LtlFormula::Atom("p".to_string())),
+            Box::new(LtlFormula::Atom("q".to_string())),
+        )));
+        let result = to_buchi(&formula);
+        assert!(matches!(result, Err(LtlError::UnsupportedOperator { .. })));
+    }
+
+    #[test]
+    fn test_atom_pattern() {
+        let auto = atom_to_buchi(&LtlFormula::Atom("p".to_string()));
+        assert_eq!(auto.num_states, 1);
+        assert!(auto.is_accepting(0));
+    }
+
+    #[test]
+    fn test_trivial_rejecting() {
+        let auto = trivial_rejecting();
+        assert_eq!(auto.num_states, 1);
+        assert!(!auto.is_accepting(0));
+    }
+
+    #[test]
+    fn test_product_conjunction_disjunction() {
+        let left = always_to_buchi(&LtlFormula::Atom("p".to_string()));
+        let right = always_to_buchi(&LtlFormula::Atom("q".to_string()));
+
+        let conj = product_conjunction(&left, &right);
+        assert_eq!(conj.num_states, 4);
+
+        let disj = product_disjunction(&left, &right);
+        assert_eq!(disj.num_states, 4);
+    }
+
+    #[test]
+    fn test_complex_conjunction() {
+        let formula = LtlFormula::And(
+            Box::new(LtlFormula::Always(Box::new(LtlFormula::Atom(
+                "p".to_string(),
+            )))),
+            Box::new(LtlFormula::Atom("q".to_string())),
+        );
+        let result = to_buchi(&formula);
+        assert!(matches!(result, Err(LtlError::UnsupportedOperator { .. })));
     }
 }
