@@ -157,8 +157,8 @@ mod tests {
 
     #[test]
     fn test_sync_transitions_empty() {
-        let buchi = BuchiAutomaton::trivial();
-        let transitions: Vec<i32> = vec![];
+        let _buchi = BuchiAutomaton::trivial();
+        let _transitions: Vec<i32> = vec![];
 
         // Stub test - will fail without a real model
         // TODO: Create a test model for proper integration tests

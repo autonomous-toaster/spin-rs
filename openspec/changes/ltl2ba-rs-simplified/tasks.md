@@ -30,8 +30,8 @@
 - [x] 3.3 Implement atomic proposition evaluation from model state
 - [x] 3.4 Implement transition synchronization (model × Büchi)
 - [x] 3.5 Handle multiple enabled Büchi transitions per model transition
-- [ ] 3.6 Write unit tests for product construction
-- [ ] 3.7 Write integration tests (simple model × simple Büchi)
+- [x] 3.6 Write unit tests for product construction
+- [x] 3.7 Write integration tests (simple model × simple Büchi)
 
 ## 4. Nested DFS Implementation
 
