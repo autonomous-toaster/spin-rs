@@ -23,6 +23,10 @@ pub enum TopLevel {
         line: usize,
     },
     PreprocessorDirective(String),
+    /// Embedded C code (via Lua FFI in spin-rs)
+    CCode(String, usize),
+    /// Embedded C state (variable declarations via Lua)
+    CState(Vec<VarDecl>, usize),
 }
 
 /// A proctype definition (process template).

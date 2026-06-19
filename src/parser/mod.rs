@@ -120,7 +120,7 @@ fn is_ident_continue(c: char) -> bool {
 
 fn ident(input: Input) -> IResult<Input, String> {
     let (input, _) = skip_ws(input)?;
-    let (input, raw) = nom::bytes::complete::is_not(" \t\r\n;(){}[]!?:,=+-*/%&|<>^~")(input)?;
+    let (input, raw) = nom::bytes::complete::is_not(" \t\r\n;(){}[]!?:,=+-*/%&|<>^~@")(input)?;
     if raw.is_empty() || !is_ident_start(raw.chars().next().unwrap()) {
         return Err(nom::Err::Error(nom::error::Error::new(
             input,
@@ -345,6 +345,13 @@ fn primary(input: Input) -> IResult<Input, Expression> {
         map(keyword("false"), |_| Expression::BoolLit(false)),
         map(keyword("timeout"), |_| Expression::Timeout),
         delimited(ws_char('('), expr, ws_char(')')),
+        // Remote reference: P@x
+        map(pair(ident, preceded(symbol("@"), ident)), |(pid, name)| {
+            Expression::RemoteRef {
+                pid: Box::new(Expression::Ident(pid)),
+                name,
+            }
+        }),
         func_call,
         map(ident, Expression::Ident),
     ))(input)
@@ -356,6 +363,8 @@ fn stmt(input: Input) -> IResult<Input, Stmt> {
     alt((
         if_stmt,
         do_stmt,
+        dstep_stmt,
+        atomic_stmt,
         goto_stmt,
         break_stmt,
         assert_stmt,
@@ -484,6 +493,18 @@ fn skip_stmt(input: Input) -> IResult<Input, Stmt> {
     let (input, _) = opt(symbol(";"))(input)?;
     Ok((input, Stmt::Skip(0)))
 }
+fn dstep_stmt(input: Input) -> IResult<Input, Stmt> {
+    let (input, _) = keyword("d_step")(input)?;
+    let (input, body) = delimited(ws_char('{'), many0(stmt), ws_char('}'))(input)?;
+    let (input, _) = opt(symbol(";"))(input)?;
+    Ok((input, Stmt::DStep(body, 0)))
+}
+fn atomic_stmt(input: Input) -> IResult<Input, Stmt> {
+    let (input, _) = keyword("atomic")(input)?;
+    let (input, body) = delimited(ws_char('{'), many0(stmt), ws_char('}'))(input)?;
+    let (input, _) = opt(symbol(";"))(input)?;
+    Ok((input, Stmt::Atomic(body, 0)))
+}
 fn send_stmt(input: Input) -> IResult<Input, Stmt> {
     let (input, channel) = ident(input)?;
     let (input, _) = symbol("!")(input)?;
@@ -599,6 +620,13 @@ fn preprocessor(input: Input) -> IResult<Input, TopLevel> {
         TopLevel::PreprocessorDirective(format!("#{}", content)),
     ))
 }
+fn c_code_block(input: Input) -> IResult<Input, TopLevel> {
+    let (input, _) = keyword("c_code")(input)?;
+    let (input, _) = ws_char('{')(input)?;
+    let (input, code) = nom::bytes::complete::take_while(|c: char| c != '}')(input)?;
+    let (input, _) = ws_char('}')(input)?;
+    Ok((input, TopLevel::CCode(code.trim().to_string(), 0)))
+}
 fn top_level(input: Input) -> IResult<Input, TopLevel> {
     let (input, _) = skip_ws(input)?;
     alt((
@@ -607,6 +635,7 @@ fn top_level(input: Input) -> IResult<Input, TopLevel> {
         never_claim,
         ltl_formula,
         preprocessor,
+        c_code_block,
         map(terminated(var_decl, symbol(";")), TopLevel::GlobalVar),
     ))(input)
 }
@@ -697,5 +726,41 @@ mod tests {
         let source = "active proctype P() {\n    ch!msg(1);\n    ch?msg;\n}";
         let model = parse(source).unwrap();
         assert_eq!(model.declarations.len(), 1);
+    }
+
+    #[test]
+    fn test_d_step_atomic() {
+        let source = "active proctype P() { d_step { x = 1; x = x + 1 } atomic { y = 2 } }";
+        let model = parse(source).unwrap();
+        match &model.declarations[0] {
+            TopLevel::Proctype(p) => {
+                assert!(p.body.len() >= 2);
+                assert!(matches!(p.body[0], Stmt::DStep(_, _)));
+                assert!(matches!(p.body[1], Stmt::Atomic(_, _)));
+            }
+            _ => panic!("Expected proctype"),
+        }
+    }
+
+    #[test]
+    fn test_remote_ref_expr() {
+        let source = "active proctype P() { x = Q@y; }";
+        let model = parse(source).unwrap();
+        match &model.declarations[0] {
+            TopLevel::Proctype(p) => {
+                eprintln!("p.body.len() = {}", p.body.len());
+                eprintln!("p.body[0] = {:?}", p.body[0]);
+                if let Stmt::Assignment { value, .. } = &p.body[0] {
+                    eprintln!("value = {:?}", value);
+                    assert!(matches!(
+                        value.as_ref(),
+                        Expression::RemoteRef { name, .. } if name == "y"
+                    ));
+                } else {
+                    panic!("Expected assignment, got {:?}", p.body[0]);
+                }
+            }
+            _ => panic!("Expected proctype, got {:?}", model.declarations[0]),
+        }
     }
 }

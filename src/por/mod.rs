@@ -11,6 +11,8 @@
 //! - **Visible transitions**: Transitions that affect property satisfaction
 //!   (e.g., shared variable writes, assertions).
 
+pub mod stubborn;
+
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 

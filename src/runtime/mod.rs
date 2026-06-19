@@ -205,6 +205,33 @@ impl LuaRuntime {
         let f = lua.create_function(|_lua, state: mlua::Table| serialize_table(&state))?;
         lua.globals().set("_spin_state_hash", f)?;
 
+        // Remote reference: access variable of another process
+        let f = lua.create_function(|_lua, (pid, var): (i64, String)| {
+            Ok(format!("<remote {}:{}>", pid, var))
+        })?;
+        lua.globals().set("_spin_remote_ref", f)?;
+
+        // Fairness tracking: record which transitions are enabled
+        let f = lua.create_function(|_lua, (_label, _enabled): (String, bool)| {
+            // Stub: real fairness tracking would log enabled transitions
+            // and rotate priority to ensure weakly fair scheduling
+            Ok(())
+        })?;
+        lua.globals().set("_spin_fairness_track", f)?;
+
+        // Embedded C / Lua eval support: allow arbitrary Lua execution
+        let f = lua.create_function(|lua, code: String| {
+            lua.load(&code).exec().map_err(|e| mlua::Error::runtime(format!("c_code: {}", e)))
+        })?;
+        lua.globals().set("_spin_c_code", f)?;
+
+        // Stubborn set support: mark transitions as dependent
+        let f = lua.create_function(|_lua, (_t1, _t2): (String, String)| {
+            // Stub: real stubborn set logic uses POR dependency analysis
+            Ok(false)
+        })?;
+        lua.globals().set("_spin_stubborn_dep", f)?;
+
         Ok(())
     }
 

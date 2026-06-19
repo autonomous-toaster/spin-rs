@@ -134,6 +134,12 @@ impl LuaGenerator {
                         l.formula
                     ));
                 }
+                TopLevel::CCode(code, _) => {
+                    self.emit("-- embedded c_code (executed as Lua)");
+                    self.emit("_spin_c_code([===[");
+                    self.emit(code);
+                    self.emit("]===])");
+                }
                 _ => {}
             }
         }
@@ -300,19 +306,194 @@ impl LuaGenerator {
                 Stmt::Skip(_) => {
                     self.emit("    -- skip");
                 }
-                Stmt::Atomic(_, _) => {
-                    self.emit("    -- atomic sequence (handled by runtime)");
+                Stmt::Atomic(body, _) | Stmt::DStep(body, _) => {
+                    self.emit("    -- atomic/d_step block");
+                    // Generate combined guard: all inner stmts executable
+                    let guards: Vec<String> = body.iter().map(|s| self.guard_for_stmt(s)).collect();
+                    let combined_guard = if guards.iter().all(|g| g == "true") {
+                        "true".to_string()
+                    } else {
+                        let non_trivial: Vec<&str> = guards.iter().filter_map(|g| if *g != "true" { Some(g.as_str()) } else { None }).collect();
+                        if non_trivial.is_empty() {
+                            "true".to_string()
+                        } else {
+                            non_trivial.join(" and ")
+                        }
+                    };
+                    // Generate combined effect: all inner effects in sequence
+                    self.emit(&format!("    if {} then", combined_guard));
+                    self.indent += 1;
+                    self.emit("    table.insert(transitions, {");
+                    self.indent += 1;
+                    self.emit(&format!("    guard = function() return {} end,", combined_guard));
+                    self.emit("    effect = function(s)");
+                    self.indent += 1;
+                    for s in body {
+                        self.emit_effect_for_stmt(s);
+                    }
+                    self.indent -= 1;
+                    self.emit("    end");
+                    self.indent -= 1;
+                    self.emit("    })");
+                    self.indent -= 1;
+                    self.emit("    end");
                 }
                 Stmt::Expr(e, _) => {
                     let _ = e; // suppress unused
                     self.emit("    -- expression statement");
                 }
-                Stmt::VarDecl(_) | Stmt::DStep(_, _) | Stmt::Label(_, _) => {
-                    self.emit("    -- decl/dstep/label");
+                Stmt::VarDecl(_) | Stmt::Label(_, _) => {
+                    self.emit("    -- decl/label");
                 }
             }
         }
     }
+
+    /// Extract guard expression for a statement (for combined guards in d_step/atomic)
+    fn guard_for_stmt(&self, stmt: &Stmt) -> String {
+        match stmt {
+            Stmt::Send { channel, .. } => format!("not chan_full(s.{})", channel),
+            Stmt::Recv { channel, .. } => format!("not chan_empty(s.{})", channel),
+            Stmt::Assert(expr, _) => self.expr_to_lua(expr),
+            Stmt::Skip(_) | Stmt::Break(_) => "true".to_string(),
+            Stmt::Goto(_, _) => "true".to_string(),
+            Stmt::Assignment { .. } | Stmt::Expr(_, _) => "true".to_string(),
+            Stmt::Printf(_, _, _) => "true".to_string(),
+            Stmt::Run(_, _, _) => "true".to_string(),
+            Stmt::Atomic(body, _) | Stmt::DStep(body, _) => {
+                if body.is_empty() {
+                    "true".to_string()
+                } else {
+                    let gs: Vec<String> = body.iter().map(|s| self.guard_for_stmt(s)).collect();
+                    gs.join(" and ")
+                }
+            }
+            Stmt::Unless { .. } => "true".to_string(),
+            Stmt::VarDecl(_) | Stmt::Label(_, _) => "true".to_string(),
+            Stmt::If(guards) => {
+                if guards.is_empty() {
+                    "true".to_string()
+                } else {
+                    let gs: Vec<String> = guards.iter().map(|g| match &g.condition {
+                        Some(e) => self.expr_to_lua(e),
+                        None => "true".to_string(),
+                    }).collect();
+                    gs.join(" or ")
+                }
+            }
+            Stmt::Do(guards) => {
+                if guards.is_empty() {
+                    "false".to_string()
+                } else {
+                    let gs: Vec<String> = guards.iter().map(|g| match &g.condition {
+                        Some(e) => self.expr_to_lua(e),
+                        None => "true".to_string(),
+                    }).collect();
+                    gs.join(" or ")
+                }
+            }
+        }
+    }
+
+    /// Emit effect-only Lua code for a single statement (no guard, for d_step/atomic)
+    fn emit_effect_for_stmt(&mut self, stmt: &Stmt) {
+        match stmt {
+            Stmt::Assignment { target, value, .. } => {
+                let expr_str = self.expr_to_lua(value);
+                self.emit(&format!("s.{} = {}", target, expr_str));
+            }
+            Stmt::Skip(_) | Stmt::Break(_) => {
+                self.emit("-- skip/break");
+            }
+            Stmt::Assert(expr, _) => {
+                let e = self.expr_to_lua(expr);
+                self.emit(&format!("_spin_assert({}, 'assertion failed')", e));
+            }
+            Stmt::Goto(_, _) => {
+                self.emit("-- goto");
+            }
+            Stmt::Expr(e, _) => {
+                let _ = e;
+                self.emit("-- expr");
+            }
+            Stmt::Printf(fmt, args, _) => {
+                let args_str: Vec<String> = args.iter().map(|a| self.expr_to_lua(a)).collect();
+                let args_concat = args_str.join(", ");
+                self.emit(&format!("_spin_printf('{}', {})", fmt, args_concat));
+            }
+            Stmt::Run(name, args, _) => {
+                let args_str: Vec<String> = args.iter().map(|a| self.expr_to_lua(a)).collect();
+                let args_concat = args_str.join(", ");
+                self.emit(&format!("run({}, {})", name, args_concat));
+            }
+            Stmt::Send { channel, target: _, args, .. } => {
+                let args_str: Vec<String> = args.iter().map(|a| self.expr_to_lua(a)).collect();
+                let args_concat = args_str.join(", ");
+                self.emit(&format!("_spin_chan_send('{}', {})", channel, args_concat));
+            }
+            Stmt::Recv { channel, target, .. } => {
+                match target {
+                    RecvTarget::VarList(vars) => {
+                        let val = format!("_spin_chan_recv('{}')", channel);
+                        if let Some(first_var) = vars.first() {
+                            self.emit(&format!("s.{} = {}", first_var, val));
+                        }
+                    }
+                    _ => {
+                        self.emit(&format!("_spin_chan_recv('{}')", channel));
+                    }
+                }
+            }
+            Stmt::Atomic(body, _) | Stmt::DStep(body, _) => {
+                for s in body {
+                    self.emit_effect_for_stmt(s);
+                }
+            }
+            Stmt::Unless { body, handler: _, .. } => {
+                for s in body {
+                    self.emit_effect_for_stmt(s);
+                }
+            }
+            Stmt::VarDecl(_) | Stmt::Label(_, _) => {
+                self.emit("-- decl/label in d_step");
+            }
+            Stmt::If(guards) => {
+                // Use the first enabled guard's body
+                for guard in guards {
+                    let cond_str = match &guard.condition {
+                        Some(e) => self.expr_to_lua(e),
+                        None => "true".to_string(),
+                    };
+                    self.emit(&format!("if {} then", cond_str));
+                    self.indent += 1;
+                    for s in &guard.body {
+                        self.emit_effect_for_stmt(s);
+                    }
+                    self.indent -= 1;
+                    self.emit("end");
+                    break;
+                }
+            }
+            Stmt::Do(guards) => {
+                // Use the first enabled guard's body
+                for guard in guards {
+                    let cond_str = match &guard.condition {
+                        Some(e) => self.expr_to_lua(e),
+                        None => "true".to_string(),
+                    };
+                    self.emit(&format!("if {} then", cond_str));
+                    self.indent += 1;
+                    for s in &guard.body {
+                        self.emit_effect_for_stmt(s);
+                    }
+                    self.indent -= 1;
+                    self.emit("end");
+                    break;
+                }
+            }
+        }
+    }
+
     fn emit_guards(&mut self, kind: &str, guards: &[Guard], _depth: usize) {
         for (i, guard) in guards.iter().enumerate() {
             let cond_str = match &guard.condition {
@@ -486,7 +667,10 @@ impl LuaGenerator {
             Expression::NEmpty(_) => "false".to_string(),
             Expression::Enabled(_) => "true".to_string(),
             Expression::Timeout => "false".to_string(),
-            Expression::RemoteRef { name, .. } => format!("s.{}", name),
+            Expression::RemoteRef { pid, name } => {
+                let pid_str = self.expr_to_lua(pid);
+                format!("_spin_remote_ref({}, '{}')", pid_str, name)
+            }
             Expression::RecordAccess { record, field } => {
                 format!("{}[\"{}\"]", self.expr_to_lua(record), field)
             }
