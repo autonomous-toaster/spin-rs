@@ -4,10 +4,15 @@
 //! - LTL formula parsing
 //! - Nested DFS for accepting cycle detection (liveness violations)
 //! - Safety property checking via assertions
+//! - Büchi automaton types (for v2 LTL → Büchi conversion)
+//! - Simplified LTL → Büchi conversion (ltl2ba-rs-simplified)
 
 use std::collections::HashSet;
 
 use crate::engine::checker::{Model, Violation};
+
+pub mod buchi;
+pub mod ltl2ba;
 
 /// LTL formula representation.
 #[derive(Debug, Clone)]
@@ -30,6 +35,37 @@ impl LtlFormula {
     /// Parse an LTL formula from a string (Spin syntax).
     pub fn parse(s: &str) -> anyhow::Result<Self> {
         Self::parse_manual(s.trim())
+    }
+
+    /// Collect all atomic propositions from the formula.
+    pub fn collect_atoms(&self) -> std::collections::HashMap<String, u32> {
+        let mut atoms = std::collections::HashMap::new();
+        self.collect_atoms_recursive(&mut atoms);
+        atoms
+    }
+
+    fn collect_atoms_recursive(&self, atoms: &mut std::collections::HashMap<String, u32>) {
+        match self {
+            LtlFormula::Atom(name) => {
+                let next_id = (atoms.len() + 1) as u32;
+                atoms.entry(name.clone()).or_insert(next_id);
+            }
+            LtlFormula::Not(f) => f.collect_atoms_recursive(atoms),
+            LtlFormula::And(f1, f2) | LtlFormula::Or(f1, f2) | LtlFormula::Implies(f1, f2) => {
+                f1.collect_atoms_recursive(atoms);
+                f2.collect_atoms_recursive(atoms);
+            }
+            LtlFormula::Always(f)
+            | LtlFormula::Eventually(f)
+            | LtlFormula::Next(f) => {
+                f.collect_atoms_recursive(atoms);
+            }
+            LtlFormula::Until(f1, f2) | LtlFormula::Release(f1, f2) => {
+                f1.collect_atoms_recursive(atoms);
+                f2.collect_atoms_recursive(atoms);
+            }
+            LtlFormula::True | LtlFormula::False => {}
+        }
     }
 
     fn parse_manual(s: &str) -> anyhow::Result<Self> {

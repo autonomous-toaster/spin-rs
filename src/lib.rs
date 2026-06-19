@@ -123,6 +123,7 @@ pub use runtime::{LuaModel, LuaRuntime, verify as verify_model};
 
 // Re-export property types
 pub use property::{LtlFormula, PropertyChecker, verify_ltl};
+pub use property::buchi::{BuchiAutomaton, BuchiTransition, ProductState, ProductTransition};
 
 // Re-export trail types
 pub use trail::{ErrorTrail, TrailReplayer, TrailStats, TrailStep};
