@@ -28,6 +28,8 @@ struct LuaGenerator {
     source: String,
     indent: usize,
     proctype_names: Vec<String>,
+    /// Current proctype being emitted, if any (used for break/done references)
+    current_proctype: Option<String>,
 }
 
 impl LuaGenerator {
@@ -36,7 +38,38 @@ impl LuaGenerator {
             source: String::new(),
             indent: 0,
             proctype_names: Vec::new(),
+            current_proctype: None,
         }
+    }
+
+    /// Recursively collect all VarDecl statements from a proctype body,
+    /// including inside if/do/atomic/d_step blocks.
+    fn collect_var_decls(stmts: &[Stmt]) -> Vec<&VarDecl> {
+        let mut result = Vec::new();
+        for stmt in stmts {
+            match stmt {
+                Stmt::VarDecl(vd) => result.push(vd),
+                Stmt::VarDecls(vds) => result.extend(vds.iter()),
+                Stmt::For { init, body, .. } => {
+                    if let Stmt::VarDecl(vd) = init.as_ref() {
+                        result.push(vd);
+                    }
+                    for s in body {
+                        result.extend(Self::collect_var_decls(std::slice::from_ref(s)));
+                    }
+                }
+                Stmt::If(guards) | Stmt::Do(guards) => {
+                    for g in guards {
+                        result.extend(Self::collect_var_decls(&g.body));
+                    }
+                }
+                Stmt::Atomic(body, _) | Stmt::DStep(body, _) => {
+                    result.extend(Self::collect_var_decls(body));
+                }
+                _ => {}
+            }
+        }
+        result
     }
 
     fn emit(&mut self, line: &str) {
@@ -69,23 +102,41 @@ impl LuaGenerator {
     }
 
     fn emit_state_layout(&mut self, model: &PromelaModel) {
-        // Collect all global variables
+        // Collect all global and local variable declarations
         let mut lines = Vec::new();
         for decl in &model.declarations {
             match decl {
                 TopLevel::GlobalVar(v) => {
-                    let default = default_value(&v.var_type);
-                    lines.push(format!("    state.{} = {}", v.name, default));
+                    if let Some(init_expr) = &v.init {
+                        let init_str = self.expr_to_lua(init_expr);
+                        lines.push(format!("    state.{} = {}", v.name, init_str));
+                    } else {
+                        let default = default_value(&v.var_type);
+                        lines.push(format!("    state.{} = {}", v.name, default));
+                    }
                 }
                 TopLevel::Proctype(p) => {
-                    // Proctype local variables will be per-process in state
+                    // Per-proctype done flag for break handling
+                    lines.push(format!("    state._done_{} = false", p.name));
+                    // Proctype parameters (prefixed with proctype name for uniqueness)
                     for param in &p.parameters {
                         let default = default_value(&param.var_type);
-                        lines.push(format!(
-                            "    state.{}_p{}_{} = {}",
-                            "", p.name, param.name, default
-                        ));
+                        lines.push(format!("    state.{}_{} = {}", p.name, param.name, default));
                     }
+                    // Local variable declarations from body (prefixed with proctype name)
+                    let local_vars = Self::collect_var_decls(&p.body);
+                    for vd in local_vars {
+                        if let Some(init_expr) = &vd.init {
+                            let init_str = self.expr_to_lua(init_expr);
+                            lines.push(format!("    state.{}_{} = {}", p.name, vd.name, init_str));
+                        } else {
+                            let default = default_value(&vd.var_type);
+                            lines.push(format!("    state.{}_{} = {}", p.name, vd.name, default));
+                        }
+                    }
+                }
+                TopLevel::ChanDecl { name, .. } => {
+                    lines.push(format!("    state.{} = nil", name));
                 }
                 _ => {}
             }
@@ -101,6 +152,14 @@ impl LuaGenerator {
         self.emit("    local state = {}");
         self.emit(&format!("    state._nr_pr = {}", active_count));
         self.emit("    state._nr_qs = 0");
+        // Add _done_init flag if there's an init block
+        if model
+            .declarations
+            .iter()
+            .any(|d| matches!(d, TopLevel::Init(_)))
+        {
+            self.emit("    state._done_init = false");
+        }
         for line in &lines {
             self.emit(line);
         }
@@ -116,6 +175,27 @@ impl LuaGenerator {
             match decl {
                 TopLevel::Proctype(p) => {
                     self.emit_proctype(p);
+                }
+                TopLevel::Init(i) => {
+                    // init block: runs once at startup
+                    self.emit("-- init block");
+                    self.emit("function _spin_transitions_init(state)");
+                    self.indent += 1;
+                    self.emit("    if state._done_init then return {} end");
+                    self.emit("    local transitions = {}");
+                    self.emit_stmts(&i.body, 0);
+                    self.emit("    -- Mark init as done after first execution");
+                    self.emit("    table.insert(transitions, {");
+                    self.indent += 1;
+                    self.emit("        guard = function() return true end,");
+                    self.emit("        effect = function(s) s._done_init = true end,");
+                    self.emit("        label = \"init:done\",");
+                    self.indent -= 1;
+                    self.emit("    })");
+                    self.emit("    return transitions");
+                    self.indent -= 1;
+                    self.emit("end");
+                    self.emit("");
                 }
                 TopLevel::NeverClaim(n) => {
                     self.emit("-- never claim");
@@ -135,6 +215,13 @@ impl LuaGenerator {
                         l.formula
                     ));
                 }
+                TopLevel::Inline(i) => {
+                    self.emit(&format!(
+                        "-- inline: {}({}) (expansion deferred)",
+                        i.name,
+                        i.parameters.join(", ")
+                    ));
+                }
                 TopLevel::CCode(code, _) => {
                     self.emit("-- embedded c_code (executed as Lua)");
                     self.emit("_spin_c_code([===[");
@@ -149,10 +236,20 @@ impl LuaGenerator {
     fn emit_proctype(&mut self, p: &ProctypeDef) {
         let fn_name = format!("_spin_transitions_{}", p.name);
         self.proctype_names.push(fn_name.clone());
+        self.current_proctype = Some(p.name.clone());
 
         self.emit(&format!("-- Proctype: {} (active: {})", p.name, p.active));
         self.emit(&format!("function {}(state)", fn_name));
         self.indent += 1;
+        // Set _pid for this process instance
+        if let Some(pid) = p.pid {
+            self.emit(&format!("    state._pid = {}", pid));
+        }
+        // Check done flag - if set, this process is done (break was executed)
+        self.emit(&format!(
+            "    if state._done_{} then return {{}} end",
+            p.name
+        ));
         self.emit("    local transitions = {}");
         self.emit("");
 
@@ -163,6 +260,7 @@ impl LuaGenerator {
         self.indent -= 1;
         self.emit("end");
         self.emit("");
+        self.current_proctype = None;
     }
 
     fn emit_assignment(&mut self, target: &str, value: &Expression, depth: usize) {
@@ -171,9 +269,15 @@ impl LuaGenerator {
         self.emit("    table.insert(transitions, {");
         self.indent += 1;
         self.emit("    guard = function() return true end,");
+        // Prefix local variables with current proctype name
+        let target_name = if let Some(ref pname) = self.current_proctype {
+            format!("{}_{}", pname, target)
+        } else {
+            target.to_string()
+        };
         self.emit(&format!(
             "    effect = function(s) s.{} = {} end",
-            target, expr_str
+            target_name, expr_str
         ));
         self.indent -= 1;
         self.emit("    })");
@@ -184,8 +288,11 @@ impl LuaGenerator {
         self.emit(&format!("    -- assert({})", e));
         self.emit("    table.insert(transitions, {");
         self.indent += 1;
-        self.emit(&format!("    guard = function(s) return {} end,", e));
-        self.emit("    effect = function(s) assert({}, 'assertion failed') end");
+        self.emit("    guard = function(s) return true end,");
+        self.emit(&format!(
+            "    effect = function(s) assert({}, 'assertion failed') end",
+            e
+        ));
         self.indent -= 1;
         self.emit("    })");
     }
@@ -198,31 +305,37 @@ impl LuaGenerator {
                 self.emit("    table.insert(transitions, {");
                 self.indent += 1;
                 self.emit(&format!(
-                    "    guard = function(s) return not chan_full(s.{}) end,",
+                    "    guard = function(s) return not chan_full('{}') end,",
                     channel
                 ));
-                let args = if args_concat.is_empty() {
+                let send_args = if args_concat.is_empty() {
                     id.clone()
                 } else {
                     format!("{}, {}", id, args_concat)
                 };
                 self.emit(&format!(
-                    "    effect = function(s) chan_send(s.{}, {}) end",
-                    channel, args
+                    "    effect = function(s) chan_send('{}', {}) end",
+                    channel, send_args
                 ));
                 self.indent -= 1;
                 self.emit("    })");
             }
-            SendTarget::Value(_val) => {
+            SendTarget::Value(val) => {
+                let val_str = self.expr_to_lua(val);
                 self.emit("    table.insert(transitions, {");
                 self.indent += 1;
                 self.emit(&format!(
-                    "    guard = function(s) return not chan_full(s.{}) end,",
+                    "    guard = function(s) return not chan_full('{}') end,",
                     channel
                 ));
+                let send_args = if args_concat.is_empty() {
+                    val_str
+                } else {
+                    format!("{}, {}", val_str, args_concat)
+                };
                 self.emit(&format!(
-                    "    effect = function(s) chan_send(s.{}, {}) end",
-                    channel, args_concat
+                    "    effect = function(s) chan_send('{}', {}) end",
+                    channel, send_args
                 ));
                 self.indent -= 1;
                 self.emit("    })");
@@ -237,11 +350,11 @@ impl LuaGenerator {
                 self.emit("    table.insert(transitions, {");
                 self.indent += 1;
                 self.emit(&format!(
-                    "    guard = function(s) return not chan_empty(s.{}) end",
+                    "    guard = function(s) return not chan_empty('{}') end,",
                     channel
                 ));
                 self.emit(&format!(
-                    "    effect = function(s) chan_recv(s.{}, {}) end",
+                    "    effect = function(s) chan_recv('{}', {}) end",
                     channel, vars_str
                 ));
                 self.indent -= 1;
@@ -273,7 +386,7 @@ impl LuaGenerator {
                     self.emit("    -- TODO: handle goto in codegen");
                 }
                 Stmt::Break(_) => {
-                    self.emit("    -- break (loop exit)");
+                    self.emit("    -- break (handled in guard effect)");
                 }
                 Stmt::Assert(expr, _) => {
                     self.emit_assert_stmt(expr);
@@ -349,8 +462,26 @@ impl LuaGenerator {
                     let _ = e; // suppress unused
                     self.emit("    -- expression statement");
                 }
-                Stmt::VarDecl(_) | Stmt::Label(_, _) => {
-                    self.emit("    -- decl/label");
+                Stmt::VarDecl(_) | Stmt::VarDecls(_) => {
+                    // Variable declarations are handled in _spin_init_state
+                    self.emit("    -- var decl (already initialized)");
+                }
+                Stmt::For { init, condition, update, body, .. } => {
+                    self.emit("    -- for loop (sequential expansion)");
+                    self.emit("    -- init");
+                    self.emit_stmts(std::slice::from_ref(init.as_ref()), depth);
+                    self.emit(&format!("    -- while {} do", self.expr_to_lua(&condition)));
+                    self.indent += 1;
+                    for s in body {
+                        self.emit_stmts(std::slice::from_ref(s), depth + 1);
+                    }
+                    self.indent -= 1;
+                    self.emit("    -- update");
+                    self.emit_stmts(std::slice::from_ref(update.as_ref()), depth);
+                    self.emit("    -- end");
+                }
+                Stmt::Label(_, _) => {
+                    self.emit("    -- label");
                 }
             }
         }
@@ -376,7 +507,7 @@ impl LuaGenerator {
                 }
             }
             Stmt::Unless { .. } => "true".to_string(),
-            Stmt::VarDecl(_) | Stmt::Label(_, _) => "true".to_string(),
+            Stmt::VarDecl(_) | Stmt::Label(_, _) | Stmt::VarDecls(_) | Stmt::For { .. } => "true".to_string(),
             Stmt::If(guards) => {
                 if guards.is_empty() {
                     "true".to_string()
@@ -415,8 +546,15 @@ impl LuaGenerator {
                 let expr_str = self.expr_to_lua(value);
                 self.emit(&format!("s.{} = {}", target, expr_str));
             }
-            Stmt::Skip(_) | Stmt::Break(_) => {
-                self.emit("-- skip/break");
+            Stmt::Skip(_) => {
+                self.emit("-- skip");
+            }
+            Stmt::Break(_) => {
+                if let Some(ref pname) = self.current_proctype {
+                    self.emit(&format!("s._done_{} = true", pname));
+                } else {
+                    self.emit("-- break");
+                }
             }
             Stmt::Assert(expr, _) => {
                 let e = self.expr_to_lua(expr);
@@ -474,8 +612,11 @@ impl LuaGenerator {
                     self.emit_effect_for_stmt(s);
                 }
             }
-            Stmt::VarDecl(_) | Stmt::Label(_, _) => {
+            Stmt::VarDecl(_) | Stmt::VarDecls(_) | Stmt::Label(_, _) => {
                 self.emit("-- decl/label in d_step");
+            }
+            Stmt::For { .. } => {
+                self.emit("-- for loop in d_step (deferred)");
             }
             Stmt::If(guards) => {
                 // Use the first enabled guard's body
@@ -513,10 +654,33 @@ impl LuaGenerator {
     }
 
     fn emit_guards(&mut self, kind: &str, guards: &[Guard], _depth: usize) {
-        for (i, guard) in guards.iter().enumerate() {
-            let cond_str = match &guard.condition {
+        // First pass: collect all condition strings
+        let cond_strs: Vec<String> = guards
+            .iter()
+            .map(|g| match &g.condition {
                 Some(e) => self.expr_to_lua(e),
-                None => "true".to_string(),
+                None => "true".to_string(), // placeholder for else
+            })
+            .collect();
+
+        for (i, guard) in guards.iter().enumerate() {
+            let cond_str = if guard.condition.is_none() {
+                // "else" guard: enabled only when no other guard is enabled
+                let others: Vec<&str> = cond_strs
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, s)| *j != i && s.as_str() != "true")
+                    .map(|(_, s)| s.as_str())
+                    .collect();
+                if others.is_empty() {
+                    "true".to_string()
+                } else if others.len() == 1 {
+                    format!("not ({})", others[0])
+                } else {
+                    format!("not ({})", others.join(" or "))
+                }
+            } else {
+                cond_strs[i].clone()
             };
 
             self.emit(&format!("    -- {} guard {}: {}", kind, i, cond_str));
@@ -533,7 +697,11 @@ impl LuaGenerator {
                         self.emit(&format!("    s.{} = {}", target, v));
                     }
                     Stmt::Break(_) => {
-                        self.emit("    -- break");
+                        if let Some(ref pname) = self.current_proctype {
+                            self.emit(&format!("    s._done_{} = true", pname));
+                        } else {
+                            self.emit("    -- break (no proctype context)");
+                        }
                     }
                     Stmt::Goto(label, _) => {
                         self.emit(&format!("    -- goto {}", label));
@@ -663,7 +831,17 @@ impl LuaGenerator {
             Expression::IntLit(n) => n.to_string(),
             Expression::StringLit(s) => format!("\"{}\"", s),
             Expression::BoolLit(b) => b.to_string(),
-            Expression::Ident(name) => format!("s.{}", name),
+            Expression::Ident(name) => {
+                // Built-in variables like _pid are not prefixed
+                if name == "_pid" {
+                    "s._pid".to_string()
+                } else if let Some(ref pname) = self.current_proctype {
+                    // Prefix local variables with current proctype name
+                    format!("s.{}_{}", pname, name)
+                } else {
+                    format!("s.{}", name)
+                }
+            }
             Expression::ArrayAccess { name, index } => {
                 format!("s.{}[{}]", name, self.expr_to_lua(index))
             }
@@ -755,7 +933,7 @@ mod tests {
         let source = "active proctype P() {\n    do\n    :: (x > 0) -> x = x - 1\n    :: else -> break\n    od\n}";
         let model = parser::parse(source).unwrap();
         let lua = generate(&model);
-        assert!(lua.source.contains("break"));
+        assert!(lua.source.contains("_done_P"));
     }
 
     #[test]
@@ -845,7 +1023,7 @@ mod tests {
         let model = parser::parse(source).unwrap();
         let lua = generate(&model);
         assert!(lua.source.contains("assert"));
-        assert!(lua.source.contains("break"));
+        assert!(lua.source.contains("done"));
     }
 
     #[test]

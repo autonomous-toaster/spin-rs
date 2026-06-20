@@ -27,6 +27,8 @@ pub enum TopLevel {
     CCode(String, usize),
     /// Embedded C state (variable declarations via Lua)
     CState(Vec<VarDecl>, usize),
+    /// Inline macro definition (expansion deferred)
+    Inline(InlineDef),
 }
 
 /// A proctype definition (process template).
@@ -37,12 +39,22 @@ pub struct ProctypeDef {
     pub provided: Option<Expression>,
     pub parameters: Vec<VarDecl>,
     pub body: Vec<Stmt>,
+    pub pid: Option<i64>,
     pub line: usize,
 }
 
 /// The `init` block.
 #[derive(Debug, Clone)]
 pub struct InitDef {
+    pub body: Vec<Stmt>,
+    pub line: usize,
+}
+
+/// An inline macro definition.
+#[derive(Debug, Clone)]
+pub struct InlineDef {
+    pub name: String,
+    pub parameters: Vec<String>,
     pub body: Vec<Stmt>,
     pub line: usize,
 }
@@ -90,6 +102,7 @@ pub struct VarDecl {
 #[derive(Debug, Clone)]
 pub enum Stmt {
     VarDecl(VarDecl),
+    VarDecls(Vec<VarDecl>),
     Assignment {
         target: String,
         index: Option<Box<Expression>>,
@@ -124,6 +137,13 @@ pub enum Stmt {
     },
     Run(String, Vec<Expression>, usize),
     Label(String, usize),
+    For {
+        init: Box<Stmt>,
+        condition: Expression,
+        update: Box<Stmt>,
+        body: Vec<Stmt>,
+        line: usize,
+    },
 }
 
 /// A guard in if/fi or do/od.

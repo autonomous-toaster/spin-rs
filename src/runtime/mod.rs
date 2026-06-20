@@ -44,10 +44,12 @@ impl LuaChannel {
         self.messages.len()
     }
     pub fn is_full(&self) -> bool {
-        self.capacity > 0 && self.messages.len() >= self.capacity
+        // Rendezvous channels (capacity 0) are always "full" until matched
+        self.capacity == 0 || (self.capacity > 0 && self.messages.len() >= self.capacity)
     }
     pub fn is_empty(&self) -> bool {
-        self.messages.is_empty()
+        // Rendezvous channels (capacity 0) are always "empty" until matched
+        self.capacity == 0 || self.messages.is_empty()
     }
 }
 
@@ -418,8 +420,19 @@ impl LuaModel {
         let mut runtime = LuaRuntime::new()?;
 
         for decl in &model.declarations {
-            if let crate::parser::ast::TopLevel::ChanDecl { name, capacity, .. } = decl {
-                runtime.register_channel(name, *capacity as usize);
+            match decl {
+                crate::parser::ast::TopLevel::ChanDecl { name, capacity, .. } => {
+                    runtime.register_channel(name, *capacity as usize);
+                }
+                // Also handle channels parsed as GlobalVar with Chan type (fallback)
+                crate::parser::ast::TopLevel::GlobalVar(v)
+                    if v.var_type == crate::parser::ast::VarType::Chan =>
+                {
+                    // Extract capacity from init expression if available
+                    let capacity = 0; // Default to rendezvous
+                    runtime.register_channel(&v.name, capacity);
+                }
+                _ => {}
             }
         }
 
@@ -474,6 +487,37 @@ impl Model for LuaModel {
         state.0.hash(&mut hasher);
         hasher.finish()
     }
+
+    fn check_violation(&self, state: &StateBlob) -> Option<String> {
+        // Deadlock detection: no transitions but active processes remain
+        let trans = self.transitions(state);
+        if !trans.is_empty() {
+            return None;
+        }
+        if state.0.len() < 15 {
+            return None;
+        }
+        // Parse _nr_pr from blob (format: {"key":val,...})
+        let nr_pr = if let Some(pos) = state.0.find("_nr_pr") {
+            let after_key = &state.0[pos + 7..]; // skip "_nr_pr"
+            let after_colon = after_key.trim_start_matches([':', '"']);
+            let num_str: String = after_colon
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            num_str.parse::<i64>().unwrap_or(0)
+        } else {
+            0
+        };
+        // Flag deadlock: multiple proctypes and at least one is still running
+        if nr_pr >= 2 {
+            // Check if any _done_ flag is false (process still running)
+            if state.0.contains(":false") && state.0.contains("_done_") {
+                return Some("deadlock: some processes blocked".to_string());
+            }
+        }
+        None
+    }
 }
 
 // ─── Convenience ────────────────────────────────────────────────
@@ -493,30 +537,26 @@ mod tests {
     fn test_lua_runtime_init() {
         let rt = LuaRuntime::new().unwrap();
         // No init_state call since _spin_init_state requires generated code
-        assert!(
-            rt.lua
-                .globals()
-                .get::<mlua::Function>("_spin_printf")
-                .is_ok()
-        );
-        assert!(
-            rt.lua
-                .globals()
-                .get::<mlua::Function>("_spin_assert")
-                .is_ok()
-        );
-        assert!(
-            rt.lua
-                .globals()
-                .get::<mlua::Function>("_spin_chan_send")
-                .is_ok()
-        );
-        assert!(
-            rt.lua
-                .globals()
-                .get::<mlua::Function>("_spin_chan_recv")
-                .is_ok()
-        );
+        assert!(rt
+            .lua
+            .globals()
+            .get::<mlua::Function>("_spin_printf")
+            .is_ok());
+        assert!(rt
+            .lua
+            .globals()
+            .get::<mlua::Function>("_spin_assert")
+            .is_ok());
+        assert!(rt
+            .lua
+            .globals()
+            .get::<mlua::Function>("_spin_chan_send")
+            .is_ok());
+        assert!(rt
+            .lua
+            .globals()
+            .get::<mlua::Function>("_spin_chan_recv")
+            .is_ok());
     }
 
     #[test]

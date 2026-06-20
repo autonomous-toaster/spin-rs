@@ -370,6 +370,7 @@ fn stmt(input: Input) -> IResult<Input, Stmt> {
         assert_stmt,
         printf_stmt,
         run_stmt,
+        for_stmt,
         skip_stmt,
         recv_stmt,
         var_decl_stmt,
@@ -557,6 +558,29 @@ fn run_stmt(input: Input) -> IResult<Input, Stmt> {
     let (input, _) = opt(symbol(";"))(input)?;
     Ok((input, Stmt::Run(name, args.unwrap_or_default(), 0)))
 }
+fn for_stmt(input: Input) -> IResult<Input, Stmt> {
+    let (input, _) = keyword("for")(input)?;
+    let (input, _) = ws_char('(')(input)?;
+    let (input, init) = var_decl_stmt(input)?;
+    let (input, _) = symbol(";")(input)?;
+    let (input, condition) = expr(input)?;
+    let (input, _) = symbol(";")(input)?;
+    let (input, update) = assignment_stmt(input)?;
+    let (input, _) = ws_char(')')(input)?;
+    let (input, body) = delimited(ws_char('{'), many0(stmt), ws_char('}'))(input)?;
+    Ok((
+        input,
+        Stmt::For {
+            init: Box::new(init),
+            condition,
+            update: Box::new(update),
+            body,
+            line: 0,
+        },
+    ))
+}
+
+
 fn proctype_def(input: Input) -> IResult<Input, TopLevel> {
     let (input, _) = skip_ws(input)?;
     let (input, active) = opt(keyword("active"))(input)?;
@@ -576,6 +600,7 @@ fn proctype_def(input: Input) -> IResult<Input, TopLevel> {
             provided: None,
             parameters: params.unwrap_or_default(),
             body,
+            pid: None,
             line: 0,
         }),
     ))
@@ -605,6 +630,27 @@ fn ltl_formula(input: Input) -> IResult<Input, TopLevel> {
         }),
     ))
 }
+
+fn inline_def(input: Input) -> IResult<Input, TopLevel> {
+    let (input, _) = keyword("inline")(input)?;
+    let (input, name) = ident(input)?;
+    let (input, params) = delimited(
+        ws_char('('),
+        separated_list0(symbol(","), ident),
+        ws_char(')'),
+    )(input)?;
+    let (input, body) = delimited(ws_char('{'), many0(stmt), ws_char('}'))(input)?;
+    Ok((
+        input,
+        TopLevel::Inline(InlineDef {
+            name,
+            parameters: params,
+            body,
+            line: 0,
+        }),
+    ))
+}
+
 fn preprocessor(input: Input) -> IResult<Input, TopLevel> {
     let (input, _) = skip_ws(input)?;
     if !input.starts_with('#') {
@@ -627,21 +673,23 @@ fn c_code_block(input: Input) -> IResult<Input, TopLevel> {
     let (input, _) = ws_char('}')(input)?;
     Ok((input, TopLevel::CCode(code.trim().to_string(), 0)))
 }
-fn top_level(input: Input) -> IResult<Input, TopLevel> {
+fn top_level(input: Input) -> IResult<Input, Vec<TopLevel>> {
     let (input, _) = skip_ws(input)?;
-    alt((
-        proctype_def,
-        init_def,
-        never_claim,
-        ltl_formula,
-        preprocessor,
-        c_code_block,
-        map(terminated(var_decl, symbol(";")), TopLevel::GlobalVar),
+    alt::<_, _, nom::error::Error<Input>, _>((
+        map(proctype_def, |p| vec![p]),
+        map(init_def, |i| vec![i]),
+        map(never_claim, |n| vec![n]),
+        map(ltl_formula, |l| vec![l]),
+        map(inline_def, |i| vec![i]),
+        map(preprocessor, |p| vec![p]),
+        map(c_code_block, |c| vec![c]),
+        map(terminated(var_decl, symbol(";")), |vd| vec![TopLevel::GlobalVar(vd)]),
     ))(input)
 }
 pub fn parse(source: &str) -> anyhow::Result<PromelaModel> {
-    let (_, declarations) =
-        many0(top_level)(source).map_err(|e| anyhow::anyhow!("parse error: {:?}", e))?;
+    let (_, declarations) = many0(top_level)(source)
+        .map_err(|e| anyhow::anyhow!("parse error: {:?}", e))?;
+    let declarations: Vec<TopLevel> = declarations.into_iter().flatten().collect();
     Ok(PromelaModel {
         declarations,
         source: Some(source.to_string()),

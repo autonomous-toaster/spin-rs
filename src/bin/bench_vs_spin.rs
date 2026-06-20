@@ -221,7 +221,7 @@ fn phase1_correctness(spin_available: bool) -> (Vec<serde_json::Value>, String) 
     let mut fail = 0u32;
 
     for model in ALL_MODELS {
-        if model.name.contains("token_ring") || model.name == "deadlock_circular" {
+        if model.name.contains("token_ring") {
             println!("  ~ {:25} skip (channels deferred)", model.name);
             continue;
         }
