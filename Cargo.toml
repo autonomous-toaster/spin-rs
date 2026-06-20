@@ -3,7 +3,7 @@ name = "spin-rs"
 version = "0.1.0"
 edition = "2024"
 description = "A Rust-native Promela model checker with Lua runtime"
-license = "MIT"
+license = "WTFPL"
 
 [dependencies]
 # Parser

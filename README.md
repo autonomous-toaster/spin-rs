@@ -1,6 +1,6 @@
 # spin-rs
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: WTFPL](https://img.shields.io/badge/License-WTFPL-brightgreen.svg)](http://www.wtfpl.net/)
 
 **A Rust-native Promela model checker with Lua runtime — no GCC dependency required.**
 
@@ -164,4 +164,4 @@ Run performance benchmarks comparing transition throughput across models.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+WTFPL — see [LICENSE](LICENSE).
