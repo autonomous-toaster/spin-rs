@@ -121,8 +121,9 @@ impl LuaGenerator {
                     self.emit("-- never claim");
                     self.emit("function _spin_transitions_never(state)");
                     self.indent += 1;
-                    self.emit(&format!("    -- {} states in never claim", n.body.len()));
-                    self.emit("    return {}");
+                    self.emit("    local transitions = {}");
+                    self.emit_stmts(&n.body, 0);
+                    self.emit("    return transitions");
                     self.indent -= 1;
                     self.emit("end");
                     self.emit("");
@@ -966,5 +967,16 @@ mod expression_tests {
         let model = crate::parser::parse(source).unwrap();
         let lua = crate::codegen::generate(&model);
         assert!(lua.source.len() > 0);
+    }
+
+    #[test]
+    fn test_generate_never_claim() {
+        // Test never claim codegen generates transitions
+        // Use a simple never claim body without labels
+        let source = "never { do :: (x == 0) -> skip od }";
+        let model = crate::parser::parse(source).unwrap();
+        let lua = crate::codegen::generate(&model);
+        assert!(lua.source.contains("_spin_transitions_never"));
+        assert!(lua.source.contains("transitions"));
     }
 }

@@ -763,4 +763,108 @@ mod tests {
             _ => panic!("Expected proctype, got {:?}", model.declarations[0]),
         }
     }
+
+    #[test]
+    fn test_chan_decl() {
+        // Simple channel declaration without complex type
+        let source = "chan ch = [2] of { byte };";
+        let result = parse(source);
+        assert!(
+            result.is_ok(),
+            "Failed to parse chan decl: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_multi_proctype() {
+        let source = "active proctype P() { byte x; }\nactive proctype Q() { byte y; }";
+        let model = parse(source).unwrap();
+        assert_eq!(model.declarations.len(), 2);
+    }
+
+    #[test]
+    fn test_nested_if_do() {
+        let source = "active proctype P() {\n    if\n    :: (x > 0) ->\n        do\n        :: (x > 0) -> x = x - 1\n        :: (x == 0) -> break\n        od\n    :: else -> skip\n    fi\n}";
+        let model = parse(source).unwrap();
+        assert_eq!(model.declarations.len(), 1);
+    }
+
+    #[test]
+    fn test_array_access() {
+        let source = "active proctype P() { int arr[5]; arr[0] = 42; }";
+        let model = parse(source).unwrap();
+        match &model.declarations[0] {
+            TopLevel::Proctype(p) => {
+                assert!(p.body.len() >= 2);
+                match &p.body[1] {
+                    Stmt::Assignment { index, .. } => assert!(index.is_some()),
+                    _ => {}
+                }
+            }
+            _ => panic!("Expected proctype"),
+        }
+    }
+
+    #[test]
+    fn test_complex_expression() {
+        let source = "active proctype P() { x = (a + b) * (c - d); }";
+        let model = parse(source).unwrap();
+        assert_eq!(model.declarations.len(), 1);
+    }
+
+    #[test]
+    fn test_bitwise_ops() {
+        let source = "active proctype P() { x = ~a + 1; }";
+        let model = parse(source).unwrap();
+        assert_eq!(model.declarations.len(), 1);
+    }
+
+    #[test]
+    fn test_never_claim_parse() {
+        let source = "never { do :: (x == 0) -> skip od }";
+        let model = parse(source).unwrap();
+        assert_eq!(model.declarations.len(), 1);
+        match &model.declarations[0] {
+            TopLevel::NeverClaim(_) => {}
+            _ => panic!("Expected NeverClaim"),
+        }
+    }
+
+    #[test]
+    fn test_init_block() {
+        let source = "init { byte x; x = 1; }";
+        let model = parse(source).unwrap();
+        assert_eq!(model.declarations.len(), 1);
+        match &model.declarations[0] {
+            TopLevel::Init(_) => {}
+            _ => panic!("Expected Init"),
+        }
+    }
+
+    #[test]
+    fn test_inline_ltl_parse() {
+        let source = "ltl { []<>(x == 0) }";
+        let model = parse(source).unwrap();
+        assert_eq!(model.declarations.len(), 1);
+        match &model.declarations[0] {
+            TopLevel::Ltl(l) => {
+                assert!(l.name.is_none());
+            }
+            _ => panic!("Expected LTL"),
+        }
+    }
+
+    #[test]
+    fn test_c_code_block() {
+        let source = "c_code { printf('hello') }";
+        let model = parse(source).unwrap();
+        assert_eq!(model.declarations.len(), 1);
+        match &model.declarations[0] {
+            TopLevel::CCode(code, _) => {
+                assert!(code.contains("printf"));
+            }
+            _ => panic!("Expected CCode"),
+        }
+    }
 }

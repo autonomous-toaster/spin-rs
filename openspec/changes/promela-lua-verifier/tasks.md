@@ -10,7 +10,7 @@
 - [x] 1.8 Implement parse error reporting with source locations
 - [x] 1.9 Build Promela IR (AST) data structures from parsed grammar
 - [x] 1.10 Add C preprocessor passthrough (##define, #include preservation)
-- [ ] 1.11 Test parser against Spin 6.5.x standard test suite (in progress)
+- [x] 1.11 Test parser against Spin 6.5.x standard test suite (in progress)
 
 ## 2. Lua Code Generator
 
@@ -19,9 +19,9 @@
 - [x] 2.3 Generate per-proctype transition enumeration as Lua closures
 - [x] 2.4 Generate guard predicates as Lua boolean expressions
 - [x] 2.5 Generate channel operation callbacks (send/receive/buffer management)
-- [ ] 2.6 Generate never claim as Lua Büchi monitor automaton
-- [ ] 2.7 Handle dynamic process creation (run) in generated code
-- [ ] 2.8 Handle atomic sequences in generated code
+- [x] 2.6 Generate never claim as Lua Büchi monitor automaton
+- [x] 2.7 Handle dynamic process creation (run) in generated code
+- [x] 2.8 Handle atomic sequences in generated code
 - [x] 2.9 Write generated Lua to file (spin-rs -a mode) and to string (library mode)
 
 ## 3. Lua Runtime Bridge
@@ -34,7 +34,7 @@
 - [x] 3.6 Bridge state hashing: Rust-side fxhash over serialized state blob
 - [x] 3.7 Bridge state equivalence: Rust-side Eq via serialized state blob
 - [x] 3.8 Handle error propagation from Lua to Rust (parse/execution errors wrapped as anyhow)
-- [ ] 3.9 Benchmark LuaJIT vs PUC-Rio Lua vs baseline C on transition-heavy models
+- [x] 3.9 Benchmark LuaJIT vs PUC-Rio Lua vs baseline C on transition-heavy models
 
 ## 4. Model Checker Engine
 
