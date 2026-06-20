@@ -10,8 +10,7 @@
 use std::collections::{HashMap, HashSet};
 
 /// Fairness mode to apply during model checking.
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum FairnessMode {
     /// No fairness constraints (standard model checking)
     #[default]
@@ -23,7 +22,6 @@ pub enum FairnessMode {
     /// If a transition is enabled at infinitely many states, it must fire infinitely often.
     Strong,
 }
-
 
 /// Tracks fairness state during exploration.
 #[derive(Debug, Clone)]

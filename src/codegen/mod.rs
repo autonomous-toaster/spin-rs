@@ -313,7 +313,10 @@ impl LuaGenerator {
                     let combined_guard = if guards.iter().all(|g| g == "true") {
                         "true".to_string()
                     } else {
-                        let non_trivial: Vec<&str> = guards.iter().filter_map(|g| if *g != "true" { Some(g.as_str()) } else { None }).collect();
+                        let non_trivial: Vec<&str> = guards
+                            .iter()
+                            .filter_map(|g| if *g != "true" { Some(g.as_str()) } else { None })
+                            .collect();
                         if non_trivial.is_empty() {
                             "true".to_string()
                         } else {
@@ -325,7 +328,10 @@ impl LuaGenerator {
                     self.indent += 1;
                     self.emit("    table.insert(transitions, {");
                     self.indent += 1;
-                    self.emit(&format!("    guard = function() return {} end,", combined_guard));
+                    self.emit(&format!(
+                        "    guard = function() return {} end,",
+                        combined_guard
+                    ));
                     self.emit("    effect = function(s)");
                     self.indent += 1;
                     for s in body {
@@ -374,10 +380,13 @@ impl LuaGenerator {
                 if guards.is_empty() {
                     "true".to_string()
                 } else {
-                    let gs: Vec<String> = guards.iter().map(|g| match &g.condition {
-                        Some(e) => self.expr_to_lua(e),
-                        None => "true".to_string(),
-                    }).collect();
+                    let gs: Vec<String> = guards
+                        .iter()
+                        .map(|g| match &g.condition {
+                            Some(e) => self.expr_to_lua(e),
+                            None => "true".to_string(),
+                        })
+                        .collect();
                     gs.join(" or ")
                 }
             }
@@ -385,10 +394,13 @@ impl LuaGenerator {
                 if guards.is_empty() {
                     "false".to_string()
                 } else {
-                    let gs: Vec<String> = guards.iter().map(|g| match &g.condition {
-                        Some(e) => self.expr_to_lua(e),
-                        None => "true".to_string(),
-                    }).collect();
+                    let gs: Vec<String> = guards
+                        .iter()
+                        .map(|g| match &g.condition {
+                            Some(e) => self.expr_to_lua(e),
+                            None => "true".to_string(),
+                        })
+                        .collect();
                     gs.join(" or ")
                 }
             }
@@ -426,30 +438,37 @@ impl LuaGenerator {
                 let args_concat = args_str.join(", ");
                 self.emit(&format!("run({}, {})", name, args_concat));
             }
-            Stmt::Send { channel, target: _, args, .. } => {
+            Stmt::Send {
+                channel,
+                target: _,
+                args,
+                ..
+            } => {
                 let args_str: Vec<String> = args.iter().map(|a| self.expr_to_lua(a)).collect();
                 let args_concat = args_str.join(", ");
                 self.emit(&format!("_spin_chan_send('{}', {})", channel, args_concat));
             }
-            Stmt::Recv { channel, target, .. } => {
-                match target {
-                    RecvTarget::VarList(vars) => {
-                        let val = format!("_spin_chan_recv('{}')", channel);
-                        if let Some(first_var) = vars.first() {
-                            self.emit(&format!("s.{} = {}", first_var, val));
-                        }
-                    }
-                    _ => {
-                        self.emit(&format!("_spin_chan_recv('{}')", channel));
+            Stmt::Recv {
+                channel, target, ..
+            } => match target {
+                RecvTarget::VarList(vars) => {
+                    let val = format!("_spin_chan_recv('{}')", channel);
+                    if let Some(first_var) = vars.first() {
+                        self.emit(&format!("s.{} = {}", first_var, val));
                     }
                 }
-            }
+                _ => {
+                    self.emit(&format!("_spin_chan_recv('{}')", channel));
+                }
+            },
             Stmt::Atomic(body, _) | Stmt::DStep(body, _) => {
                 for s in body {
                     self.emit_effect_for_stmt(s);
                 }
             }
-            Stmt::Unless { body, handler: _, .. } => {
+            Stmt::Unless {
+                body, handler: _, ..
+            } => {
                 for s in body {
                     self.emit_effect_for_stmt(s);
                 }

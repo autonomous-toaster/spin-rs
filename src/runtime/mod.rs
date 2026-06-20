@@ -221,7 +221,9 @@ impl LuaRuntime {
 
         // Embedded C / Lua eval support: allow arbitrary Lua execution
         let f = lua.create_function(|lua, code: String| {
-            lua.load(&code).exec().map_err(|e| mlua::Error::runtime(format!("c_code: {}", e)))
+            lua.load(&code)
+                .exec()
+                .map_err(|e| mlua::Error::runtime(format!("c_code: {}", e)))
         })?;
         lua.globals().set("_spin_c_code", f)?;
 

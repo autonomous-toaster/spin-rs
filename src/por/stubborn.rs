@@ -46,10 +46,9 @@ pub fn compute_stubborn_set<S: Clone>(
                         t_deps(t_idx, deps).writes.contains(v)
                             || t_deps(t_idx, deps).reads.contains(v)
                     });
-                    if have_common
-                        && stubborn.insert(u_idx) {
-                            worklist.push(u_idx);
-                        }
+                    if have_common && stubborn.insert(u_idx) {
+                        worklist.push(u_idx);
+                    }
                 }
             }
 
@@ -57,10 +56,12 @@ pub fn compute_stubborn_set<S: Clone>(
             // that access the same variable
             if is_global_access(t_idx, deps) {
                 for (u_idx, dep) in deps.iter().enumerate() {
-                    if u_idx != t_idx && shares_variable(t_idx, u_idx, dep)
-                        && stubborn.insert(u_idx) {
-                            worklist.push(u_idx);
-                        }
+                    if u_idx != t_idx
+                        && shares_variable(t_idx, u_idx, dep)
+                        && stubborn.insert(u_idx)
+                    {
+                        worklist.push(u_idx);
+                    }
                 }
             }
         }
@@ -91,8 +92,7 @@ fn shares_variable(t1: usize, _t2: usize, _dep: &TransitionDeps) -> bool {
 }
 
 /// Enum for choosing between persistent sets and stubborn sets.
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum PorAlgorithm {
     /// Standard persistent sets (v1 default)
     #[default]
@@ -102,7 +102,6 @@ pub enum PorAlgorithm {
     /// No reduction
     None,
 }
-
 
 #[cfg(test)]
 mod tests {

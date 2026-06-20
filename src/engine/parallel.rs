@@ -62,7 +62,9 @@ struct ParallelVisited<S> {
 impl<S: Clone + std::hash::Hash + Eq + Send> ParallelVisited<S> {
     fn new(partition_count: usize) -> Self {
         Self {
-            partitions: (0..partition_count).map(|_| Mutex::new(HashMap::new())).collect(),
+            partitions: (0..partition_count)
+                .map(|_| Mutex::new(HashMap::new()))
+                .collect(),
             count: AtomicUsize::new(0),
         }
     }
@@ -251,11 +253,23 @@ mod tests {
         fn transitions(&self, state: &u8) -> Vec<Transition<u8>> {
             match state {
                 0 => vec![
-                    Transition { label: "0→1".into(), next: 1 },
-                    Transition { label: "0→2".into(), next: 2 },
+                    Transition {
+                        label: "0→1".into(),
+                        next: 1,
+                    },
+                    Transition {
+                        label: "0→2".into(),
+                        next: 2,
+                    },
                 ],
-                1 => vec![Transition { label: "1→1".into(), next: 1 }],
-                2 => vec![Transition { label: "2→2".into(), next: 2 }],
+                1 => vec![Transition {
+                    label: "1→1".into(),
+                    next: 1,
+                }],
+                2 => vec![Transition {
+                    label: "2→2".into(),
+                    next: 2,
+                }],
                 _ => vec![],
             }
         }
@@ -268,9 +282,7 @@ mod tests {
     #[test]
     fn test_parallel_dfs() {
         let model = SimpleModel;
-        let checker = ParallelChecker::new(model)
-            .num_threads(2)
-            .max_states(100);
+        let checker = ParallelChecker::new(model).num_threads(2).max_states(100);
         let result = checker.check_parallel_dfs();
         assert_eq!(result.states_explored, 3);
     }
@@ -280,9 +292,15 @@ mod tests {
         struct EmptyModel;
         impl Model for EmptyModel {
             type State = u8;
-            fn init_states(&self) -> Vec<u8> { vec![] }
-            fn transitions(&self, _: &u8) -> Vec<Transition<u8>> { vec![] }
-            fn hash(&self, _: &u8) -> u64 { 0 }
+            fn init_states(&self) -> Vec<u8> {
+                vec![]
+            }
+            fn transitions(&self, _: &u8) -> Vec<Transition<u8>> {
+                vec![]
+            }
+            fn hash(&self, _: &u8) -> u64 {
+                0
+            }
         }
         let checker = ParallelChecker::new(EmptyModel);
         let result = checker.check_parallel_dfs();
