@@ -29,6 +29,12 @@ pub enum TopLevel {
     CState(Vec<VarDecl>, usize),
     /// Inline macro definition (expansion deferred)
     Inline(InlineDef),
+    /// Channel array declaration: chan name[N];
+    ChannelArray {
+        name: String,
+        size: i64,
+        line: usize,
+    },
 }
 
 /// A proctype definition (process template).
@@ -119,13 +125,13 @@ pub enum Stmt {
     Atomic(Vec<Stmt>, usize),
     DStep(Vec<Stmt>, usize),
     Send {
-        channel: String,
+        channel: Box<Expression>,
         target: SendTarget,
         args: Vec<Expression>,
         line: usize,
     },
     Recv {
-        channel: String,
+        channel: Box<Expression>,
         target: RecvTarget,
         line: usize,
     },

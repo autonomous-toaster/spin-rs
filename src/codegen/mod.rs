@@ -138,6 +138,11 @@ impl LuaGenerator {
                 TopLevel::ChanDecl { name, .. } => {
                     lines.push(format!("    state.{} = nil", name));
                 }
+                TopLevel::ChannelArray { name, size, .. } => {
+                    for i in 0..*size {
+                        lines.push(format!("    state.{}_{} = nil", name, i));
+                    }
+                }
                 _ => {}
             }
         }
@@ -297,7 +302,22 @@ impl LuaGenerator {
         self.emit("    })");
     }
 
-    fn emit_send_stmt(&mut self, channel: &str, target: &SendTarget, args: &[Expression]) {
+    fn channel_to_lua(&self, channel: &Expression) -> String {
+        // Returns a Lua expression string for the channel name, including quotes.
+        // For ident: 'tok' (quoted string literal)
+        // For indexed: 'tok_' .. tostring(i) (runtime concatenation)
+        match channel {
+            Expression::Ident(name) => format!("'{}'", name),
+            Expression::ArrayAccess { name, index } => {
+                let idx_str = self.expr_to_lua(index);
+                format!("'{}_' .. tostring({})", name, idx_str)
+            }
+            _ => format!("'{}'", self.expr_to_lua(channel)),
+        }
+    }
+
+    fn emit_send_stmt(&mut self, channel: &Expression, target: &SendTarget, args: &[Expression]) {
+        let chan_name = self.channel_to_lua(channel);
         let args_str: Vec<String> = args.iter().map(|a| self.expr_to_lua(a)).collect();
         let args_concat = args_str.join(", ");
         match target {
@@ -305,8 +325,8 @@ impl LuaGenerator {
                 self.emit("    table.insert(transitions, {");
                 self.indent += 1;
                 self.emit(&format!(
-                    "    guard = function(s) return not chan_full('{}') end,",
-                    channel
+                    "    guard = function(s) return not chan_full({}) end,",
+                    chan_name
                 ));
                 let send_args = if args_concat.is_empty() {
                     id.clone()
@@ -314,8 +334,8 @@ impl LuaGenerator {
                     format!("{}, {}", id, args_concat)
                 };
                 self.emit(&format!(
-                    "    effect = function(s) chan_send('{}', {}) end",
-                    channel, send_args
+                    "    effect = function(s) chan_send({}, {}) end",
+                    chan_name, send_args
                 ));
                 self.indent -= 1;
                 self.emit("    })");
@@ -325,8 +345,8 @@ impl LuaGenerator {
                 self.emit("    table.insert(transitions, {");
                 self.indent += 1;
                 self.emit(&format!(
-                    "    guard = function(s) return not chan_full('{}') end,",
-                    channel
+                    "    guard = function(s) return not chan_full({}) end,",
+                    chan_name
                 ));
                 let send_args = if args_concat.is_empty() {
                     val_str
@@ -334,8 +354,8 @@ impl LuaGenerator {
                     format!("{}, {}", val_str, args_concat)
                 };
                 self.emit(&format!(
-                    "    effect = function(s) chan_send('{}', {}) end",
-                    channel, send_args
+                    "    effect = function(s) chan_send({}, {}) end",
+                    chan_name, send_args
                 ));
                 self.indent -= 1;
                 self.emit("    })");
@@ -343,19 +363,20 @@ impl LuaGenerator {
         }
     }
 
-    fn emit_recv_stmt(&mut self, channel: &str, target: &RecvTarget) {
+    fn emit_recv_stmt(&mut self, channel: &Expression, target: &RecvTarget) {
+        let chan_name = self.channel_to_lua(channel);
         match target {
             RecvTarget::VarList(vars) => {
                 let vars_str = vars.join(", ");
                 self.emit("    table.insert(transitions, {");
                 self.indent += 1;
                 self.emit(&format!(
-                    "    guard = function(s) return not chan_empty('{}') end,",
-                    channel
+                    "    guard = function(s) return not chan_empty({}) end,",
+                    chan_name
                 ));
                 self.emit(&format!(
-                    "    effect = function(s) chan_recv('{}', {}) end",
-                    channel, vars_str
+                    "    effect = function(s) chan_recv({}, {}) end",
+                    chan_name, vars_str
                 ));
                 self.indent -= 1;
                 self.emit("    })");
@@ -496,8 +517,12 @@ impl LuaGenerator {
     /// Extract guard expression for a statement (for combined guards in d_step/atomic)
     fn guard_for_stmt(&self, stmt: &Stmt) -> String {
         match stmt {
-            Stmt::Send { channel, .. } => format!("not chan_full(s.{})", channel),
-            Stmt::Recv { channel, .. } => format!("not chan_empty(s.{})", channel),
+            Stmt::Send { channel, .. } => {
+                format!("not chan_full({})", self.channel_to_lua(channel))
+            }
+            Stmt::Recv { channel, .. } => {
+                format!("not chan_empty({})", self.channel_to_lua(channel))
+            }
             Stmt::Assert(expr, _) => self.expr_to_lua(expr),
             Stmt::Skip(_) | Stmt::Break(_) => "true".to_string(),
             Stmt::Goto(_, _) => "true".to_string(),
@@ -559,7 +584,9 @@ impl LuaGenerator {
             Stmt::Printf(fmt, args, _) => self.emit_printf_effect(fmt, args),
             Stmt::Run(name, args, _) => self.emit_run_effect(name, args),
             Stmt::Send { channel, args, .. } => self.emit_send_effect(channel, args),
-            Stmt::Recv { channel, target, .. } => self.emit_recv_effect(channel, target),
+            Stmt::Recv {
+                channel, target, ..
+            } => self.emit_recv_effect(channel, target),
             Stmt::Atomic(body, _) | Stmt::DStep(body, _) => self.emit_atomic_effect(body),
             Stmt::Unless { body, .. } => self.emit_unless_effect(body),
             Stmt::VarDecl(_) | Stmt::VarDecls(_) | Stmt::Label(_, _) => self.emit_decl_effect(),
@@ -611,22 +638,24 @@ impl LuaGenerator {
         self.emit(&format!("run({}, {})", name, args_concat));
     }
 
-    fn emit_send_effect(&mut self, channel: &str, args: &[Expression]) {
+    fn emit_send_effect(&mut self, channel: &Expression, args: &[Expression]) {
+        let chan_name = self.channel_to_lua(channel);
         let args_str: Vec<String> = args.iter().map(|a| self.expr_to_lua(a)).collect();
         let args_concat = args_str.join(", ");
-        self.emit(&format!("_spin_chan_send('{}', {})", channel, args_concat));
+        self.emit(&format!("_spin_chan_send({}, {})", chan_name, args_concat));
     }
 
-    fn emit_recv_effect(&mut self, channel: &str, target: &RecvTarget) {
+    fn emit_recv_effect(&mut self, channel: &Expression, target: &RecvTarget) {
+        let chan_name = self.channel_to_lua(channel);
         match target {
             RecvTarget::VarList(vars) => {
-                let val = format!("_spin_chan_recv('{}')", channel);
+                let val = format!("_spin_chan_recv({})", chan_name);
                 if let Some(first_var) = vars.first() {
                     self.emit(&format!("s.{} = {}", first_var, val));
                 }
             }
             _ => {
-                self.emit(&format!("_spin_chan_recv('{}')", channel));
+                self.emit(&format!("_spin_chan_recv({})", chan_name));
             }
         }
     }
@@ -747,14 +776,22 @@ impl LuaGenerator {
                             SendTarget::Ident(id) => id.clone(),
                             SendTarget::Value(_) => "expr".to_string(),
                         };
-                        self.emit(&format!("    chan_send(s.{}, {}, ...)", channel, id));
+                        self.emit(&format!(
+                            "    chan_send({}, {}, ...)",
+                            self.channel_to_lua(channel),
+                            id
+                        ));
                     }
                     Stmt::Recv {
                         channel, target, ..
                     } => {
                         if let RecvTarget::VarList(vars) = target {
                             let vs = vars.join(", ");
-                            self.emit(&format!("    {}, _ = chan_recv(s.{})", vs, channel));
+                            self.emit(&format!(
+                                "    {}, _ = chan_recv({})",
+                                vs,
+                                self.channel_to_lua(channel)
+                            ));
                         }
                     }
                     Stmt::Skip(_) => {}
@@ -1186,5 +1223,25 @@ mod expression_tests {
         let lua = crate::codegen::generate(&model);
         assert!(lua.source.contains("_spin_transitions_never"));
         assert!(lua.source.contains("transitions"));
+    }
+
+    #[test]
+    fn test_channel_array_codegen() {
+        // Test that chan tok[3] generates 3 state variables
+        let source = "chan tok[3];\nactive proctype P() { byte msg; tok[0] ? msg }";
+        let model = crate::parser::parse(source).unwrap();
+        let lua = crate::codegen::generate(&model);
+        assert!(
+            lua.source.contains("state.tok_0 = nil"),
+            "Should emit state.tok_0"
+        );
+        assert!(
+            lua.source.contains("state.tok_1 = nil"),
+            "Should emit state.tok_1"
+        );
+        assert!(
+            lua.source.contains("state.tok_2 = nil"),
+            "Should emit state.tok_2"
+        );
     }
 }

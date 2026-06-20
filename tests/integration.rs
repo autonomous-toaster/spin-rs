@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use spin_rs::{CheckResult, CheckerBuilder, LuaModel, SearchMode, StorageMode, verify};
+use spin_rs::{verify, CheckResult, CheckerBuilder, LuaModel, SearchMode, StorageMode};
 
 /// Test model from Spin standard suite.
 struct TestModel {
@@ -343,6 +343,30 @@ mod tests {
         "#;
         let result = verify(promela).unwrap();
         assert!(result.states_explored > 0);
+    }
+
+    #[test]
+    fn test_channel_array_token_ring() {
+        // 3-node token ring with channel arrays
+        let promela = r#"
+            chan tok[3];
+            init { tok[0] ! 1 }
+            active [3] proctype node() {
+                byte msg;
+                do
+                :: tok[_pid] ? msg ->
+                   tok[(_pid + 1) % 3] ! msg
+                od
+            }
+        "#;
+        let result = verify(promela);
+        assert!(
+            result.is_ok(),
+            "Channel array token ring should parse and verify: {:?}",
+            result.err()
+        );
+        let result = result.unwrap();
+        assert!(result.states_explored > 0, "Should explore states");
     }
 }
 

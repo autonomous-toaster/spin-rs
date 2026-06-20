@@ -506,8 +506,19 @@ fn atomic_stmt(input: Input) -> IResult<Input, Stmt> {
     let (input, _) = opt(symbol(";"))(input)?;
     Ok((input, Stmt::Atomic(body, 0)))
 }
+/// Parse a channel reference: either a simple identifier or an indexed expression.
+/// Supports `tok` (simple) and `tok[i]` (indexed) syntax.
+fn channel_expr(input: Input) -> IResult<Input, Expression> {
+    let (input, name) = ident(input)?;
+    let (input, index) = opt(delimited(ws_char('['), expr, ws_char(']')))(input)?;
+    match index {
+        Some(idx) => Ok((input, Expression::ArrayAccess { name: name.to_string(), index: Box::new(idx) })),
+        None => Ok((input, Expression::Ident(name.to_string()))),
+    }
+}
+
 fn send_stmt(input: Input) -> IResult<Input, Stmt> {
-    let (input, channel) = ident(input)?;
+    let (input, channel) = channel_expr(input)?;
     let (input, _) = symbol("!")(input)?;
     let (input, target_val) =
         alt((map(expr, SendTarget::Value), map(ident, SendTarget::Ident)))(input)?;
@@ -520,7 +531,7 @@ fn send_stmt(input: Input) -> IResult<Input, Stmt> {
     Ok((
         input,
         Stmt::Send {
-            channel,
+            channel: Box::new(channel),
             target: target_val,
             args: args.unwrap_or_default(),
             line: 0,
@@ -528,7 +539,7 @@ fn send_stmt(input: Input) -> IResult<Input, Stmt> {
     ))
 }
 fn recv_stmt(input: Input) -> IResult<Input, Stmt> {
-    let (input, channel) = ident(input)?;
+    let (input, channel) = channel_expr(input)?;
     let (input, _) = symbol("?")(input)?;
     let (input, target) = alt((
         map(
@@ -541,7 +552,7 @@ fn recv_stmt(input: Input) -> IResult<Input, Stmt> {
     Ok((
         input,
         Stmt::Recv {
-            channel,
+            channel: Box::new(channel),
             target,
             line: 0,
         },
@@ -673,6 +684,17 @@ fn c_code_block(input: Input) -> IResult<Input, TopLevel> {
     let (input, _) = ws_char('}')(input)?;
     Ok((input, TopLevel::CCode(code.trim().to_string(), 0)))
 }
+/// Parse a channel array declaration: `chan name[N];`
+fn chan_array_decl(input: Input) -> IResult<Input, TopLevel> {
+    let (input, _) = keyword("chan")(input)?;
+    let (input, name) = ident(input)?;
+    let (input, _) = ws_char('[')(input)?;
+    let (input, size) = delimited(skip_ws, int_literal, skip_ws)(input)?;
+    let (input, _) = ws_char(']')(input)?;
+    let (input, _) = symbol(";")(input)?;
+    Ok((input, TopLevel::ChannelArray { name: name.to_string(), size, line: 0 }))
+}
+
 fn top_level(input: Input) -> IResult<Input, Vec<TopLevel>> {
     let (input, _) = skip_ws(input)?;
     alt::<_, _, nom::error::Error<Input>, _>((
@@ -683,6 +705,7 @@ fn top_level(input: Input) -> IResult<Input, Vec<TopLevel>> {
         map(inline_def, |i| vec![i]),
         map(preprocessor, |p| vec![p]),
         map(c_code_block, |c| vec![c]),
+        map(chan_array_decl, |ca| vec![ca]),
         map(terminated(var_decl, symbol(";")), |vd| vec![TopLevel::GlobalVar(vd)]),
     ))(input)
 }
@@ -913,6 +936,70 @@ mod tests {
                 assert!(code.contains("printf"));
             }
             _ => panic!("Expected CCode"),
+        }
+    }
+
+    #[test]
+    fn test_chan_array_decl() {
+        let source = "chan tok[5];";
+        let model = parse(source).unwrap();
+        assert_eq!(model.declarations.len(), 1);
+        match &model.declarations[0] {
+            TopLevel::ChannelArray { name, size, .. } => {
+                assert_eq!(name, "tok");
+                assert_eq!(*size, 5);
+            }
+            _ => panic!("Expected ChannelArray, got {:?}", model.declarations[0]),
+        }
+    }
+
+    #[test]
+    fn test_chan_array_indexed_send() {
+        let source = "active proctype P() { byte i; tok[i] ! 42 }";
+        let result = parse(source);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+        let model = result.unwrap();
+        match &model.declarations[0] {
+            TopLevel::Proctype(p) => {
+                assert_eq!(p.body.len(), 2); // VarDecl + Send
+                match &p.body[1] {
+                    Stmt::Send { channel, .. } => {
+                        match channel.as_ref() {
+                            Expression::ArrayAccess { name, .. } => {
+                                assert_eq!(name, "tok");
+                            }
+                            _ => panic!("Expected ArrayAccess for channel, got {:?}", channel),
+                        }
+                    }
+                    _ => panic!("Expected Send statement, got {:?}", p.body[1]),
+                }
+            }
+            _ => panic!("Expected Proctype"),
+        }
+    }
+
+    #[test]
+    fn test_chan_array_indexed_recv() {
+        let source = "active proctype P() { byte msg; tok[_pid] ? msg }";
+        let result = parse(source);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+        let model = result.unwrap();
+        match &model.declarations[0] {
+            TopLevel::Proctype(p) => {
+                assert_eq!(p.body.len(), 2); // VarDecl + Recv
+                match &p.body[1] {
+                    Stmt::Recv { channel, .. } => {
+                        match channel.as_ref() {
+                            Expression::ArrayAccess { name, .. } => {
+                                assert_eq!(name, "tok");
+                            }
+                            _ => panic!("Expected ArrayAccess for channel, got {:?}", channel),
+                        }
+                    }
+                    _ => panic!("Expected Recv statement, got {:?}", p.body[1]),
+                }
+            }
+            _ => panic!("Expected Proctype"),
         }
     }
 }

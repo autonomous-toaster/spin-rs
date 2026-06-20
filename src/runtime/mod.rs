@@ -116,11 +116,7 @@ impl LuaRuntime {
                 match arg {
                     mlua::Value::Integer(i) => parts.push(i),
                     mlua::Value::Number(n) => parts.push(n as i64),
-                    _ => {
-                        return Err(mlua::Error::runtime(
-                            "chan_send: expected integer values",
-                        ))
-                    }
+                    _ => return Err(mlua::Error::runtime("chan_send: expected integer values")),
                 }
             }
             let mut chans = channels.lock().unwrap();
@@ -131,7 +127,7 @@ impl LuaRuntime {
                 Ok(())
             } else {
                 Err(mlua::Error::runtime(format!(
-                    "channel '{}' not found",
+                    "channel '{}' not found (possible out-of-bounds array access)",
                     name
                 )))
             }
@@ -161,7 +157,7 @@ impl LuaRuntime {
                 }
             } else {
                 Err(mlua::Error::runtime(format!(
-                    "channel '{}' not found",
+                    "channel '{}' not found (possible out-of-bounds array access)",
                     name
                 )))
             }
@@ -261,9 +257,7 @@ impl LuaRuntime {
     }
 
     fn register_fairness_track(lua: &mlua::Lua) -> mlua::Result<()> {
-        let f = lua.create_function(|_lua, (_label, _enabled): (String, bool)| {
-            Ok(())
-        })?;
+        let f = lua.create_function(|_lua, (_label, _enabled): (String, bool)| Ok(()))?;
         lua.globals().set("_spin_fairness_track", f)?;
         Ok(())
     }
@@ -476,6 +470,13 @@ impl LuaModel {
                     // Extract capacity from init expression if available
                     let capacity = 0; // Default to rendezvous
                     runtime.register_channel(&v.name, capacity);
+                }
+                crate::parser::ast::TopLevel::ChannelArray { name, size, .. } => {
+                    // Register N individual rendezvous channels: name_0, name_1, ...
+                    for i in 0..*size {
+                        let chan_name = format!("{}_{}", name, i);
+                        runtime.register_channel(&chan_name, 0); // All rendezvous (capacity 0)
+                    }
                 }
                 _ => {}
             }
@@ -841,5 +842,38 @@ mod tests {
         // Assert false should fail
         let result = assert_fn.call::<()>((false, "should fail".to_string()));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_channel_array_registration() {
+        // Test that chan tok[5] properly registers 5 channels
+        let source = "chan tok[5]; active proctype P() { byte x; x = 1; }";
+        let model = crate::parser::parse(source).unwrap();
+        let generated = crate::codegen::generate(&model);
+        let mut rt = LuaRuntime::new().unwrap();
+        rt.load_source(&generated).unwrap();
+
+        // Register channels from model (this is what from_model does)
+        for decl in &model.declarations {
+            match decl {
+                crate::parser::ast::TopLevel::ChannelArray { name, size, .. } => {
+                    for i in 0..*size {
+                        let chan_name = format!("{}_{}", name, i);
+                        rt.register_channel(&chan_name, 0);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Verify all 5 channels are registered
+        for i in 0..5 {
+            let chan_name = format!("tok_{}", i);
+            assert!(
+                rt.channels.lock().unwrap().contains_key(&chan_name),
+                "Channel '{}' should be registered",
+                chan_name
+            );
+        }
     }
 }

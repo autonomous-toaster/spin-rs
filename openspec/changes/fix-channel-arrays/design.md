@@ -178,3 +178,11 @@ Existing models continue to work. New models can use channel arrays.
    - `run P(tok)` - pass entire array?
    - `run P(tok[i])` - pass single channel?
    - Decision: Not supported in initial implementation. Document limitation.
+
+## Implementation Learnings
+
+- **Lua codegen for indexed channels**: Channel name expressions in Lua must include quotes at generation time. For simple channels, `channel_to_lua('tok')` returns `'tok'`. For indexed: `'tok_' .. tostring(i)`. Both are used directly in `chan_full()` / `chan_send()` calls without additional quoting.
+- **`channel` field type changed from `String` to `Box<Expression>`**: This is a breaking AST change but maintains backward compatibility since simple identifiers are wrapped in `Expression::Ident`.
+- **Array access parsed via `channel_expr()`**: A new parser combinator that first parses an ident, then optionally an `[expr]` index, producing either `Expression::Ident` or `Expression::ArrayAccess`.
+- **Runtime bounds checking**: Uses existing "channel not found" error messages with enhanced text "(possible out-of-bounds array access)".
+- **`token_ring_n5` benchmark**: Parses correctly but doesn't produce correct state exploration yet because: (1) `for ... in` syntax not supported, (2) `= [1] of { byte }` buffered init not supported, (3) `active [N] proctype` with `_pid` in `do...od` still generates 0 processes.
