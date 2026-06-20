@@ -493,26 +493,30 @@ mod tests {
     fn test_lua_runtime_init() {
         let rt = LuaRuntime::new().unwrap();
         // No init_state call since _spin_init_state requires generated code
-        assert!(rt
-            .lua
-            .globals()
-            .get::<mlua::Function>("_spin_printf")
-            .is_ok());
-        assert!(rt
-            .lua
-            .globals()
-            .get::<mlua::Function>("_spin_assert")
-            .is_ok());
-        assert!(rt
-            .lua
-            .globals()
-            .get::<mlua::Function>("_spin_chan_send")
-            .is_ok());
-        assert!(rt
-            .lua
-            .globals()
-            .get::<mlua::Function>("_spin_chan_recv")
-            .is_ok());
+        assert!(
+            rt.lua
+                .globals()
+                .get::<mlua::Function>("_spin_printf")
+                .is_ok()
+        );
+        assert!(
+            rt.lua
+                .globals()
+                .get::<mlua::Function>("_spin_assert")
+                .is_ok()
+        );
+        assert!(
+            rt.lua
+                .globals()
+                .get::<mlua::Function>("_spin_chan_send")
+                .is_ok()
+        );
+        assert!(
+            rt.lua
+                .globals()
+                .get::<mlua::Function>("_spin_chan_recv")
+                .is_ok()
+        );
     }
 
     #[test]

@@ -478,7 +478,7 @@ impl LuaGenerator {
             }
             Stmt::If(guards) => {
                 // Use the first enabled guard's body
-                for guard in guards {
+                if let Some(guard) = guards.first() {
                     let cond_str = match &guard.condition {
                         Some(e) => self.expr_to_lua(e),
                         None => "true".to_string(),
@@ -490,12 +490,11 @@ impl LuaGenerator {
                     }
                     self.indent -= 1;
                     self.emit("end");
-                    break;
                 }
             }
             Stmt::Do(guards) => {
                 // Use the first enabled guard's body
-                for guard in guards {
+                if let Some(guard) = guards.first() {
                     let cond_str = match &guard.condition {
                         Some(e) => self.expr_to_lua(e),
                         None => "true".to_string(),
@@ -507,7 +506,6 @@ impl LuaGenerator {
                     }
                     self.indent -= 1;
                     self.emit("end");
-                    break;
                 }
             }
         }
