@@ -82,8 +82,25 @@ impl LuaRuntime {
         lua: &mlua::Lua,
         channels: Arc<Mutex<HashMap<String, LuaChannel>>>,
     ) -> mlua::Result<()> {
-        // Channel send
-        let ch = Arc::clone(&channels);
+        Self::register_chan_send(lua, Arc::clone(&channels))?;
+        Self::register_chan_recv(lua, Arc::clone(&channels))?;
+        Self::register_chan_len(lua, Arc::clone(&channels))?;
+        Self::register_chan_full(lua, Arc::clone(&channels))?;
+        Self::register_chan_empty(lua, Arc::clone(&channels))?;
+        Self::register_assert(lua)?;
+        Self::register_printf(lua)?;
+        Self::register_state_hash(lua)?;
+        Self::register_remote_ref(lua)?;
+        Self::register_fairness_track(lua)?;
+        Self::register_c_code(lua)?;
+        Self::register_stubborn_dep(lua)?;
+        Ok(())
+    }
+
+    fn register_chan_send(
+        lua: &mlua::Lua,
+        channels: Arc<Mutex<HashMap<String, LuaChannel>>>,
+    ) -> mlua::Result<()> {
         let f = lua.create_function(move |_lua, args: mlua::MultiValue| {
             let mut iter = args.into_iter();
             let name = match iter.next() {
@@ -99,10 +116,14 @@ impl LuaRuntime {
                 match arg {
                     mlua::Value::Integer(i) => parts.push(i),
                     mlua::Value::Number(n) => parts.push(n as i64),
-                    _ => return Err(mlua::Error::runtime("chan_send: expected integer values")),
+                    _ => {
+                        return Err(mlua::Error::runtime(
+                            "chan_send: expected integer values",
+                        ))
+                    }
                 }
             }
-            let mut chans = ch.lock().unwrap();
+            let mut chans = channels.lock().unwrap();
             if let Some(chan) = chans.get_mut(&name) {
                 if !chan.send(parts) {
                     return Err(mlua::Error::runtime("channel full"));
@@ -116,9 +137,13 @@ impl LuaRuntime {
             }
         })?;
         lua.globals().set("_spin_chan_send", f)?;
+        Ok(())
+    }
 
-        // Channel receive
-        let ch = Arc::clone(&channels);
+    fn register_chan_recv(
+        lua: &mlua::Lua,
+        channels: Arc<Mutex<HashMap<String, LuaChannel>>>,
+    ) -> mlua::Result<()> {
         let f = lua.create_function(move |_lua, args: mlua::MultiValue| {
             let name = match args.into_iter().next() {
                 Some(mlua::Value::String(s)) => s.to_string_lossy().to_string(),
@@ -128,7 +153,7 @@ impl LuaRuntime {
                     ));
                 }
             };
-            let mut chans = ch.lock().unwrap();
+            let mut chans = channels.lock().unwrap();
             if let Some(chan) = chans.get_mut(&name) {
                 match chan.recv() {
                     Some(msg) => Ok(mlua::Value::Integer(msg.first().copied().unwrap_or(0))),
@@ -142,11 +167,15 @@ impl LuaRuntime {
             }
         })?;
         lua.globals().set("_spin_chan_recv", f)?;
+        Ok(())
+    }
 
-        // Channel length
-        let ch = Arc::clone(&channels);
+    fn register_chan_len(
+        lua: &mlua::Lua,
+        channels: Arc<Mutex<HashMap<String, LuaChannel>>>,
+    ) -> mlua::Result<()> {
         let f = lua.create_function(move |_lua, name: String| {
-            let chans = ch.lock().unwrap();
+            let chans = channels.lock().unwrap();
             match chans.get(&name) {
                 Some(chan) => Ok(chan.len() as i64),
                 None => Err(mlua::Error::runtime(format!(
@@ -156,11 +185,15 @@ impl LuaRuntime {
             }
         })?;
         lua.globals().set("_spin_chan_len", f)?;
+        Ok(())
+    }
 
-        // Channel full check
-        let ch = Arc::clone(&channels);
+    fn register_chan_full(
+        lua: &mlua::Lua,
+        channels: Arc<Mutex<HashMap<String, LuaChannel>>>,
+    ) -> mlua::Result<()> {
         let f = lua.create_function(move |_lua, name: String| {
-            let chans = ch.lock().unwrap();
+            let chans = channels.lock().unwrap();
             match chans.get(&name) {
                 Some(chan) => Ok(chan.is_full()),
                 None => Err(mlua::Error::runtime(format!(
@@ -170,11 +203,15 @@ impl LuaRuntime {
             }
         })?;
         lua.globals().set("_spin_chan_full", f)?;
+        Ok(())
+    }
 
-        // Channel empty check
-        let ch = Arc::clone(&channels);
+    fn register_chan_empty(
+        lua: &mlua::Lua,
+        channels: Arc<Mutex<HashMap<String, LuaChannel>>>,
+    ) -> mlua::Result<()> {
         let f = lua.create_function(move |_lua, name: String| {
-            let chans = ch.lock().unwrap();
+            let chans = channels.lock().unwrap();
             match chans.get(&name) {
                 Some(chan) => Ok(chan.is_empty()),
                 None => Err(mlua::Error::runtime(format!(
@@ -184,8 +221,10 @@ impl LuaRuntime {
             }
         })?;
         lua.globals().set("_spin_chan_empty", f)?;
+        Ok(())
+    }
 
-        // Assertion
+    fn register_assert(lua: &mlua::Lua) -> mlua::Result<()> {
         let f = lua.create_function(|_lua, (cond, msg): (bool, String)| {
             if !cond {
                 Err(mlua::Error::runtime(msg))
@@ -194,48 +233,54 @@ impl LuaRuntime {
             }
         })?;
         lua.globals().set("_spin_assert", f)?;
+        Ok(())
+    }
 
-        // Printf (to stderr)
+    fn register_printf(lua: &mlua::Lua) -> mlua::Result<()> {
         let f = lua.create_function(|_lua, args: mlua::MultiValue| {
             let parts: Vec<String> = args.iter().map(|v| format!("{:?}", v)).collect();
             eprintln!("{}", parts.join(" "));
             Ok(())
         })?;
         lua.globals().set("_spin_printf", f)?;
+        Ok(())
+    }
 
-        // State hashing (serialize table to deterministic string)
+    fn register_state_hash(lua: &mlua::Lua) -> mlua::Result<()> {
         let f = lua.create_function(|_lua, state: mlua::Table| serialize_table(&state))?;
         lua.globals().set("_spin_state_hash", f)?;
+        Ok(())
+    }
 
-        // Remote reference: access variable of another process
+    fn register_remote_ref(lua: &mlua::Lua) -> mlua::Result<()> {
         let f = lua.create_function(|_lua, (pid, var): (i64, String)| {
             Ok(format!("<remote {}:{}>", pid, var))
         })?;
         lua.globals().set("_spin_remote_ref", f)?;
+        Ok(())
+    }
 
-        // Fairness tracking: record which transitions are enabled
+    fn register_fairness_track(lua: &mlua::Lua) -> mlua::Result<()> {
         let f = lua.create_function(|_lua, (_label, _enabled): (String, bool)| {
-            // Stub: real fairness tracking would log enabled transitions
-            // and rotate priority to ensure weakly fair scheduling
             Ok(())
         })?;
         lua.globals().set("_spin_fairness_track", f)?;
+        Ok(())
+    }
 
-        // Embedded C / Lua eval support: allow arbitrary Lua execution
+    fn register_c_code(lua: &mlua::Lua) -> mlua::Result<()> {
         let f = lua.create_function(|lua, code: String| {
             lua.load(&code)
                 .exec()
                 .map_err(|e| mlua::Error::runtime(format!("c_code: {}", e)))
         })?;
         lua.globals().set("_spin_c_code", f)?;
+        Ok(())
+    }
 
-        // Stubborn set support: mark transitions as dependent
-        let f = lua.create_function(|_lua, (_t1, _t2): (String, String)| {
-            // Stub: real stubborn set logic uses POR dependency analysis
-            Ok(false)
-        })?;
+    fn register_stubborn_dep(lua: &mlua::Lua) -> mlua::Result<()> {
+        let f = lua.create_function(|_lua, (_t1, _t2): (String, String)| Ok(false))?;
         lua.globals().set("_spin_stubborn_dep", f)?;
-
         Ok(())
     }
 

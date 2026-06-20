@@ -10,7 +10,8 @@ use clap::Parser;
 use std::path::PathBuf;
 
 use crate::codegen;
-use crate::engine::checker::{CheckResult, CheckerBuilder, SearchMode, StorageMode};
+use crate::engine::checker::{CheckResult, CheckerBuilder, Violation};
+use crate::engine::checker::{SearchMode, StorageMode};
 use crate::parser;
 use crate::property;
 use crate::runtime;
@@ -89,38 +90,66 @@ pub fn run(args: &[String]) -> Result<(), anyhow::Error> {
     })?;
 
     if cli.generate {
-        // Generate mode: parse and emit Lua code
-        let model = parser::parse(&source)?;
-        let generated = codegen::generate(&model);
-        println!("{}", generated.source);
-        return Ok(());
+        return handle_generate_mode(&source);
     }
 
     if let Some(ltl_args) = &cli.ltl_property {
-        // LTL verification mode
-        if ltl_args.len() < 2 {
-            anyhow::bail!("LTL property requires name and formula: --ltl name 'formula'");
-        }
-        let name = &ltl_args[0];
-        let formula = &ltl_args[1];
-
-        println!("Verifying LTL property: {} = {}", name, formula);
-
-        let violation = property::verify_ltl(&source, formula, name)?;
-        if let Some(v) = violation {
-            println!("\n❌ Property violated: {}", v.property_name);
-            println!("Description: {}", v.description);
-            println!("\nError trail:");
-            for (i, step) in v.trail.iter().enumerate() {
-                println!("  {:3}: {}", i + 1, step);
-            }
-        } else {
-            println!("✅ Property holds");
-        }
-        return Ok(());
+        return handle_ltl_mode(&source, ltl_args);
     }
 
-    // Default: run verification
+    handle_verify_mode(&cli, &source)
+}
+
+fn handle_generate_mode(source: &str) -> Result<(), anyhow::Error> {
+    let model = parser::parse(source)?;
+    let generated = codegen::generate(&model);
+    println!("{}", generated.source);
+    Ok(())
+}
+
+fn handle_ltl_mode(source: &str, ltl_args: &[String]) -> Result<(), anyhow::Error> {
+    if ltl_args.len() < 2 {
+        anyhow::bail!("LTL property requires name and formula: --ltl name 'formula'");
+    }
+    let name = &ltl_args[0];
+    let formula = &ltl_args[1];
+
+    println!("Verifying LTL property: {} = {}", name, formula);
+
+    let violation = property::verify_ltl(source, formula, name)?;
+    if let Some(v) = violation {
+        print_ltl_violation(v);
+    } else {
+        println!("✅ Property holds");
+    }
+    Ok(())
+}
+
+fn print_ltl_violation(v: Violation) {
+    println!("\n❌ Property violated: {}", v.property_name);
+    println!("Description: {}", v.description);
+    println!("\nError trail:");
+    for (i, step) in v.trail.iter().enumerate() {
+        println!("  {:3}: {}", i + 1, step);
+    }
+}
+
+fn parse_search_mode(search: &str) -> SearchMode {
+    match search {
+        "bfs" => SearchMode::BreadthFirst,
+        _ => SearchMode::DepthFirst,
+    }
+}
+
+fn parse_storage_mode(storage: &str) -> StorageMode {
+    match storage {
+        "bitstate" => StorageMode::Bitstate,
+        "collapse" => StorageMode::Collapse,
+        _ => StorageMode::Exact,
+    }
+}
+
+fn handle_verify_mode(cli: &Cli, source: &str) -> Result<(), anyhow::Error> {
     if !cli.run && !cli.generate {
         // If neither -a nor -run specified, default to -run
     }
@@ -128,7 +157,7 @@ pub fn run(args: &[String]) -> Result<(), anyhow::Error> {
     println!("Verifying model: {}", cli.model_file.display());
 
     // Parse model
-    let model = parser::parse(&source)?;
+    let model = parser::parse(source)?;
 
     // Generate Lua code
     let _generated = codegen::generate(&model);
@@ -137,18 +166,8 @@ pub fn run(args: &[String]) -> Result<(), anyhow::Error> {
     let lua_model = runtime::LuaModel::from_model(&model)?;
 
     // Configure checker
-    let search_mode = match cli.search.as_str() {
-        "bfs" => SearchMode::BreadthFirst,
-        "dfs" => SearchMode::DepthFirst,
-        _ => SearchMode::DepthFirst,
-    };
-
-    let storage_mode = match cli.storage.as_str() {
-        "bitstate" => StorageMode::Bitstate,
-        "collapse" => StorageMode::Collapse,
-        "exact" => StorageMode::Exact,
-        _ => StorageMode::Exact,
-    };
+    let search_mode = parse_search_mode(&cli.search);
+    let storage_mode = parse_storage_mode(&cli.storage);
 
     let mut builder = CheckerBuilder::new()
         .model(lua_model)
