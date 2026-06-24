@@ -155,12 +155,18 @@ Existing models continue to work. New models can use channel arrays.
 
 **Deployment steps:**
 
-1. Implement parser changes (AST, grammar)
-2. Implement codegen changes
-3. Implement runtime changes
-4. Add integration tests
-5. Enable `token_ring_n5` in benchmark
-6. Run full test suite
+1. ✅ Implement parser changes (AST, grammar)
+2. ✅ Implement codegen changes
+3. ✅ Implement runtime changes
+4. ✅ Add integration tests
+5. ⏸️ Enable `token_ring_n5` in benchmark (deferred: needs `for ... in` syntax support)
+6. ✅ Run full test suite
+
+**Deferred to future changes:**
+
+- `token_ring_n5` benchmark integration (tasks 5.2, 5.3) - blocked on `for ... in` loop syntax support
+- Buffered channel array initialization (`chan name[N] = [M] of { type }`)
+- `for ... in` iteration syntax for initialization patterns
 
 **Rollback:** Revert commit - no data migration or breaking changes.
 

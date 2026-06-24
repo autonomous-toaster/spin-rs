@@ -37,3 +37,8 @@ default = ["lua-runtime"]
 lua-runtime = ["dep:mlua"]
 parallel = ["dep:rayon"]
 bench = []
+
+
+[[bin]]
+name = "test_chan"
+path = "/tmp/test_chan.rs"

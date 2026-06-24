@@ -148,6 +148,7 @@ match result {
 ## Promela Support
 
 **Data types**: `bit`, `bool`, `byte`, `short`, `int`, `chan`, arrays  
+**Channel arrays**: `chan name[N];` - array of N rendezvous channels with indexed access (`chan[i] ! msg`, `chan[i] ? var`)  
 **Control flow**: `if`/`fi`, `do`/`od`, `goto`, `break`, `skip`, `atomic`, `d_step`  
 **Channels**: buffered/unbuffered, `!` (send), `?` (receive), poll, sorted  
 **Expressions**: arithmetic, comparison, boolean, bitwise, `len`, `enabled`, `remote ref`  

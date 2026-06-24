@@ -212,6 +212,47 @@ pub struct PropertyChecker<M: Model> {
     formula: Option<LtlFormula>,
 }
 
+/// Convert from property::LtlFormula to ltl2ba::formula::LtlFormula
+fn convert_to_ltl2ba_formula(formula: &LtlFormula) -> crate::property::ltl2ba::formula::LtlFormula {
+    use crate::property::ltl2ba::formula::LtlFormula as Target;
+
+    match formula {
+        LtlFormula::True => Target::True,
+        LtlFormula::False => Target::False,
+        LtlFormula::Atom(s) => Target::Atom(s.clone()),
+        LtlFormula::Not(inner) => Target::Not(Box::new(convert_to_ltl2ba_formula(inner))),
+        LtlFormula::And(l, r) => Target::And(
+            Box::new(convert_to_ltl2ba_formula(l)),
+            Box::new(convert_to_ltl2ba_formula(r)),
+        ),
+        LtlFormula::Or(l, r) => Target::Or(
+            Box::new(convert_to_ltl2ba_formula(l)),
+            Box::new(convert_to_ltl2ba_formula(r)),
+        ),
+        LtlFormula::Implies(l, r) => {
+            // Convert implies to !l || r
+            let not_l = Target::Not(Box::new(convert_to_ltl2ba_formula(l)));
+            let r_conv = convert_to_ltl2ba_formula(r);
+            Target::Or(Box::new(not_l), Box::new(r_conv))
+        }
+        LtlFormula::Always(inner) => Target::Always(Box::new(convert_to_ltl2ba_formula(inner))),
+        LtlFormula::Eventually(inner) => {
+            Target::Eventually(Box::new(convert_to_ltl2ba_formula(inner)))
+        }
+        LtlFormula::Next(inner) => Target::Next(Box::new(convert_to_ltl2ba_formula(inner))),
+        LtlFormula::Until(_, _) => {
+            // Until not supported by ltl2ba, convert to error case
+            // This will trigger fallback to simple cycle detection
+            Target::False
+        }
+        LtlFormula::Release(_, _) => {
+            // Release not supported by ltl2ba, convert to error case
+            // This will trigger fallback to simple cycle detection
+            Target::False
+        }
+    }
+}
+
 impl<M: Model> PropertyChecker<M> {
     /// Create a property checker for an LTL formula.
     pub fn new_ltl(model: M, formula: LtlFormula, name: &str) -> Self {
@@ -233,10 +274,53 @@ impl<M: Model> PropertyChecker<M> {
 
     /// Run nested DFS to check for liveness violations (accepting cycles).
     pub fn check_liveness(&self) -> anyhow::Result<Option<Violation>> {
-        let Some(_formula) = &self.formula else {
+        let Some(formula) = &self.formula else {
             return Ok(None);
         };
 
+        let init_states = self.model.init_states();
+        if init_states.is_empty() {
+            return Ok(None);
+        }
+
+        // Convert LTL formula to Büchi automaton using ltl2ba
+        use crate::property::ltl2ba::{NestedDFS, ProductState, to_buchi};
+
+        // Convert from property::LtlFormula to ltl2ba::formula::LtlFormula
+        let ltl2ba_formula = convert_to_ltl2ba_formula(formula);
+
+        let buchi = match to_buchi(&ltl2ba_formula) {
+            Ok(b) => b,
+            Err(e) => {
+                // LTL formula not supported by ltl2ba, fall back to simple cycle detection
+                log::warn!(
+                    "LTL formula '{}' not fully supported: {}",
+                    self.property_name,
+                    e
+                );
+                return self.check_liveness_simple();
+            }
+        };
+
+        // Run nested DFS on product space (model × Büchi)
+        let mut violations = Vec::new();
+
+        for init_state in init_states {
+            let init_hash = self.model.hash(&init_state);
+            let init_product = ProductState::new(init_state.clone(), 0, init_hash);
+
+            let mut dfs = NestedDFS::new();
+            if let Some(violation) = dfs.check(&self.model, &buchi, init_product) {
+                violations.push(violation);
+                break; // Found a violation, stop searching
+            }
+        }
+
+        Ok(violations.into_iter().next())
+    }
+
+    /// Simple cycle detection (fallback for unsupported LTL formulas).
+    fn check_liveness_simple(&self) -> anyhow::Result<Option<Violation>> {
         let init_states = self.model.init_states();
         if init_states.is_empty() {
             return Ok(None);

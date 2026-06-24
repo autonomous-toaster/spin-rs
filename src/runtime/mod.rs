@@ -44,12 +44,14 @@ impl LuaChannel {
         self.messages.len()
     }
     pub fn is_full(&self) -> bool {
-        // Rendezvous channels (capacity 0) are always "full" until matched
-        self.capacity == 0 || (self.capacity > 0 && self.messages.len() >= self.capacity)
+        // Rendezvous channels (capacity 0): full only if a message is waiting (blocked sender)
+        // Buffered channels: full if at capacity
+        self.capacity == 0 && !self.messages.is_empty()
+            || (self.capacity > 0 && self.messages.len() >= self.capacity)
     }
     pub fn is_empty(&self) -> bool {
-        // Rendezvous channels (capacity 0) are always "empty" until matched
-        self.capacity == 0 || self.messages.is_empty()
+        // Both rendezvous and buffered: empty if no messages waiting
+        self.messages.is_empty()
     }
 }
 
@@ -84,6 +86,7 @@ impl LuaRuntime {
     ) -> mlua::Result<()> {
         Self::register_chan_send(lua, Arc::clone(&channels))?;
         Self::register_chan_recv(lua, Arc::clone(&channels))?;
+        Self::register_chan_peek(lua, Arc::clone(&channels))?;
         Self::register_chan_len(lua, Arc::clone(&channels))?;
         Self::register_chan_full(lua, Arc::clone(&channels))?;
         Self::register_chan_empty(lua, Arc::clone(&channels))?;
@@ -101,16 +104,27 @@ impl LuaRuntime {
         lua: &mlua::Lua,
         channels: Arc<Mutex<HashMap<String, LuaChannel>>>,
     ) -> mlua::Result<()> {
-        let f = lua.create_function(move |_lua, args: mlua::MultiValue| {
+        let f = lua.create_function(move |lua, args: mlua::MultiValue| {
             let mut iter = args.into_iter();
+            // First arg is state table
+            let state: mlua::Table = match iter.next() {
+                Some(mlua::Value::Table(s)) => s,
+                _ => {
+                    return Err(mlua::Error::runtime(
+                        "chan_send: expected state table as first arg",
+                    ));
+                }
+            };
+            // Second arg is channel name
             let name = match iter.next() {
                 Some(mlua::Value::String(s)) => s.to_string_lossy().to_string(),
                 _ => {
                     return Err(mlua::Error::runtime(
-                        "chan_send: expected string channel name",
+                        "chan_send: expected string channel name as second arg",
                     ));
                 }
             };
+            // Remaining args are message values
             let mut parts = Vec::new();
             for arg in iter {
                 match arg {
@@ -121,9 +135,17 @@ impl LuaRuntime {
             }
             let mut chans = channels.lock().unwrap();
             if let Some(chan) = chans.get_mut(&name) {
-                if !chan.send(parts) {
+                if !chan.send(parts.clone()) {
                     return Err(mlua::Error::runtime("channel full"));
                 }
+                // Update state table to reflect channel contents
+                let chan_state: mlua::Table = lua.create_table()?;
+                for (i, val) in chan.messages.iter().enumerate() {
+                    if let Some(&first) = val.first() {
+                        chan_state.set(i + 1, first)?;
+                    }
+                }
+                state.set(name.clone(), chan_state)?;
                 Ok(())
             } else {
                 Err(mlua::Error::runtime(format!(
@@ -140,19 +162,40 @@ impl LuaRuntime {
         lua: &mlua::Lua,
         channels: Arc<Mutex<HashMap<String, LuaChannel>>>,
     ) -> mlua::Result<()> {
-        let f = lua.create_function(move |_lua, args: mlua::MultiValue| {
-            let name = match args.into_iter().next() {
+        let f = lua.create_function(move |lua, args: mlua::MultiValue| {
+            let mut iter = args.into_iter();
+            // First arg is state table
+            let state: mlua::Table = match iter.next() {
+                Some(mlua::Value::Table(s)) => s,
+                _ => {
+                    return Err(mlua::Error::runtime(
+                        "chan_recv: expected state table as first arg",
+                    ));
+                }
+            };
+            // Second arg is channel name
+            let name = match iter.next() {
                 Some(mlua::Value::String(s)) => s.to_string_lossy().to_string(),
                 _ => {
                     return Err(mlua::Error::runtime(
-                        "chan_recv: expected string channel name",
+                        "chan_recv: expected string channel name as second arg",
                     ));
                 }
             };
             let mut chans = channels.lock().unwrap();
             if let Some(chan) = chans.get_mut(&name) {
                 match chan.recv() {
-                    Some(msg) => Ok(mlua::Value::Integer(msg.first().copied().unwrap_or(0))),
+                    Some(msg) => {
+                        // Update state table to reflect channel contents
+                        let chan_state: mlua::Table = lua.create_table()?;
+                        for (i, val) in chan.messages.iter().enumerate() {
+                            if let Some(&first) = val.first() {
+                                chan_state.set(i + 1, first)?;
+                            }
+                        }
+                        state.set(name.clone(), chan_state)?;
+                        Ok(mlua::Value::Integer(msg.first().copied().unwrap_or(0)))
+                    }
                     None => Err(mlua::Error::runtime("channel empty")),
                 }
             } else {
@@ -163,6 +206,28 @@ impl LuaRuntime {
             }
         })?;
         lua.globals().set("_spin_chan_recv", f)?;
+        Ok(())
+    }
+
+    fn register_chan_peek(
+        lua: &mlua::Lua,
+        _channels: Arc<Mutex<HashMap<String, LuaChannel>>>,
+    ) -> mlua::Result<()> {
+        let f = lua.create_function(move |_lua, (state, name): (mlua::Table, String)| {
+            // First try to get from state table (which has the current channel state)
+            let chan_state: mlua::Table = match state.get(name.as_str()) {
+                Ok(t) => t,
+                Err(_) => return Err(mlua::Error::runtime("channel not found in state")),
+            };
+            // Get first element (index 1)
+            match chan_state.get(1i32) {
+                Ok(mlua::Value::Integer(i)) => Ok(mlua::Value::Integer(i)),
+                Ok(mlua::Value::Nil) => Err(mlua::Error::runtime("channel empty")),
+                Err(e) => Err(mlua::Error::runtime(format!("channel peek error: {}", e))),
+                _ => Err(mlua::Error::runtime("channel peek: unexpected value type")),
+            }
+        })?;
+        lua.globals().set("_spin_chan_peek", f)?;
         Ok(())
     }
 
@@ -392,15 +457,65 @@ fn serialize_table(table: &mlua::Table) -> mlua::Result<String> {
 
 /// Build a Lua literal expression to reconstruct a serialized state table.
 fn state_literal(blob: &str) -> String {
-    let inner = blob.trim_start_matches('{').trim_end_matches('}');
+    // Remove outer braces
+    let inner = if blob.starts_with('{') && blob.ends_with('}') {
+        &blob[1..blob.len() - 1]
+    } else {
+        blob
+    };
     if inner.is_empty() {
         return String::new();
     }
-    inner
-        .split(',')
+
+    // Parse entries respecting nested braces
+    let mut entries = Vec::new();
+    let mut current = String::new();
+    let mut brace_depth = 0;
+
+    for ch in inner.chars() {
+        match ch {
+            '{' => {
+                brace_depth += 1;
+                current.push(ch);
+            }
+            '}' => {
+                current.push(ch);
+                brace_depth -= 1;
+            }
+            ',' => {
+                if brace_depth == 0 {
+                    entries.push(current.trim().to_string());
+                    current = String::new();
+                } else {
+                    current.push(ch);
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+    if !current.is_empty() {
+        entries.push(current.trim().to_string());
+    }
+
+    entries
+        .into_iter()
         .filter(|s| !s.is_empty())
         .filter_map(|entry| {
-            let idx = entry.find(':')?;
+            // Find the first colon at depth 0 (not inside nested tables)
+            let mut depth = 0;
+            let mut colon_idx = None;
+            for (i, ch) in entry.chars().enumerate() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    ':' if depth == 0 => {
+                        colon_idx = Some(i);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            let idx = colon_idx?;
             let (k, v) = entry.split_at(idx);
             let v = &v[1..];
             Some(format!("s[{}] = {}", k, v))
@@ -432,7 +547,10 @@ fn val_to_string(value: &mlua::Value) -> String {
         mlua::Value::Table(t) => {
             let mut parts: Vec<String> = Vec::new();
             for (k, v) in t.clone().pairs::<mlua::Value, mlua::Value>().flatten() {
-                parts.push(format!("{}:{}", val_to_string(&k), val_to_string(&v)));
+                // Use Lua table constructor syntax: {[key]=value} for numeric keys
+                let key_str = val_to_string(&k);
+                let val_str = val_to_string(&v);
+                parts.push(format!("[{}]={}", key_str, val_str));
             }
             parts.sort();
             format!("{{{}}}", parts.join(","))
@@ -450,6 +568,7 @@ pub struct StateBlob(pub String);
 /// A model backed by a Lua runtime executing generated Promela code.
 pub struct LuaModel {
     runtime: std::cell::RefCell<LuaRuntime>,
+    ltl_formulas: Vec<crate::parser::ast::LtlFormula>,
 }
 
 impl LuaModel {
@@ -457,6 +576,7 @@ impl LuaModel {
     pub fn from_model(model: &crate::parser::ast::PromelaModel) -> anyhow::Result<Self> {
         let generated = codegen::generate(model);
         let mut runtime = LuaRuntime::new()?;
+        let mut ltl_formulas = Vec::new();
 
         for decl in &model.declarations {
             match decl {
@@ -478,6 +598,9 @@ impl LuaModel {
                         runtime.register_channel(&chan_name, 0); // All rendezvous (capacity 0)
                     }
                 }
+                crate::parser::ast::TopLevel::Ltl(ltl) => {
+                    ltl_formulas.push(ltl.clone());
+                }
                 _ => {}
             }
         }
@@ -486,6 +609,7 @@ impl LuaModel {
 
         Ok(Self {
             runtime: std::cell::RefCell::new(runtime),
+            ltl_formulas,
         })
     }
 
@@ -583,26 +707,30 @@ mod tests {
     fn test_lua_runtime_init() {
         let rt = LuaRuntime::new().unwrap();
         // No init_state call since _spin_init_state requires generated code
-        assert!(rt
-            .lua
-            .globals()
-            .get::<mlua::Function>("_spin_printf")
-            .is_ok());
-        assert!(rt
-            .lua
-            .globals()
-            .get::<mlua::Function>("_spin_assert")
-            .is_ok());
-        assert!(rt
-            .lua
-            .globals()
-            .get::<mlua::Function>("_spin_chan_send")
-            .is_ok());
-        assert!(rt
-            .lua
-            .globals()
-            .get::<mlua::Function>("_spin_chan_recv")
-            .is_ok());
+        assert!(
+            rt.lua
+                .globals()
+                .get::<mlua::Function>("_spin_printf")
+                .is_ok()
+        );
+        assert!(
+            rt.lua
+                .globals()
+                .get::<mlua::Function>("_spin_assert")
+                .is_ok()
+        );
+        assert!(
+            rt.lua
+                .globals()
+                .get::<mlua::Function>("_spin_chan_send")
+                .is_ok()
+        );
+        assert!(
+            rt.lua
+                .globals()
+                .get::<mlua::Function>("_spin_chan_recv")
+                .is_ok()
+        );
     }
 
     #[test]
@@ -644,7 +772,10 @@ mod tests {
 
     #[test]
     fn test_val_to_string_number() {
-        assert_eq!(val_to_string(&mlua::Value::Number(3.14)), "3.14");
+        assert_eq!(
+            val_to_string(&mlua::Value::Number(std::f64::consts::PI)),
+            "3.141592653589793"
+        );
         assert_eq!(val_to_string(&mlua::Value::Number(5.0)), "5");
     }
 
@@ -708,16 +839,19 @@ mod tests {
         let mut rt = LuaRuntime::new().unwrap();
         rt.register_channel("test", 5);
 
-        // Test chan_send via Lua
+        // Create a state table for channel operations
+        let state: mlua::Table = rt.lua.create_table().unwrap();
+
+        // Test chan_send via Lua (now requires state table as first arg)
         let send_fn = rt
             .lua
             .globals()
             .get::<mlua::Function>("_spin_chan_send")
             .unwrap();
-        let result = send_fn.call::<()>(("test", 42i64));
+        let result = send_fn.call::<()>((state.clone(), "test", 42i64));
         assert!(result.is_ok());
 
-        // Test chan_len via Lua
+        // Test chan_len via Lua (still uses Rust registry, not state table)
         let len_fn = rt
             .lua
             .globals()
@@ -726,13 +860,13 @@ mod tests {
         let len: i64 = len_fn.call("test").unwrap();
         assert_eq!(len, 1);
 
-        // Test chan_recv via Lua
+        // Test chan_recv via Lua (now requires state table as first arg)
         let recv_fn = rt
             .lua
             .globals()
             .get::<mlua::Function>("_spin_chan_recv")
             .unwrap();
-        let val: i64 = recv_fn.call("test").unwrap();
+        let val: i64 = recv_fn.call((state.clone(), "test")).unwrap();
         assert_eq!(val, 42);
 
         // Test chan_empty via Lua
@@ -855,14 +989,11 @@ mod tests {
 
         // Register channels from model (this is what from_model does)
         for decl in &model.declarations {
-            match decl {
-                crate::parser::ast::TopLevel::ChannelArray { name, size, .. } => {
-                    for i in 0..*size {
-                        let chan_name = format!("{}_{}", name, i);
-                        rt.register_channel(&chan_name, 0);
-                    }
+            if let crate::parser::ast::TopLevel::ChannelArray { name, size, .. } = decl {
+                for i in 0..*size {
+                    let chan_name = format!("{}_{}", name, i);
+                    rt.register_channel(&chan_name, 0);
                 }
-                _ => {}
             }
         }
 
@@ -875,5 +1006,12 @@ mod tests {
                 chan_name
             );
         }
+    }
+}
+
+impl LuaModel {
+    /// Get LTL formulas from the model.
+    pub fn ltl_formulas(&self) -> &[crate::parser::ast::LtlFormula] {
+        &self.ltl_formulas
     }
 }

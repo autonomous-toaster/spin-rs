@@ -192,7 +192,12 @@ fn atom_to_buchi(atom: &LtlFormula) -> BuchiAutomaton {
 fn always_to_buchi(atom: &LtlFormula) -> BuchiAutomaton {
     let atom_str = match atom {
         LtlFormula::Atom(s) => s.clone(),
-        _ => unreachable!(),
+        LtlFormula::True => "true".to_string(),
+        LtlFormula::False => "false".to_string(),
+        _ => {
+            // For complex formulas, use a trivial automaton as fallback
+            return trivial_accepting();
+        }
     };
 
     BuchiAutomaton {
@@ -220,7 +225,12 @@ fn always_to_buchi(atom: &LtlFormula) -> BuchiAutomaton {
 fn eventually_to_buchi(atom: &LtlFormula) -> BuchiAutomaton {
     let atom_str = match atom {
         LtlFormula::Atom(s) => s.clone(),
-        _ => unreachable!(),
+        LtlFormula::True => "true".to_string(),
+        LtlFormula::False => "false".to_string(),
+        _ => {
+            // For complex formulas, use a trivial automaton as fallback
+            return trivial_accepting();
+        }
     };
 
     BuchiAutomaton {

@@ -1,9 +1,6 @@
 //! Integration tests and validation against Spin 6.5.x test suite.
 
-use std::fs;
-use std::path::PathBuf;
-
-use spin_rs::{verify, CheckResult, CheckerBuilder, LuaModel, SearchMode, StorageMode};
+use spin_rs::{CheckResult, CheckerBuilder, LuaModel, SearchMode, StorageMode, verify};
 
 /// Test model from Spin standard suite.
 struct TestModel {
@@ -199,7 +196,7 @@ mod tests {
     #[test]
     fn test_storage_modes() {
         let promela = "active proctype P() { byte x; x = 1; }";
-        let model = LuaModel::from_source(promela).unwrap();
+        let _model = LuaModel::from_source(promela).unwrap();
 
         // Test Exact mode
         let checker_exact = CheckerBuilder::new()
@@ -221,7 +218,7 @@ mod tests {
     #[test]
     fn test_search_modes() {
         let promela = "active proctype P() { byte x; do :: x = 0 :: x = 1 od }";
-        let model = LuaModel::from_source(promela).unwrap();
+        let _model = LuaModel::from_source(promela).unwrap();
 
         // Test DFS
         let checker_dfs = CheckerBuilder::new()

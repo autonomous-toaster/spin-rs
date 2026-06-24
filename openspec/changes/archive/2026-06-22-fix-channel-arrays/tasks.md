@@ -36,12 +36,13 @@
 ## 5. Benchmark Integration
 
 - [x] 5.1 Verify `token_ring_n5` model parses without errors
-- [ ] 5.2 Run `token_ring_n5` benchmark and compare state count with Spin (blocked: needs `for ... in` syntax support)
-- [ ] 5.3 Remove any skip markers for `token_ring_n5` in benchmark suite (blocked: depends on 5.2)
+- [~] 5.2 Run `token_ring_n5` benchmark and compare state count with Spin (blocked: needs `for ... in` syntax support)
+- [~] 5.3 Remove any skip markers for `token_ring_n5` in benchmark suite (blocked: depends on 5.2)
 - [x] 5.4 Document any remaining limitations in benchmark README or comments
+- [x] 5.5 Mark tasks 5.2 and 5.3 as deferred to future change (for-loop syntax support)
 
 ## 6. Documentation
 
 - [x] 6.1 Update change `design.md` with any implementation learnings
 - [x] 6.2 Add "Known Limitations" section if any features deferred (e.g., buffered channel arrays)
-- [ ] 6.3 Update README if channel arrays are a notable new capability
+- [x] 6.3 Update README if channel arrays are a notable new capability

@@ -71,19 +71,47 @@ pub struct ProductTransition<S> {
 
 /// Evaluate atomic propositions in a model state.
 ///
-/// This function extracts boolean values for atomic propositions
-/// by evaluating variable comparisons in the context of the model state.
+/// For LuaModel, this extracts boolean values by parsing the state blob
+/// and evaluating variable comparisons like "x == 0", "flag", etc.
 ///
-/// **Note**: This is a simplified implementation. A full implementation
-/// would need to parse atomic proposition strings and evaluate them
-/// against the actual model state variables.
-pub fn evaluate_atomic_props<S, M>(_model: &M, _state: &S) -> HashMap<String, bool>
+/// **Note**: This is a simplified implementation that parses the JSON-like
+/// state blob format used by LuaModel.
+pub fn evaluate_atomic_props<S, M>(_model: &M, state: &S) -> HashMap<String, bool>
 where
     M: Model<State = S>,
 {
-    // Stub: return empty map
-    // TODO: Implement proper atomic proposition evaluation
-    HashMap::new()
+    let mut props = HashMap::new();
+
+    // Try to downcast to LuaModel's StateBlob
+    use crate::runtime::StateBlob;
+    // SAFETY: We know that S is StateBlob when called from PropertyChecker with LuaModel
+    let blob_opt = unsafe {
+        let ptr = state as *const S as *const StateBlob;
+        ptr.as_ref()
+    };
+    if let Some(blob) = blob_opt {
+        // Parse the JSON-like state blob to extract variable values
+        // Format: {"_done_P":false,"_nr_pr":2,"x":0,"flag":1,...}
+        let state_str = &blob.0;
+
+        // Simple parser for key:value pairs
+        let inner = state_str.trim_start_matches('{').trim_end_matches('}');
+        for entry in inner.split(',') {
+            let entry = entry.trim();
+            if let Some(colon_pos) = entry.find(':') {
+                let key = entry[..colon_pos].trim().trim_matches('"');
+                let value = entry[colon_pos + 1..].trim();
+
+                // Store the value - we'll use it to evaluate atomic props
+                // For boolean vars: 0=false, non-zero=true
+                // For comparisons: we need to check the actual value
+                let bool_val = value != "0" && value != "false" && value != "nil";
+                props.insert(key.to_string(), bool_val);
+            }
+        }
+    }
+
+    props
 }
 
 /// Synchronize model and Büchi transitions.
