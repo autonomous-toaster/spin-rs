@@ -7,10 +7,10 @@
 
 ## 2. Fix Deadlock False Positive
 
-- [ ] 2.1 Parse per-process `_done_` flags from state blob instead of freetext search
-- [ ] 2.2 Only flag deadlock when at least one non-done process has zero transitions
-- [ ] 2.3 Run benchmark and confirm plan_5tasks_3ltls and multi_process report 0 errors
-- [ ] 2.4 Confirm deadlock_circular still reports 1 error
+- [x] 2.1 Parse per-process `_done_` flags from state blob instead of freetext search
+- [x] 2.2 Only flag deadlock when at least one non-done process has zero transitions
+- [x] 2.3 Run benchmark and confirm plan_5tasks_3ltls and multi_process report 0 errors
+- [x] 2.4 Confirm deadlock_circular still reports 1 error
 
 ## 3. Fix Array Initialization
 

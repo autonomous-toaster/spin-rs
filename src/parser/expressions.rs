@@ -1,17 +1,17 @@
 //! Expression parsers: arithmetic, comparison, logical, function calls.
 
 use nom::{
-    IResult,
     branch::alt,
-    combinator::map,
+    combinator::{map, opt},
     multi::separated_list0,
     sequence::{delimited, pair, preceded},
+    IResult,
 };
 
-use super::Input;
 use super::ast::*;
 use super::helpers::*;
 use super::literals::*;
+use super::Input;
 
 // ─── Expressions ────────────────────────────────────────────────
 pub(crate) fn expr(input: Input) -> IResult<Input, Expression> {
@@ -165,7 +165,18 @@ pub(crate) fn primary(input: Input) -> IResult<Input, Expression> {
                 name,
             }
         }),
+        // Function call: ident(args) — must come before array-access to consume `(` first
         func_call,
-        map(ident, Expression::Ident),
+        // Array access or plain ident: ident[expr] or ident
+        map(
+            pair(ident, opt(delimited(ws_char('['), expr, ws_char(']')))),
+            |(name, index)| match index {
+                Some(idx) => Expression::ArrayAccess {
+                    name,
+                    index: Box::new(idx),
+                },
+                None => Expression::Ident(name),
+            },
+        ),
     ))(input)
 }

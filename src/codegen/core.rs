@@ -1,5 +1,5 @@
-use super::LuaGenerator;
 use super::default_value;
+use super::LuaGenerator;
 use crate::parser::ast::*;
 
 impl LuaGenerator {
@@ -81,7 +81,17 @@ impl LuaGenerator {
             match decl {
                 TopLevel::GlobalVar(v) => {
                     self.global_vars.insert(v.name.clone());
-                    if let Some(init_expr) = &v.init {
+                    if let Some(arr_size) = v.array_size {
+                        if arr_size > 0 {
+                            // Emit array as Lua table: {0, 0, ...}
+                            let default = default_value(&v.var_type);
+                            let elems = vec![default.as_str(); arr_size as usize].join(", ");
+                            lines.push(format!("    state.{} = {{{}}}", v.name, elems));
+                        } else {
+                            let default = default_value(&v.var_type);
+                            lines.push(format!("    state.{} = {}", v.name, default));
+                        }
+                    } else if let Some(init_expr) = &v.init {
                         let init_str = self.expr_to_lua(init_expr);
                         lines.push(format!("    state.{} = {}", v.name, init_str));
                     } else {
@@ -90,22 +100,50 @@ impl LuaGenerator {
                     }
                 }
                 TopLevel::Proctype(p) => {
-                    // Per-proctype done flag for break handling
-                    lines.push(format!("    state._done_{} = false", p.name));
-                    // Proctype parameters (prefixed with proctype name for uniqueness)
-                    for param in &p.parameters {
-                        let default = default_value(&param.var_type);
-                        lines.push(format!("    state.{}_{} = {}", p.name, param.name, default));
-                    }
-                    // Local variable declarations from body (prefixed with proctype name)
-                    let local_vars = Self::collect_var_decls(&p.body);
-                    for vd in local_vars {
-                        if let Some(init_expr) = &vd.init {
-                            let init_str = self.expr_to_lua(init_expr);
-                            lines.push(format!("    state.{}_{} = {}", p.name, vd.name, init_str));
-                        } else {
-                            let default = default_value(&vd.var_type);
-                            lines.push(format!("    state.{}_{} = {}", p.name, vd.name, default));
+                    let count = p.pid.map(|n| n as usize).unwrap_or(1);
+                    for instance in 0..count {
+                        // Per-proctype done flag for break handling
+                        lines.push(format!("    state._done_{}_{} = false", p.name, instance));
+                        // Proctype parameters (prefixed with proctype name for uniqueness)
+                        for param in &p.parameters {
+                            let default = default_value(&param.var_type);
+                            lines.push(format!(
+                                "    state.{}_{}_{} = {}",
+                                p.name, instance, param.name, default
+                            ));
+                        }
+                        // Local variable declarations from body (prefixed with proctype name)
+                        let local_vars = Self::collect_var_decls(&p.body);
+                        for vd in local_vars {
+                            if let Some(arr_size) = vd.array_size {
+                                if arr_size > 0 {
+                                    let default = default_value(&vd.var_type);
+                                    let elems =
+                                        vec![default.as_str(); arr_size as usize].join(", ");
+                                    lines.push(format!(
+                                        "    state.{}_{}_{} = {{{}}}",
+                                        p.name, instance, vd.name, elems
+                                    ));
+                                } else {
+                                    let default = default_value(&vd.var_type);
+                                    lines.push(format!(
+                                        "    state.{}_{}_{} = {}",
+                                        p.name, instance, vd.name, default
+                                    ));
+                                }
+                            } else if let Some(init_expr) = &vd.init {
+                                let init_str = self.expr_to_lua(init_expr);
+                                lines.push(format!(
+                                    "    state.{}_{}_{} = {}",
+                                    p.name, instance, vd.name, init_str
+                                ));
+                            } else {
+                                let default = default_value(&vd.var_type);
+                                lines.push(format!(
+                                    "    state.{}_{}_{} = {}",
+                                    p.name, instance, vd.name, default
+                                ));
+                            }
                         }
                     }
                 }
@@ -127,8 +165,11 @@ impl LuaGenerator {
         let active_count: usize = model
             .declarations
             .iter()
-            .filter(|d| matches!(d, TopLevel::Proctype(p) if p.active))
-            .count();
+            .map(|d| match d {
+                TopLevel::Proctype(p) if p.active => p.pid.map(|n| n as usize).unwrap_or(1),
+                _ => 0,
+            })
+            .sum();
 
         self.emit("    local state = {}");
         self.emit(&format!("    state._nr_pr = {}", active_count));
@@ -155,7 +196,14 @@ impl LuaGenerator {
         for decl in &model.declarations {
             match decl {
                 TopLevel::Proctype(p) => {
-                    self.emit_proctype(p);
+                    let count = if p.active {
+                        p.pid.map(|n| n as usize).unwrap_or(1)
+                    } else {
+                        1
+                    };
+                    for instance in 0..count {
+                        self.emit_proctype(p, instance);
+                    }
                 }
                 TopLevel::Init(i) => {
                     // init block: runs once at startup
@@ -214,22 +262,32 @@ impl LuaGenerator {
         }
     }
 
-    pub(crate) fn emit_proctype(&mut self, p: &ProctypeDef) {
-        let fn_name = format!("_spin_transitions_{}", p.name);
+    pub(crate) fn emit_proctype(&mut self, p: &ProctypeDef, instance: usize) {
+        let (prefix, fn_name) = if instance == 0 && p.pid.map(|n| n as usize).unwrap_or(1) == 1 {
+            // Single instance: keep original naming
+            (p.name.clone(), format!("_spin_transitions_{}", p.name))
+        } else {
+            // Multi-instance: include instance number
+            (
+                format!("{}_{}", p.name, instance),
+                format!("_spin_transitions_{}_{}", p.name, instance),
+            )
+        };
         self.proctype_names.push(fn_name.clone());
-        self.current_proctype = Some(p.name.clone());
+        self.current_proctype = Some(prefix.clone());
 
-        self.emit(&format!("-- Proctype: {} (active: {})", p.name, p.active));
+        self.emit(&format!(
+            "-- Proctype: {} (instance {}, active: {})",
+            p.name, instance, p.active
+        ));
         self.emit(&format!("function {}(state)", fn_name));
         self.indent += 1;
         // Set _pid for this process instance
-        if let Some(pid) = p.pid {
-            self.emit(&format!("    state._pid = {}", pid));
-        }
+        self.emit(&format!("    state._pid = {}", instance));
         // Check done flag - if set, this process is done (break was executed)
         self.emit(&format!(
             "    if state._done_{} then return {{}} end",
-            p.name
+            prefix
         ));
         self.emit("    local transitions = {}");
         self.emit("");

@@ -104,7 +104,16 @@ impl LuaGenerator {
                 }
             }
             Expression::ArrayAccess { name, index } => {
-                format!("s.{}[{}]", name, self.expr_to_lua(index))
+                // Promela arrays are 0-indexed, Lua tables are 1-indexed
+                // Add 1 to the index: flag[i] -> s.flag[i + 1]
+                let idx_str = self.expr_to_lua(index);
+                if self.global_vars.contains(name.as_str()) {
+                    format!("s.{}[{} + 1]", name, idx_str)
+                } else if let Some(ref pname) = self.current_proctype {
+                    format!("s.{}_{}[{} + 1]", pname, name, idx_str)
+                } else {
+                    format!("s.{}[{} + 1]", name, idx_str)
+                }
             }
             Expression::UnaryOp { op, expr: e } => self.unary_to_lua(op, e),
             Expression::BinaryOp { op, left, right } => format!(

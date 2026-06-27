@@ -1,12 +1,12 @@
 //! Top-level definition parsers.
 
 use nom::{
-    IResult,
     branch::alt,
     character::complete::char,
     combinator::{map, opt},
     multi::{many0, separated_list0, separated_list1},
     sequence::{delimited, pair, preceded},
+    IResult,
 };
 
 use super::Input;
@@ -14,7 +14,13 @@ use super::*;
 
 pub(crate) fn proctype_def(input: Input) -> IResult<Input, TopLevel> {
     let (input, _) = skip_ws(input)?;
-    let (input, active) = opt(keyword("active"))(input)?;
+    let (input, active_kw) = opt(keyword("active"))(input)?;
+    // Handle optional active count: active [N] proctype
+    let (input, active_count) = if active_kw.is_some() {
+        opt(delimited(ws_char('['), int_literal, ws_char(']')))(input)?
+    } else {
+        (input, None)
+    };
     let (input, _) = keyword("proctype")(input)?;
     let (input, name) = ident(input)?;
     let (input, params) = delimited(
@@ -23,15 +29,17 @@ pub(crate) fn proctype_def(input: Input) -> IResult<Input, TopLevel> {
         ws_char(')'),
     )(input)?;
     let (input, body) = delimited(ws_char('{'), many0(stmt), ws_char('}'))(input)?;
+    let active = active_kw.is_some();
+    let pid = active_count;
     Ok((
         input,
         TopLevel::Proctype(ProctypeDef {
             name,
-            active: active.is_some(),
+            active,
             provided: None,
             parameters: params.unwrap_or_default(),
             body,
-            pid: None,
+            pid,
             line: 0,
         }),
     ))

@@ -27,7 +27,9 @@ impl LuaGenerator {
 
     pub(crate) fn emit_assignment_effect(&mut self, target: &str, value: &Expression) {
         let expr_str = self.expr_to_lua(value);
-        let target_name = if let Some(ref pname) = self.current_proctype {
+        let target_name = if self.global_vars.contains(target) {
+            target.to_string()
+        } else if let Some(ref pname) = self.current_proctype {
             format!("{}_{}", pname, target)
         } else {
             target.to_string()
@@ -183,11 +185,17 @@ impl LuaGenerator {
             self.emit("    effect = function(s)");
             self.indent += 1;
             for s in &guard.body {
-                // Recursive call for body statements
+                // Skip Stmt::Skip (no-op) and Stmt::Expr (blocking condition —
+                // flattened model can't handle per-statement blocking)
+                if matches!(s, Stmt::Skip(_) | Stmt::Expr(_, _)) {
+                    continue;
+                }
                 match s {
                     Stmt::Assignment { target, value, .. } => {
                         let v = self.expr_to_lua(value);
-                        let target_name = if let Some(ref pname) = self.current_proctype {
+                        let target_name = if self.global_vars.contains(target.as_str()) {
+                            target.to_string()
+                        } else if let Some(ref pname) = self.current_proctype {
                             format!("{}_{}", pname, target)
                         } else {
                             target.to_string()
@@ -232,10 +240,6 @@ impl LuaGenerator {
                                 self.channel_to_lua(channel)
                             ));
                         }
-                    }
-                    Stmt::Skip(_) => {}
-                    Stmt::Expr(e, _) => {
-                        self.emit(&format!("    -- {}", self.expr_to_lua(e)));
                     }
                     _ => {
                         self.emit("    -- (stmt not yet inlined in codegen)");

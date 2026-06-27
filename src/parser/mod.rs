@@ -144,48 +144,70 @@ fn guard_body(input: Input) -> IResult<Input, Guard> {
     }
 
     // Check if this looks like a statement (assignment, send, recv) before trying condition
-    // Pattern: ident followed by =, !, or ?
+    // Pattern: ident followed by =, !, ?, or [ followed by =, !, ?
     let is_stmt_start = {
         let trimmed = input.trim_start();
         // Check if it starts with identifier followed by statement operator
         let mut chars = trimmed.chars().peekable();
-        let mut ident_chars = String::new();
 
         // Collect identifier characters
         while let Some(&ch) = chars.peek() {
             if ch.is_alphanumeric() || ch == '_' {
-                ident_chars.push(chars.next().unwrap());
+                chars.next();
             } else {
                 break;
             }
         }
 
-        if !ident_chars.is_empty() {
-            // Skip whitespace after identifier
-            while let Some(&ch) = chars.peek() {
-                if ch.is_whitespace() {
-                    chars.next();
-                } else {
-                    break;
+        if chars.peek().copied() == Some('[') {
+            // Array access: ident[expr] =, ident[expr] !, or ident[expr] ?
+            // Skip the bracket expression to check what follows
+            chars.next(); // skip '['
+            let mut depth = 1;
+            while depth > 0 {
+                match chars.next() {
+                    Some('[') => depth += 1,
+                    Some(']') => depth -= 1,
+                    Some(_) => {},
+                    None => break,
                 }
             }
-
-            // Check what comes after the identifier (skipping whitespace)
-            if let Some(&next_ch) = chars.peek() {
-                matches!(next_ch, '=' | '!' | '?')
-            } else {
-                false
-            }
-        } else {
-            false
         }
+
+        // Skip whitespace after identifier (or after brackets)
+        while let Some(&ch) = chars.peek() {
+            if ch.is_whitespace() {
+                chars.next();
+            } else {
+                break;
+            }
+        }
+
+        // Check what comes after
+        matches!(chars.peek(), Some('=') | Some('!') | Some('?'))
     };
 
     // If it looks like a statement, parse it as such (no condition)
+    // Parse body statements but stop before :: (next guard) or od/fi
     if is_stmt_start {
-        let (input, body) = many0(stmt)(input)?;
+        let mut body = Vec::new();
+        let mut remaining = input;
+        loop {
+            // Check if we're at a guard separator (::) or end marker (od/fi)
+            let peek = remaining.trim_start();
+            if peek.starts_with("::") || peek.starts_with("od") || peek.starts_with("fi") {
+                break;
+            }
+            match stmt(remaining) {
+                Ok((rest, s)) => {
+                    body.push(s);
+                    remaining = rest;
+                }
+                Err(_) => break,
+            }
+        }
         return Ok((
-            input,
+            remaining,
             Guard {
                 condition: None,
                 body,
