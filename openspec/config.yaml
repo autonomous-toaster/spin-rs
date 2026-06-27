@@ -44,4 +44,4 @@ rules:
     - If a constraint cannot be formalised, mark it 'human review only'
   tasks:
     - Every task MUST have an N.M identifier (e.g. '1.3')
-    - Group tasks under ## Phase headings
+    - Group tasks under '## Phase headings'
