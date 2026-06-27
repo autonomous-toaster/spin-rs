@@ -499,27 +499,67 @@ impl Model for LuaModel {
         if state.0.len() < 15 {
             return None;
         }
-        // Parse _nr_pr from blob (format: {"key":val,...})
-        let nr_pr = if let Some(pos) = state.0.find("_nr_pr") {
-            let after_key = &state.0[pos + 7..]; // skip "_nr_pr"
-            let after_colon = after_key.trim_start_matches([':', '"']);
-            let num_str: String = after_colon
-                .chars()
-                .take_while(|c| c.is_ascii_digit())
-                .collect();
-            num_str.parse::<i64>().unwrap_or(0)
-        } else {
-            0
-        };
-        // Flag deadlock: multiple proctypes and at least one is still running
-        if nr_pr >= 2 {
-            // Check if any _done_ flag is false (process still running)
-            if state.0.contains(":false") && state.0.contains("_done_") {
+        // Parse _done_<name> flags from state blob to count still-running processes
+        // State blob format: {"key":val,"key":val,...} or {key:val,key:val,...}
+        let (total_done, running) = parse_done_flags(&state.0);
+        // Only flag deadlock when at least one process is still running (_done == false)
+        // If all processes are done (running == 0), it's normal termination, not deadlock
+        if running > 0 {
+            return Some("deadlock: some processes blocked".to_string());
+        }
+        // Fallback: if no _done_ flags found, check nr_pr >= 2 as before
+        if total_done == 0 {
+            let nr_pr = if let Some(pos) = state.0.find("_nr_pr") {
+                let after_key = &state.0[pos + 7..]; // skip "_nr_pr"
+                let after_colon = after_key.trim_start_matches([':', '"']);
+                let num_str: String = after_colon
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
+                num_str.parse::<i64>().unwrap_or(0)
+            } else {
+                0
+            };
+            if nr_pr >= 2 {
                 return Some("deadlock: some processes blocked".to_string());
             }
         }
         None
     }
+}
+
+// ─── Parsing helpers ────────────────────────────────────────────
+
+/// Parse `_done_<name>` flags from a state blob to determine how many
+/// processes are still running (_done == false) vs done (_done == true).
+/// Returns (total_done_flags_found, running_count).
+fn parse_done_flags(blob: &str) -> (usize, usize) {
+    // State blob format: {key:val,key:val,...}
+    // Look for _done_<name>:true or _done_<name>:false patterns
+    let mut total = 0usize;
+    let mut running = 0usize;
+    let mut pos = 0;
+    while let Some(start) = blob[pos..].find("_done_") {
+        let actual_pos = pos + start;
+        // Find the value after this key: look for ':' then check next token
+        if let Some(colon_pos) = blob[actual_pos..].find(':') {
+            let val_start = actual_pos + colon_pos + 1;
+            // Value is true, false, or a quoted version
+            let rest = &blob[val_start..];
+            if rest.starts_with("true") || rest.starts_with("\"true\"") {
+                total += 1;
+                // Process is done
+            } else if rest.starts_with("false") || rest.starts_with("\"false\"") {
+                total += 1;
+                running += 1;
+            }
+        }
+        pos = actual_pos + 7; // advance past "_done_"
+        if pos >= blob.len() {
+            break;
+        }
+    }
+    (total, running)
 }
 
 // ─── Convenience ────────────────────────────────────────────────

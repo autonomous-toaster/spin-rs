@@ -27,7 +27,12 @@ impl LuaGenerator {
 
     pub(crate) fn emit_assignment_effect(&mut self, target: &str, value: &Expression) {
         let expr_str = self.expr_to_lua(value);
-        self.emit(&format!("s.{} = {}", target, expr_str));
+        let target_name = if let Some(ref pname) = self.current_proctype {
+            format!("{}_{}", pname, target)
+        } else {
+            target.to_string()
+        };
+        self.emit(&format!("s.{} = {}", target_name, expr_str));
     }
 
     pub(crate) fn emit_skip_effect(&mut self) {
@@ -182,7 +187,12 @@ impl LuaGenerator {
                 match s {
                     Stmt::Assignment { target, value, .. } => {
                         let v = self.expr_to_lua(value);
-                        self.emit(&format!("    s.{} = {}", target, v));
+                        let target_name = if let Some(ref pname) = self.current_proctype {
+                            format!("{}_{}", pname, target)
+                        } else {
+                            target.to_string()
+                        };
+                        self.emit(&format!("    s.{} = {}", target_name, v));
                     }
                     Stmt::Break(_) => {
                         if let Some(ref pname) = self.current_proctype {

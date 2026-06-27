@@ -93,6 +93,9 @@ impl LuaGenerator {
                 // Built-in variables like _pid are not prefixed
                 if name == "_pid" {
                     "s._pid".to_string()
+                } else if self.global_vars.contains(name.as_str()) {
+                    // Global variables are stored unprefixed in the state
+                    format!("s.{}", name)
                 } else if let Some(ref pname) = self.current_proctype {
                     // Prefix local variables with current proctype name
                     format!("s.{}_{}", pname, name)

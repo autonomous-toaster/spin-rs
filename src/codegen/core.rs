@@ -9,6 +9,7 @@ impl LuaGenerator {
             indent: 0,
             proctype_names: Vec::new(),
             current_proctype: None,
+            global_vars: std::collections::HashSet::new(),
         }
     }
 
@@ -74,9 +75,12 @@ impl LuaGenerator {
     pub(crate) fn emit_state_layout(&mut self, model: &PromelaModel) {
         // Collect all global and local variable declarations
         let mut lines = Vec::new();
+        // Track which names are global for unprefixed access in expr_to_lua
+        self.global_vars.clear();
         for decl in &model.declarations {
             match decl {
                 TopLevel::GlobalVar(v) => {
+                    self.global_vars.insert(v.name.clone());
                     if let Some(init_expr) = &v.init {
                         let init_str = self.expr_to_lua(init_expr);
                         lines.push(format!("    state.{} = {}", v.name, init_str));
@@ -106,9 +110,11 @@ impl LuaGenerator {
                     }
                 }
                 TopLevel::ChanDecl { name, .. } => {
+                    self.global_vars.insert(name.clone());
                     lines.push(format!("    state.{} = nil", name));
                 }
                 TopLevel::ChannelArray { name, size, .. } => {
+                    // Don't add to global_vars — array channels are accessed as name_N
                     for i in 0..*size {
                         lines.push(format!("    state.{}_{} = nil", name, i));
                     }

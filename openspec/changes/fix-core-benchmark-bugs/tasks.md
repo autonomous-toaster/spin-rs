@@ -1,9 +1,9 @@
 ## 1. Fix Local Variable Prefix in Codegen
 
-- [ ] 1.1 Fix `emit_guards` inline assignment effect to prefix targets with `current_proctype`
-- [ ] 1.2 Fix `emit_assignment_effect` to prefix targets with `current_proctype`
-- [ ] 1.3 Run `debug_single_loop` and verify generated Lua uses `P_x` not `x` in effects
-- [ ] 1.4 Run benchmark and confirm single_loop state count improves from 2 to ~103
+- [x] 1.1 Fix `emit_guards` inline assignment effect to prefix targets with `current_proctype`
+- [x] 1.2 Fix `emit_assignment_effect` to prefix targets with `current_proctype`
+- [x] 1.3 Run `debug_single_loop` and verify generated Lua uses `P_x` not `x` in effects
+- [x] 1.4 Run benchmark and confirm single_loop state count improves from 2 to ~103
 
 ## 2. Fix Deadlock False Positive
 

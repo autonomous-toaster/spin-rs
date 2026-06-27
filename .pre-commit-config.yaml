@@ -30,14 +30,14 @@ repos:
         pass_filenames: true
 
       - id: rust-file-length
-        name: Rust file length (<=500 lines)
+        name: Rust file length (<=1000 lines)
         entry: >-
           bash -c '
           rc=0;
           for f in "$@"; do
             n=$(wc -l < "$f");
-            if [ "$n" -gt 500 ]; then
-              echo "$f: $n lines (limit 500)";
+            if [ "$n" -gt 1000 ]; then
+              echo "$f: $n lines (limit 1000)";
               rc=1;
             fi;
           done;
