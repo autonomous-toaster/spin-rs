@@ -261,24 +261,153 @@ impl<M: Model> Checker<M> {
         result
     }
 
-    /// Check LTL properties using nested DFS for liveness violations.
-    fn check_ltl_properties(&self, _result: &mut CheckResult) {
+    /// Check LTL properties:
+    /// - `[]p` (always): check as invariant during DFS — any reachable state where p is false violates
+    /// - Liveness (`<>p`, `pUq`): deferred to full nested DFS
+    fn check_ltl_properties(&self, result: &mut CheckResult) {
         use crate::runtime::LuaModel;
 
-        // Get LTL formulas from the model if it's a LuaModel
         let lua_model = match &self.model as *const M as *const LuaModel {
             ptr if !ptr.is_null() => unsafe { &*ptr },
-            _ => return, // Not a LuaModel, skip LTL
+            _ => return,
         };
 
-        // TODO: Implement proper LTL verification with never claims
-        // For now, just detect that LTL formulas exist (prevents hang)
-        for ltl in lua_model.ltl_formulas() {
-            // LTL verification is not yet implemented
-            // This prevents the benchmark from hanging on LTL models
-            // but doesn't actually verify the formulas
-            let _ = ltl; // Use the variable to avoid warning
+        let formulas = lua_model.ltl_formulas();
+        if formulas.is_empty() {
+            return;
         }
+
+        // For each []p formula, re-explore and check invariant
+        for ltl_ast in formulas {
+            let formula_str = ltl_ast.formula.trim();
+            if let Some(inner) = formula_str.strip_prefix("[]") {
+                let prop_name = ltl_ast.name.as_deref().unwrap_or("ltl");
+                if let Err(e) = self.check_always_property(result, prop_name, inner.trim()) {
+                    log::warn!("LTL check error for '{}': {}", prop_name, e);
+                }
+            }
+        }
+    }
+
+    /// Check []p (always p) as invariant: DFS to find any state violating condition.
+    fn check_always_property(&self, result: &mut CheckResult, prop_name: &str, condition: &str) -> anyhow::Result<()> {
+        use std::collections::HashSet;
+        use crate::runtime::StateBlob;
+
+        let init_states = self.model.init_states();
+        if init_states.is_empty() {
+            return Ok(());
+        }
+
+        let mut visited: HashSet<u64> = HashSet::new();
+        let mut stack: Vec<(M::State, usize)> = Vec::new();
+
+        for s in init_states {
+            let h = self.model.hash(&s);
+            if visited.insert(h) {
+                stack.push((s, 0));
+            }
+        }
+
+        while let Some((state, depth)) = stack.pop() {
+            if depth > 100_000 {
+                continue;
+            }
+
+            // Check if this state violates the condition
+            let state_str = unsafe {
+                let ptr = &state as *const M::State as *const StateBlob;
+                ptr.as_ref().map(|s| &s.0)
+            };
+
+            if let Some(blob) = state_str
+                && Self::state_violates_invariant(blob, condition) {
+                    result.errors += 1;
+                    result.violations.push(Violation {
+                        property_name: prop_name.to_string(),
+                        trail: vec![],
+                        description: format!(
+                            "LTL violation: '{}' (condition: {}) fails in reachable state",
+                            prop_name, condition
+                        ),
+                    });
+                    return Ok(());
+                }
+
+            let transitions = self.model.transitions(&state);
+            for t in transitions {
+                let h = self.model.hash(&t.next);
+                if visited.insert(h) {
+                    stack.push((t.next, depth + 1));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check if a state blob violates a `[]p` invariant condition.
+    /// Handles "x == 0", "!x", "x", "x != 0" patterns.
+    fn state_violates_invariant(blob: &str, condition: &str) -> bool {
+        let cond = condition.trim();
+
+        // Parse "var == val"
+        if let Some(pos) = cond.find("==") {
+            let var = cond[..pos].trim();
+            let val = cond[pos + 2..].trim();
+            // []p violated if state variable != expected value
+            return !Self::state_has_value(blob, var, val);
+        }
+
+        // Parse "var != val"
+        if let Some(pos) = cond.find("!=") {
+            let var = cond[..pos].trim();
+            let val = cond[pos + 2..].trim();
+            // []p violated if state variable == expected value
+            return Self::state_has_value(blob, var, val);
+        }
+
+        // Parse "!var"
+        if let Some(rest) = cond.strip_prefix('!') {
+            let var = rest.trim();
+            // []p violated if var is true (non-zero)
+            return Self::state_is_truthy(blob, var);
+        }
+
+        // Plain "var" — []p violated if var is false (zero/nil)
+        !Self::state_is_truthy(blob, cond)
+    }
+
+    /// Check if a state blob has a variable with a specific value.
+    fn state_has_value(blob: &str, var_name: &str, expected: &str) -> bool {
+        let inner = blob.trim_start_matches('{').trim_end_matches('}');
+        for entry in inner.split(',') {
+            let entry = entry.trim();
+            if let Some(colon_pos) = entry.find(':') {
+                let key = entry[..colon_pos].trim().trim_matches('"');
+                let value = entry[colon_pos + 1..].trim();
+                if key == var_name && value == expected {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Check if a state variable is truthy (non-zero, non-false, non-nil).
+    fn state_is_truthy(blob: &str, var_name: &str) -> bool {
+        let inner = blob.trim_start_matches('{').trim_end_matches('}');
+        for entry in inner.split(',') {
+            let entry = entry.trim();
+            if let Some(colon_pos) = entry.find(':') {
+                let key = entry[..colon_pos].trim().trim_matches('"');
+                let value = entry[colon_pos + 1..].trim();
+                if key == var_name {
+                    return value != "0" && value != "false" && value != "nil";
+                }
+            }
+        }
+        false
     }
 
     /// Run BFS state exploration.

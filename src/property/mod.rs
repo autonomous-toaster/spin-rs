@@ -358,20 +358,14 @@ impl<M: Model> PropertyChecker<M> {
         trail: &mut Vec<String>,
     ) -> anyhow::Result<Option<Violation>> {
         visited1.insert(state_hash);
+        visited2.insert(state_hash); // on recursion stack
 
         let transitions = self.model.transitions(state);
         for trans in transitions {
             let next_hash = self.model.hash(&trans.next);
 
-            if !visited1.contains(&next_hash) {
-                trail.push(trans.label.clone());
-                if let Some(violation) =
-                    self.dfs1(&trans.next, next_hash, visited1, visited2, trail)?
-                {
-                    return Ok(Some(violation));
-                }
-                trail.pop();
-            } else if visited2.contains(&next_hash) {
+            if visited2.contains(&next_hash) {
+                // Back-edge to state on current stack → cycle
                 return Ok(Some(Violation {
                     property_name: self.property_name.clone(),
                     trail: trail.clone(),
@@ -381,8 +375,19 @@ impl<M: Model> PropertyChecker<M> {
                     ),
                 }));
             }
+
+            if !visited1.contains(&next_hash) {
+                trail.push(trans.label.clone());
+                if let Some(violation) =
+                    self.dfs1(&trans.next, next_hash, visited1, visited2, trail)?
+                {
+                    return Ok(Some(violation));
+                }
+                trail.pop();
+            }
         }
 
+        visited2.remove(&state_hash); // done exploring subtree
         Ok(None)
     }
 

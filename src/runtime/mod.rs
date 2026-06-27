@@ -401,6 +401,7 @@ pub struct StateBlob(pub String);
 pub struct LuaModel {
     runtime: std::cell::RefCell<LuaRuntime>,
     ltl_formulas: Vec<crate::parser::ast::LtlFormula>,
+    source: Option<String>,
 }
 
 impl LuaModel {
@@ -442,6 +443,7 @@ impl LuaModel {
         Ok(Self {
             runtime: std::cell::RefCell::new(runtime),
             ltl_formulas,
+            source: model.source.clone(),
         })
     }
 
@@ -575,6 +577,15 @@ impl LuaModel {
     /// Get LTL formulas from the model.
     pub fn ltl_formulas(&self) -> &[crate::parser::ast::LtlFormula] {
         &self.ltl_formulas
+    }
+
+    /// Recreate model from stored source (for property checking).
+    pub fn recreate(&self) -> anyhow::Result<Self> {
+        if let Some(ref source) = self.source {
+            Self::from_source(source)
+        } else {
+            anyhow::bail!("no source stored")
+        }
     }
 }
 

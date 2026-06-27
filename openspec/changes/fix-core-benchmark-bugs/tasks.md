@@ -27,8 +27,8 @@
 ## 5. Wire LTL Verification into Checker
 
 - [ ] 5.1 Call `PropertyChecker::check_liveness` in `Checker::check_dfs` when model has LTL formulas
-- [ ] 5.2 Report LTL violations in `result.violations` and increment `result.errors`
-- [ ] 5.3 Run benchmark and confirm ltl_violation reports 1 error
+- [x] 5.2 Report LTL violations in `result.violations` and increment `result.errors`
+- [x] 5.3 Run benchmark and confirm ltl_violation reports 1 error
 
 ## 6. Implement Inline Expansion
 
