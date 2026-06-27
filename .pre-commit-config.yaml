@@ -29,3 +29,20 @@ repos:
         files: Dockerfile
         pass_filenames: true
 
+      - id: rust-file-length
+        name: Rust file length (<=500 lines)
+        entry: >-
+          bash -c '
+          rc=0;
+          for f in "$@"; do
+            n=$(wc -l < "$f");
+            if [ "$n" -gt 500 ]; then
+              echo "$f: $n lines (limit 500)";
+              rc=1;
+            fi;
+          done;
+          exit $rc' --
+        language: system
+        types: [rust]
+        pass_filenames: true
+        exclude: ^(target/|.*\.pb\.rs$)
