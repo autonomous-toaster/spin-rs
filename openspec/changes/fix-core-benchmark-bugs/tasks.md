@@ -14,9 +14,9 @@
 
 ## 3. Fix Array Initialization
 
-- [ ] 3.1 Emit arrays as Lua tables in `emit_state_layout` when `array_size > 0`
-- [ ] 3.2 Verify generated Lua for `byte flag[2]` produces `state.flag = {0, 0}`
-- [ ] 3.3 Run benchmark and confirm peterson_n2 state count improves from 1 to ~20
+- [x] 3.1 Emit arrays as Lua tables in `emit_state_layout` when `array_size > 0`
+- [x] 3.2 Verify generated Lua for `byte flag[2]` produces `state.flag = {0, 0}`
+- [x] 3.3 Run benchmark and confirm peterson_n2 state count improves from 1 to ~20
 
 ## 4. Fix For Loop Codegen
 

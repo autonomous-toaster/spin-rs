@@ -149,18 +149,224 @@ impl LuaGenerator {
     }
 
     pub(crate) fn emit_guards(&mut self, kind: &str, guards: &[Guard], _depth: usize) {
-        // First pass: collect all condition strings
+        // Detect multi-statement guard bodies — need step-counter for interleaving.
+        // Single-statement guards can use the simple flat approach.
+        let has_multi_stmt: bool = guards.iter().any(|g| {
+            g.body.iter().filter(|s| !matches!(s, Stmt::Expr(_, _) | Stmt::Skip(_))).count() > 1
+        });
+
+        if !has_multi_stmt {
+            return self.emit_guards_flat(kind, guards);
+        }
+
+        // Multi-statement guard bodies: use step-counter for proper interleaving.
+        // Step 0: guard selection, Steps 1..N: body, last step loops to 0.
+        let step_var = if let Some(ref pname) = self.current_proctype {
+            format!("_step_{}", pname)
+        } else {
+            "_step".to_string()
+        };
+
+        let init_cond: Vec<String> = guards
+            .iter()
+            .map(|g| match &g.condition {
+                Some(e) => self.expr_to_lua(e),
+                None => "true".to_string(),
+            })
+            .collect();
+
+        // Step 0: guard selection — one transition per guard
+        let mut body_steps: Vec<(usize, &Stmt)> = Vec::new();
+        let mut step_counter: usize = 1;
+
+        for (gi, guard) in guards.iter().enumerate() {
+            let gc = if guard.condition.is_none() {
+                let others: Vec<&str> = init_cond
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, s)| *j != gi && s.as_str() != "true")
+                    .map(|(_, s)| s.as_str())
+                    .collect();
+                if others.is_empty() {
+                    "true".to_string()
+                } else if others.len() == 1 {
+                    format!("not ({})", others[0])
+                } else {
+                    format!("not ({})", others.join(" or "))
+                }
+            } else {
+                init_cond[gi].clone()
+            };
+
+            // Merge blocking exprs from this guard's body into condition
+            let blocking: Vec<String> = guard
+                .body
+                .iter()
+                .filter_map(|s| match s {
+                    Stmt::Expr(e, _) => Some(self.expr_to_lua(e)),
+                    _ => None,
+                })
+                .collect();
+            let mut sel_cond = gc.clone();
+            if !blocking.is_empty() {
+                let extra = if blocking.len() == 1 {
+                    blocking[0].clone()
+                } else {
+                    format!("({})", blocking.join(" and "))
+                };
+                if sel_cond == "true" {
+                    sel_cond = extra;
+                } else {
+                    sel_cond = format!("({}) and {}", sel_cond, extra);
+                }
+            }
+
+            let body_non_expr: Vec<&Stmt> = guard
+                .body
+                .iter()
+                .filter(|s| !matches!(s, Stmt::Expr(_, _) | Stmt::Skip(_)))
+                .collect();
+
+            let target_step = if body_non_expr.is_empty() {
+                0
+            } else {
+                let base = step_counter;
+                for bs in &body_non_expr {
+                    body_steps.push((step_counter, bs));
+                    step_counter += 1;
+                }
+                base
+            };
+
+            self.emit(&format!("    -- {} guard {} (sel): {}", kind, gi, sel_cond));
+            self.emit("    table.insert(transitions, {");
+            self.indent += 1;
+            self.emit(&format!(
+                "    guard = function(s) return s.{} == 0 and ({}) end,",
+                step_var, sel_cond
+            ));
+            self.emit(&format!(
+                "    effect = function(s) s.{} = {} end,",
+                step_var, target_step
+            ));
+            self.emit(&format!("    label = \"{}:sel{}\",", kind, gi));
+            self.indent -= 1;
+            self.emit("    })");
+        }
+
+        // Steps 1..N: emit one transition per body statement
+        let total = body_steps.len();
+        for (idx, (step, s)) in body_steps.iter().enumerate() {
+            let next = if idx + 1 >= total { 0 } else { step + 1 };
+
+            self.emit(&format!("    -- {} body step {}", kind, step));
+            self.emit("    table.insert(transitions, {");
+            self.indent += 1;
+            self.emit(&format!(
+                "    guard = function(s) return s.{} == {} end,",
+                step_var, step
+            ));
+
+            match s {
+                Stmt::Assignment {
+                    target,
+                    index,
+                    value,
+                    ..
+                } => {
+                    let v = self.expr_to_lua(value);
+                    let target_name = if self.global_vars.contains(target.as_str()) {
+                        target.to_string()
+                    } else if let Some(ref pname) = self.current_proctype {
+                        format!("{}_{}", pname, target)
+                    } else {
+                        target.to_string()
+                    };
+                    let target_expr = if let Some(idx) = index {
+                        let idx_str = self.expr_to_lua(idx);
+                        format!("s.{}[{} + 1]", target_name, idx_str)
+                    } else {
+                        format!("s.{}", target_name)
+                    };
+                    self.emit(&format!(
+                        "    effect = function(s) {} = {}; s.{} = {} end,",
+                        target_expr, v, step_var, next
+                    ));
+                }
+                Stmt::Break(_) => {
+                    let done_flag = if let Some(ref pname) = self.current_proctype {
+                        format!("s._done_{}", pname)
+                    } else {
+                        continue;
+                    };
+                    self.emit(&format!(
+                        "    effect = function(s) {} = true end,",
+                        done_flag
+                    ));
+                }
+                Stmt::Goto(_, _) => {
+                    self.emit(&format!(
+                        "    effect = function(s) s.{} = {} end,",
+                        step_var, next
+                    ));
+                }
+                Stmt::Assert(expr, _) => {
+                    let e = self.expr_to_lua(expr);
+                    self.emit(&format!(
+                        "    guard = function(s) return s.{} == {} and ({}) end,",
+                        step_var, step, e
+                    ));
+                    self.emit(&format!(
+                        "    effect = function(s) s.{} = {} end,",
+                        step_var, next
+                    ));
+                }
+                Stmt::Send { channel, target, .. } => {
+                    let id = match target {
+                        SendTarget::Ident(id) => id.clone(),
+                        SendTarget::Value(_) => "expr".to_string(),
+                    };
+                    self.emit(&format!(
+                        "    effect = function(s) chan_send({}, {}, ...); s.{} = {} end,",
+                        self.channel_to_lua(channel), id, step_var, next
+                    ));
+                }
+                Stmt::Recv { channel, target, .. } => {
+                    if let RecvTarget::VarList(vars) = target {
+                        let vs = vars.join(", ");
+                        self.emit(&format!(
+                            "    effect = function(s) chan_recv({}, {}); s.{} = {} end,",
+                            self.channel_to_lua(channel), vs, step_var, next
+                        ));
+                    }
+                }
+                _ => {
+                    self.emit(&format!(
+                        "    effect = function(s) s.{} = {} end,",
+                        step_var, next
+                    ));
+                }
+            }
+            self.emit(&format!("    label = \"{}:step{}\",", kind, step));
+            self.indent -= 1;
+            self.emit("    })");
+        }
+    }
+
+    /// Simple flat guard emission: one transition per guard, all body stmts atomically in effect.
+    /// Blocking expressions (Stmt::Expr) are merged into the guard condition.
+    /// Array element assignments use the correct Lua table indexing.
+    fn emit_guards_flat(&mut self, kind: &str, guards: &[Guard]) {
         let cond_strs: Vec<String> = guards
             .iter()
             .map(|g| match &g.condition {
                 Some(e) => self.expr_to_lua(e),
-                None => "true".to_string(), // placeholder for else
+                None => "true".to_string(),
             })
             .collect();
 
         for (i, guard) in guards.iter().enumerate() {
-            let cond_str = if guard.condition.is_none() {
-                // "else" guard: enabled only when no other guard is enabled
+            let mut cond_str = if guard.condition.is_none() {
                 let others: Vec<&str> = cond_strs
                     .iter()
                     .enumerate()
@@ -178,6 +384,28 @@ impl LuaGenerator {
                 cond_strs[i].clone()
             };
 
+            // Merge Stmt::Expr (blocking conditions) from guard body into guard
+            let blocking: Vec<String> = guard
+                .body
+                .iter()
+                .filter_map(|s| match s {
+                    Stmt::Expr(e, _) => Some(self.expr_to_lua(e)),
+                    _ => None,
+                })
+                .collect();
+            if !blocking.is_empty() {
+                let extra = if blocking.len() == 1 {
+                    blocking[0].clone()
+                } else {
+                    format!("({})", blocking.join(" and "))
+                };
+                if cond_str == "true" {
+                    cond_str = extra;
+                } else {
+                    cond_str = format!("({}) and {}", cond_str, extra);
+                }
+            }
+
             self.emit(&format!("    -- {} guard {}: {}", kind, i, cond_str));
             self.emit("    table.insert(transitions, {");
             self.indent += 1;
@@ -185,13 +413,16 @@ impl LuaGenerator {
             self.emit("    effect = function(s)");
             self.indent += 1;
             for s in &guard.body {
-                // Skip Stmt::Skip (no-op) and Stmt::Expr (blocking condition —
-                // flattened model can't handle per-statement blocking)
-                if matches!(s, Stmt::Skip(_) | Stmt::Expr(_, _)) {
+                if matches!(s, Stmt::Expr(_, _) | Stmt::Skip(_)) {
                     continue;
                 }
                 match s {
-                    Stmt::Assignment { target, value, .. } => {
+                    Stmt::Assignment {
+                        target,
+                        index,
+                        value,
+                        ..
+                    } => {
                         let v = self.expr_to_lua(value);
                         let target_name = if self.global_vars.contains(target.as_str()) {
                             target.to_string()
@@ -200,7 +431,12 @@ impl LuaGenerator {
                         } else {
                             target.to_string()
                         };
-                        self.emit(&format!("    s.{} = {}", target_name, v));
+                        if let Some(idx) = index {
+                            let idx_str = self.expr_to_lua(idx);
+                            self.emit(&format!("    s.{}[{} + 1] = {}", target_name, idx_str, v));
+                        } else {
+                            self.emit(&format!("    s.{} = {}", target_name, v));
+                        }
                     }
                     Stmt::Break(_) => {
                         if let Some(ref pname) = self.current_proctype {
@@ -216,28 +452,22 @@ impl LuaGenerator {
                         let e = self.expr_to_lua(expr);
                         self.emit(&format!("    assert({}, 'assertion failed')", e));
                     }
-                    Stmt::Send {
-                        channel, target, ..
-                    } => {
+                    Stmt::Send { channel, target, .. } => {
                         let id = match target {
                             SendTarget::Ident(id) => id.clone(),
                             SendTarget::Value(_) => "expr".to_string(),
                         };
                         self.emit(&format!(
                             "    chan_send({}, {}, ...)",
-                            self.channel_to_lua(channel),
-                            id
+                            self.channel_to_lua(channel), id
                         ));
                     }
-                    Stmt::Recv {
-                        channel, target, ..
-                    } => {
+                    Stmt::Recv { channel, target, .. } => {
                         if let RecvTarget::VarList(vars) = target {
                             let vs = vars.join(", ");
                             self.emit(&format!(
                                 "    {}, _ = chan_recv({})",
-                                vs,
-                                self.channel_to_lua(channel)
+                                vs, self.channel_to_lua(channel)
                             ));
                         }
                     }
@@ -248,7 +478,6 @@ impl LuaGenerator {
             }
             self.indent -= 1;
             self.emit("    end,");
-            // Add depth information
             self.emit(&format!("    label = \"{}:guard{}\",", kind, i));
             self.indent -= 1;
             self.emit("    })");
