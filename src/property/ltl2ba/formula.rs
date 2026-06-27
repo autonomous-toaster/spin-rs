@@ -1,6 +1,7 @@
 //! LTL formula AST.
 
 use std::collections::HashMap;
+use std::fmt;
 
 /// LTL formula representation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +70,22 @@ impl LtlFormula {
             self,
             LtlFormula::Atom(_) | LtlFormula::True | LtlFormula::False
         )
+    }
+}
+
+impl fmt::Display for LtlFormula {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LtlFormula::True => write!(fmt, "true"),
+            LtlFormula::False => write!(fmt, "false"),
+            LtlFormula::Atom(s) => write!(fmt, "{}", s),
+            LtlFormula::Not(f) => write!(fmt, "!({})", f),
+            LtlFormula::And(f1, f2) => write!(fmt, "({} && {})", f1, f2),
+            LtlFormula::Or(f1, f2) => write!(fmt, "({} || {})", f1, f2),
+            LtlFormula::Always(f) => write!(fmt, "[]{}", f),
+            LtlFormula::Eventually(f) => write!(fmt, "<>{}", f),
+            LtlFormula::Next(f) => write!(fmt, "X{}", f),
+        }
     }
 }
 
