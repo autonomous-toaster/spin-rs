@@ -113,7 +113,8 @@ impl LuaGenerator {
                         // Proctype parameters (prefixed with proctype name for uniqueness)
                         for param in &p.parameters {
                             let default = default_value(&param.var_type);
-                            lines.push(format!("    state.{}_{} = {}", prefix, param.name, default));
+                            lines
+                                .push(format!("    state.{}_{} = {}", prefix, param.name, default));
                         }
                         // Local variable declarations from body (prefixed with proctype name)
                         let local_vars = Self::collect_var_decls(&p.body);
@@ -121,21 +122,37 @@ impl LuaGenerator {
                             if let Some(arr_size) = vd.array_size {
                                 if arr_size > 0 {
                                     let default = default_value(&vd.var_type);
-                                    let elems = vec![default.as_str(); arr_size as usize].join(", ");
-                                    lines.push(format!("    state.{}_{} = {{{}}}", prefix, vd.name, elems));
+                                    let elems =
+                                        vec![default.as_str(); arr_size as usize].join(", ");
+                                    lines.push(format!(
+                                        "    state.{}_{} = {{{}}}",
+                                        prefix, vd.name, elems
+                                    ));
                                 } else if let Some(init_expr) = &vd.init {
                                     let init_str = self.expr_to_lua(init_expr);
-                                    lines.push(format!("    state.{}_{} = {}", prefix, vd.name, init_str));
+                                    lines.push(format!(
+                                        "    state.{}_{} = {}",
+                                        prefix, vd.name, init_str
+                                    ));
                                 } else {
                                     let default = default_value(&vd.var_type);
-                                    lines.push(format!("    state.{}_{} = {}", prefix, vd.name, default));
+                                    lines.push(format!(
+                                        "    state.{}_{} = {}",
+                                        prefix, vd.name, default
+                                    ));
                                 }
                             } else if let Some(init_expr) = &vd.init {
                                 let init_str = self.expr_to_lua(init_expr);
-                                lines.push(format!("    state.{}_{} = {}", prefix, vd.name, init_str));
+                                lines.push(format!(
+                                    "    state.{}_{} = {}",
+                                    prefix, vd.name, init_str
+                                ));
                             } else {
                                 let default = default_value(&vd.var_type);
-                                lines.push(format!("    state.{}_{} = {}", prefix, vd.name, default));
+                                lines.push(format!(
+                                    "    state.{}_{} = {}",
+                                    prefix, vd.name, default
+                                ));
                             }
                         }
                     }

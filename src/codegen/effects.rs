@@ -152,7 +152,11 @@ impl LuaGenerator {
         // Detect multi-statement guard bodies — need step-counter for interleaving.
         // Single-statement guards can use the simple flat approach.
         let has_multi_stmt: bool = guards.iter().any(|g| {
-            g.body.iter().filter(|s| !matches!(s, Stmt::Expr(_, _) | Stmt::Skip(_))).count() > 1
+            g.body
+                .iter()
+                .filter(|s| !matches!(s, Stmt::Expr(_, _) | Stmt::Skip(_)))
+                .count()
+                > 1
         });
 
         if !has_multi_stmt {
@@ -321,22 +325,32 @@ impl LuaGenerator {
                         step_var, next
                     ));
                 }
-                Stmt::Send { channel, target, .. } => {
+                Stmt::Send {
+                    channel, target, ..
+                } => {
                     let id = match target {
                         SendTarget::Ident(id) => id.clone(),
                         SendTarget::Value(_) => "expr".to_string(),
                     };
                     self.emit(&format!(
                         "    effect = function(s) chan_send({}, {}, ...); s.{} = {} end,",
-                        self.channel_to_lua(channel), id, step_var, next
+                        self.channel_to_lua(channel),
+                        id,
+                        step_var,
+                        next
                     ));
                 }
-                Stmt::Recv { channel, target, .. } => {
+                Stmt::Recv {
+                    channel, target, ..
+                } => {
                     if let RecvTarget::VarList(vars) = target {
                         let vs = vars.join(", ");
                         self.emit(&format!(
                             "    effect = function(s) chan_recv({}, {}); s.{} = {} end,",
-                            self.channel_to_lua(channel), vs, step_var, next
+                            self.channel_to_lua(channel),
+                            vs,
+                            step_var,
+                            next
                         ));
                     }
                 }
@@ -452,22 +466,28 @@ impl LuaGenerator {
                         let e = self.expr_to_lua(expr);
                         self.emit(&format!("    assert({}, 'assertion failed')", e));
                     }
-                    Stmt::Send { channel, target, .. } => {
+                    Stmt::Send {
+                        channel, target, ..
+                    } => {
                         let id = match target {
                             SendTarget::Ident(id) => id.clone(),
                             SendTarget::Value(_) => "expr".to_string(),
                         };
                         self.emit(&format!(
                             "    chan_send({}, {}, ...)",
-                            self.channel_to_lua(channel), id
+                            self.channel_to_lua(channel),
+                            id
                         ));
                     }
-                    Stmt::Recv { channel, target, .. } => {
+                    Stmt::Recv {
+                        channel, target, ..
+                    } => {
                         if let RecvTarget::VarList(vars) = target {
                             let vs = vars.join(", ");
                             self.emit(&format!(
                                 "    {}, _ = chan_recv({})",
-                                vs, self.channel_to_lua(channel)
+                                vs,
+                                self.channel_to_lua(channel)
                             ));
                         }
                     }
