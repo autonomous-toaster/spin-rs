@@ -25,3 +25,5 @@ Cargo.lock
 
 # Coverage artifact
 lcov.info
+
+.pi-lens/
