@@ -218,8 +218,28 @@ impl LuaGenerator {
                     self.emit("    end");
                 }
                 Stmt::Expr(e, _) => {
-                    let _ = e; // suppress unused
-                    self.emit("    -- expression statement");
+                    // Check if this is an inline function call
+                    if let Expression::FuncCall { name, args } = e {
+                        if let Some(inline_def) = self.inlines.get(name.as_str()) {
+                            self.emit(&format!("    -- inline {} expansion", name));
+                            // Substitute parameters with arguments
+                            // Build a substitution map: param_name -> expr_string
+                            let subs: Vec<(String, String)> = inline_def
+                                .parameters
+                                .iter()
+                                .zip(args.iter())
+                                .map(|(p, a)| (p.clone(), self.expr_to_lua(a)))
+                                .collect();
+                            // Emit the inline body with substitutions
+                            for s in &inline_def.body {
+                                self.emit_inline_stmt_with_subs(s, &subs, depth);
+                            }
+                        } else {
+                            self.emit("    -- expression statement");
+                        }
+                    } else {
+                        self.emit("    -- expression statement");
+                    }
                 }
                 Stmt::VarDecl(_) | Stmt::VarDecls(_) => {
                     // Variable declarations are handled in _spin_init_state
@@ -308,5 +328,107 @@ impl LuaGenerator {
                 }
             }
         }
+    }
+}
+
+impl LuaGenerator {
+    /// Emit a statement from an inline body with parameter substitutions.
+    fn emit_inline_stmt_with_subs(&mut self, stmt: &Stmt, subs: &[(String, String)], depth: usize) {
+        match stmt {
+            Stmt::Atomic(body, _) | Stmt::DStep(body, _) => {
+                self.emit(&format!(
+                    "    -- atomic/d_step from inline (depth {})",
+                    depth
+                ));
+                for s in body {
+                    self.emit_inline_stmt_with_subs(s, subs, depth + 1);
+                }
+            }
+            Stmt::Assignment {
+                target,
+                index,
+                value,
+                ..
+            } => {
+                let v = self.substitute_expr(value, subs);
+                let t = self.substitute_var(target, subs);
+                let target_name = if self.global_vars.contains(t.as_str()) {
+                    t
+                } else if let Some(ref pname) = self.current_proctype {
+                    format!("{}_{}", pname, t)
+                } else {
+                    t
+                };
+                if let Some(idx) = index {
+                    let idx_str = self.substitute_expr(idx, subs);
+                    self.emit(&format!(
+                        "    table.insert(transitions, {{ guard = function(s) return true end, effect = function(s) s.{}[{} + 1] = {} end }})",
+                        target_name, idx_str, v
+                    ));
+                } else {
+                    self.emit(&format!(
+                        "    table.insert(transitions, {{ guard = function(s) return true end, effect = function(s) s.{} = {} end }})",
+                        target_name, v
+                    ));
+                }
+            }
+            Stmt::Skip(_) => {}
+            Stmt::Expr(e, _) => {
+                if let Expression::FuncCall { name, args } = e {
+                    if let Some(inline_def) = self.inlines.get(name.as_str()) {
+                        let inner_subs: Vec<(String, String)> = inline_def
+                            .parameters
+                            .iter()
+                            .zip(args.iter())
+                            .map(|(p, a)| (p.clone(), self.substitute_expr(a, subs)))
+                            .collect();
+                        for s in &inline_def.body {
+                            self.emit_inline_stmt_with_subs(s, &inner_subs, depth + 1);
+                        }
+                    }
+                }
+            }
+            Stmt::If(guards) => {
+                if let Some(guard) = guards.first() {
+                    for s in &guard.body {
+                        self.emit_inline_stmt_with_subs(s, subs, depth + 1);
+                    }
+                }
+            }
+            _ => {
+                self.emit("    -- (inline stmt not expanded)");
+            }
+        }
+    }
+
+    fn substitute_expr(&self, expr: &Expression, subs: &[(String, String)]) -> String {
+        match expr {
+            Expression::Ident(name) => self.substitute_var(name, subs),
+            Expression::IntLit(n) => n.to_string(),
+            Expression::BoolLit(b) => b.to_string(),
+            Expression::ArrayAccess { name, index } => {
+                let idx = self.substitute_expr(index, subs);
+                format!("s.{}[{} + 1]", self.substitute_var(name, subs), idx)
+            }
+            Expression::BinaryOp { op, left, right } => {
+                let l = self.substitute_expr(left, subs);
+                let r = self.substitute_expr(right, subs);
+                format!("{}{}{}", l, self.binary_op_to_lua(op), r)
+            }
+            Expression::UnaryOp { op, expr: e } => {
+                let e_str = self.substitute_expr(e, subs);
+                format!("{}{}", self.unary_to_lua(op, &e), e_str)
+            }
+            _ => self.expr_to_lua(expr),
+        }
+    }
+
+    fn substitute_var(&self, name: &str, subs: &[(String, String)]) -> String {
+        for (param, replacement) in subs {
+            if name == param {
+                return replacement.clone();
+            }
+        }
+        name.to_string()
     }
 }

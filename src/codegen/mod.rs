@@ -30,6 +30,7 @@ pub(crate) struct LuaGenerator {
     pub(crate) proctype_names: Vec<String>,
     pub(crate) current_proctype: Option<String>,
     pub(crate) global_vars: std::collections::HashSet<String>,
+    pub(crate) inlines: std::collections::HashMap<String, crate::parser::ast::InlineDef>,
 }
 
 mod core;

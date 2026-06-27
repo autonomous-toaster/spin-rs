@@ -10,6 +10,7 @@ impl LuaGenerator {
             proctype_names: Vec::new(),
             current_proctype: None,
             global_vars: std::collections::HashSet::new(),
+            inlines: std::collections::HashMap::new(),
         }
     }
 
@@ -203,6 +204,14 @@ impl LuaGenerator {
     }
 
     pub(crate) fn emit_proctypes(&mut self, model: &PromelaModel) {
+        // First pass: collect inline definitions
+        self.inlines.clear();
+        for decl in &model.declarations {
+            if let TopLevel::Inline(inline) = decl {
+                self.inlines.insert(inline.name.clone(), inline.clone());
+            }
+        }
+
         for decl in &model.declarations {
             match decl {
                 TopLevel::Proctype(p) => {

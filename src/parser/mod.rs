@@ -144,10 +144,9 @@ fn guard_body(input: Input) -> IResult<Input, Guard> {
     }
 
     // Check if this looks like a statement (assignment, send, recv) before trying condition
-    // Pattern: ident followed by =, !, ?, or [ followed by =, !, ?
+    // Pattern: ident followed by =, !, ?, or [=!?, or (
     let is_stmt_start = {
         let trimmed = input.trim_start();
-        // Check if it starts with identifier followed by statement operator
         let mut chars = trimmed.chars().peekable();
 
         // Collect identifier characters
@@ -159,9 +158,11 @@ fn guard_body(input: Input) -> IResult<Input, Guard> {
             }
         }
 
-        if chars.peek().copied() == Some('[') {
+        if chars.peek().copied() == Some('(') {
+            // Function call: ident(args)
+            true
+        } else if chars.peek().copied() == Some('[') {
             // Array access: ident[expr] =, ident[expr] !, or ident[expr] ?
-            // Skip the bracket expression to check what follows
             chars.next(); // skip '['
             let mut depth = 1;
             while depth > 0 {
@@ -172,19 +173,18 @@ fn guard_body(input: Input) -> IResult<Input, Guard> {
                     None => break,
                 }
             }
-        }
-
-        // Skip whitespace after identifier (or after brackets)
-        while let Some(&ch) = chars.peek() {
-            if ch.is_whitespace() {
-                chars.next();
-            } else {
-                break;
+            // Skip whitespace
+            while let Some(&ch) = chars.peek() {
+                if ch.is_whitespace() { chars.next(); } else { break; }
             }
+            matches!(chars.peek(), Some('=') | Some('!') | Some('?'))
+        } else {
+            // Skip whitespace
+            while let Some(&ch) = chars.peek() {
+                if ch.is_whitespace() { chars.next(); } else { break; }
+            }
+            matches!(chars.peek(), Some('=') | Some('!') | Some('?'))
         }
-
-        // Check what comes after
-        matches!(chars.peek(), Some('=') | Some('!') | Some('?'))
     };
 
     // If it looks like a statement, parse it as such (no condition)
