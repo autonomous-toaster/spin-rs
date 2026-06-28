@@ -13,7 +13,11 @@ impl LuaChannel {
     }
 
     pub fn send(&mut self, msg: Vec<i64>) -> bool {
-        if self.capacity > 0 && self.messages.len() >= self.capacity {
+        // Rendezvous channels (capacity 0): send always blocks
+        if self.capacity == 0 {
+            return false;
+        }
+        if self.messages.len() >= self.capacity {
             return false;
         }
         self.messages.push(msg);

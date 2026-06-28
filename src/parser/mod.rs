@@ -144,24 +144,26 @@ fn guard_body(input: Input) -> IResult<Input, Guard> {
     }
 
     // Check if this looks like a statement (assignment, send, recv) before trying condition
-    // Pattern: ident followed by =, !, ?, or [=!?, or (
+    // Pattern: ident followed by =, !, ?, or [=!?, or ident(
     let is_stmt_start = {
         let trimmed = input.trim_start();
         let mut chars = trimmed.chars().peekable();
+        let mut has_ident = false;
 
         // Collect identifier characters
         while let Some(&ch) = chars.peek() {
             if ch.is_alphanumeric() || ch == '_' {
+                has_ident = true;
                 chars.next();
             } else {
                 break;
             }
         }
 
-        if chars.peek().copied() == Some('(') {
+        if has_ident && chars.peek().copied() == Some('(') {
             // Function call: ident(args)
             true
-        } else if chars.peek().copied() == Some('[') {
+        } else if has_ident && chars.peek().copied() == Some('[') {
             // Array access: ident[expr] =, ident[expr] !, or ident[expr] ?
             chars.next(); // skip '['
             let mut depth = 1;
@@ -173,17 +175,17 @@ fn guard_body(input: Input) -> IResult<Input, Guard> {
                     None => break,
                 }
             }
-            // Skip whitespace
+            while let Some(&ch) = chars.peek() {
+                if ch.is_whitespace() { chars.next(); } else { break; }
+            }
+            matches!(chars.peek(), Some('=') | Some('!') | Some('?'))
+        } else if has_ident {
             while let Some(&ch) = chars.peek() {
                 if ch.is_whitespace() { chars.next(); } else { break; }
             }
             matches!(chars.peek(), Some('=') | Some('!') | Some('?'))
         } else {
-            // Skip whitespace
-            while let Some(&ch) = chars.peek() {
-                if ch.is_whitespace() { chars.next(); } else { break; }
-            }
-            matches!(chars.peek(), Some('=') | Some('!') | Some('?'))
+            false
         }
     };
 
