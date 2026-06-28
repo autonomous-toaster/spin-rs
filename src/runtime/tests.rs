@@ -123,8 +123,8 @@ fn test_channel_recv_empty() {
 #[test]
 fn test_channel_unbuffered() {
     let mut c = LuaChannel::new(0);
-    // Capacity 0 means unbounded in current implementation
-    assert!(c.send(vec![1]));
+    // Capacity 0 means rendezvous: send always blocks
+    assert!(!c.send(vec![1]));
 }
 
 #[test]

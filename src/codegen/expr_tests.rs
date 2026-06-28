@@ -51,7 +51,7 @@ fn test_expr_nfull_nempty() {
     let result = crate::parser::parse(source);
     if let Ok(model) = result {
         let lua = crate::codegen::generate(&model);
-        assert!(lua.source.len() > 0);
+        assert!(lua.source.is_empty() == false);
     }
 }
 
@@ -89,7 +89,7 @@ fn test_emit_unless_variant() {
     let source = "active proctype P() {\n    do\n    :: (x < 5) -> x = x + 1\n    :: else -> break\n    od\n}";
     let model = crate::parser::parse(source).unwrap();
     let lua = crate::codegen::generate(&model);
-    assert!(lua.source.len() > 0);
+    assert!(lua.source.is_empty() == false);
 }
 
 #[test]

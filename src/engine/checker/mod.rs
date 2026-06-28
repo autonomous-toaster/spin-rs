@@ -284,6 +284,8 @@ impl<M: Model> Checker<M> {
                 let prop_name = ltl_ast.name.as_deref().unwrap_or("ltl");
                 if let Err(e) = self.check_always_property(result, prop_name, inner.trim()) {
                     log::warn!("LTL check error for '{}': {}", prop_name, e);
+                    // Break on first error — don't crash from unsafe cast
+                    break;
                 }
             }
         }
@@ -292,7 +294,7 @@ impl<M: Model> Checker<M> {
     /// Check []p (always p) as invariant: DFS to find any state violating condition.
     fn check_always_property(&self, result: &mut CheckResult, prop_name: &str, condition: &str) -> anyhow::Result<()> {
         use std::collections::HashSet;
-        use crate::runtime::StateBlob;
+        
 
         let init_states = self.model.init_states();
         if init_states.is_empty() {
@@ -315,24 +317,32 @@ impl<M: Model> Checker<M> {
             }
 
             // Check if this state violates the condition
-            let state_str = unsafe {
-                let ptr = &state as *const M::State as *const StateBlob;
-                ptr.as_ref().map(|s| &s.0)
+            // SAFETY: Only valid when M::State is StateBlob (LuaModel)
+            let blob_opt = if std::any::TypeId::of::<M::State>()
+                == std::any::TypeId::of::<crate::runtime::StateBlob>()
+            {
+                unsafe {
+                    let ptr = &state as *const M::State as *const crate::runtime::StateBlob;
+                    ptr.as_ref().map(|s| &s.0)
+                }
+            } else {
+                None
             };
 
-            if let Some(blob) = state_str
-                && Self::state_violates_invariant(blob, condition) {
-                    result.errors += 1;
-                    result.violations.push(Violation {
-                        property_name: prop_name.to_string(),
-                        trail: vec![],
-                        description: format!(
-                            "LTL violation: '{}' (condition: {}) fails in reachable state",
-                            prop_name, condition
-                        ),
-                    });
-                    return Ok(());
-                }
+            if let Some(blob) = blob_opt
+                && Self::state_violates_invariant(blob, condition)
+            {
+                result.errors += 1;
+                result.violations.push(Violation {
+                    property_name: prop_name.to_string(),
+                    trail: vec![],
+                    description: format!(
+                        "LTL violation: '{}' (condition: {}) fails in reachable state",
+                        prop_name, condition
+                    ),
+                });
+                return Ok(());
+            }
 
             let transitions = self.model.transitions(&state);
             for t in transitions {

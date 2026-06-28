@@ -96,7 +96,7 @@ fn test_generate_unless() {
     let model = parser::parse(source).unwrap();
     let lua = generate(&model);
     // The generated Lua should have structured output
-    assert!(lua.source.len() > 0);
+    assert!(lua.source.is_empty() == false);
 }
 
 #[test]

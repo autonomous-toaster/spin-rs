@@ -20,22 +20,24 @@ active proctype Receiver() {
 
 fn main() {
     let model = LuaModel::from_source(CHANNEL_TEST).unwrap();
-    println!("Init state: {}", model.init_state().0);
+    let init_states = model.init_states();
+    if !init_states.is_empty() {
+        println!("Init state: {}", init_states[0].0);
+    }
 
     let checker = CheckerBuilder::new()
-        .search_mode(SearchMode::BFS)
+        .search_mode(SearchMode::BreadthFirst)
         .model(model)
         .build();
     let result = checker.check_dfs();
     println!("States: {}", result.states_explored);
     println!("Errors: {}", result.errors);
     if result.errors > 0 {
-        for e in &result.error_traces {
-            println!("Error trace: ");
-            for s in &e.trace {
-                println!("  {}", s.0);
+        for v in &result.violations {
+            println!("Violation: {} ({}):", v.property_name, v.description);
+            for s in &v.trail {
+                println!("  {}", s);
             }
-            println!("  desc: {}", e.description);
         }
     }
 }
