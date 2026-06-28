@@ -38,9 +38,9 @@
 
 ## 7. Fix Rendezvous Channel Semantics
 
-- [ ] 7.1 Modify `LuaChannel::send` to return `false` for capacity-0 channels
-- [ ] 7.2 Verify deadlock_circular still detects 1 error (fix doesn't break existing)
-- [ ] 7.3 Document rendezvous limitation in design.md
+- [x] 7.1 Modify `LuaChannel::send` to return `false` for capacity-0 channels
+- [x] 7.2 Verify deadlock_circular still detects 1 error (fix doesn't break existing)
+- [x] 7.3 Document rendezvous limitation in design.md
 
 ## 8. Final Verification
 
