@@ -6,31 +6,35 @@ Promela boolean operators (`&&`, `||`, `!`) produce correct 0/1 results in gener
 
 ## Requirements
 
-### REQ-1: `&&` (logical AND)
+### Requirement: AND operator
 
-`a && b` must produce `1` if both `a` and `b` are non-zero, `0` otherwise.
+T1.1 SHALL ALWAYS produce `1` for `a && b` when both `a` and `b` are non-zero, and `0` otherwise.
 
 Generated Lua: `((a ~= 0) and (b ~= 0)) and 1 or 0`
 
-### REQ-2: `||` (logical OR)
+### Requirement: OR operator
 
-`a || b` must produce `1` if either `a` or `b` is non-zero, `0` otherwise.
+T1.2 SHALL ALWAYS produce `1` for `a || b` when either `a` or `b` is non-zero, and `0` otherwise.
 
 Generated Lua: `((a ~= 0) or (b ~= 0)) and 1 or 0`
 
-### REQ-3: `!` (logical NOT)
+### Requirement: NOT operator
 
-`!a` must produce `1` if `a` is zero, `0` otherwise.
+T1.3 SHALL ALWAYS produce `1` for `!a` when `a` is zero, and `0` otherwise.
 
 Generated Lua: `(a == 0) and 1 or 0`
 
-### REQ-4: Guard evaluation
+### Requirement: Guard evaluation
 
-Guard conditions in `do`/`if` blocks must correctly prevent transitions when the condition is false. A state where a guarded variable is set but its guard condition is false must not be reachable.
+T1.4 SHALL ALWAYS prevent transitions from firing when their guard condition is false. A state where a guarded variable is set but its guard condition is false SHALL NOT be reachable.
 
-### REQ-5: `[]p` invariant checker
+### Requirement: Invariant checker re-enable
 
-The `[]p` invariant checker in `check_ltl_properties` must be re-enabled and must not produce false violations for models with correct guard evaluation.
+T2.1 SHALL ALWAYS re-enable the `[]p` invariant checker in `check_ltl_properties`.
+
+### Requirement: Invariant checker correctness
+
+T2.1 SHALL ALWAYS NOT produce false violations for models with correct guard evaluation.
 
 ## Verification
 
