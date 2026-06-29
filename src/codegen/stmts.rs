@@ -2,9 +2,20 @@ use super::LuaGenerator;
 use crate::parser::ast::*;
 
 impl LuaGenerator {
-    pub(crate) fn emit_assignment(&mut self, target: &str, value: &Expression, depth: usize) {
+    pub(crate) fn emit_assignment(
+        &mut self,
+        target: &str,
+        field: Option<&str>,
+        value: &Expression,
+        depth: usize,
+    ) {
         let expr_str = self.expr_to_lua(value);
-        self.emit(&format!("    -- T{}: {}", depth, target));
+        self.emit(&format!(
+            "    -- T{}: {}{}",
+            depth,
+            target,
+            field.map(|f| format!(".{}", f)).unwrap_or_default()
+        ));
         self.emit("    table.insert(transitions, {");
         self.indent += 1;
         self.emit("    guard = function() return true end,");
@@ -14,10 +25,17 @@ impl LuaGenerator {
         } else {
             target.to_string()
         };
-        self.emit(&format!(
-            "    effect = function(s) s.{} = {} end",
-            target_name, expr_str
-        ));
+        if let Some(f) = field {
+            self.emit(&format!(
+                "    effect = function(s) s.{}[\"{}\"] = {} end",
+                target_name, f, expr_str
+            ));
+        } else {
+            self.emit(&format!(
+                "    effect = function(s) s.{} = {} end",
+                target_name, expr_str
+            ));
+        }
         self.indent -= 1;
         self.emit("    })");
     }
@@ -72,7 +90,7 @@ impl LuaGenerator {
                     format!("{}, {}", id, args_concat)
                 };
                 self.emit(&format!(
-                    "    effect = function(s) chan_send({}, {}) end",
+                    "    effect = function(s) _spin_chan_send(s, {}, {}) end",
                     chan_name, send_args
                 ));
                 self.indent -= 1;
@@ -92,8 +110,23 @@ impl LuaGenerator {
                     format!("{}, {}", val_str, args_concat)
                 };
                 self.emit(&format!(
-                    "    effect = function(s) chan_send({}, {}) end",
+                    "    effect = function(s) _spin_chan_send(s, {}, {}) end",
                     chan_name, send_args
+                ));
+                self.indent -= 1;
+                self.emit("    })");
+            }
+            SendTarget::Sorted(val) => {
+                let val_str = self.expr_to_lua(val);
+                self.emit("    table.insert(transitions, {");
+                self.indent += 1;
+                self.emit(&format!(
+                    "    guard = function(s) return not chan_full({}) end,",
+                    chan_name
+                ));
+                self.emit(&format!(
+                    "    effect = function(s) _spin_chan_send_sorted(s, {}, {}) end",
+                    chan_name, val_str
                 ));
                 self.indent -= 1;
                 self.emit("    })");
@@ -113,17 +146,53 @@ impl LuaGenerator {
                     chan_name
                 ));
                 self.emit(&format!(
-                    "    effect = function(s) chan_recv({}, {}) end",
+                    "    effect = function(s) local _v = _spin_chan_recv(s, {}); {} = _v end",
                     chan_name, vars_str
                 ));
                 self.indent -= 1;
                 self.emit("    })");
             }
-            RecvTarget::Eval(_) => {
-                self.emit("    -- recv eval (TODO)");
+            RecvTarget::Eval(expr) => {
+                let val_str = self.expr_to_lua(expr);
+                self.emit("    table.insert(transitions, {");
+                self.indent += 1;
+                self.emit(&format!(
+                    "    guard = function(s) return _spin_chan_poll({}, {}) ~= nil end,",
+                    chan_name, val_str
+                ));
+                self.emit(&format!(
+                    "    effect = function(s) _spin_chan_recv_eval(s, {}, {}) end",
+                    chan_name, val_str
+                ));
+                self.indent -= 1;
+                self.emit("    })");
             }
-            RecvTarget::Poll(_) => {
-                self.emit("    -- recv poll (TODO)");
+            RecvTarget::Poll(expr) => {
+                let val_str = self.expr_to_lua(expr);
+                self.emit("    table.insert(transitions, {");
+                self.indent += 1;
+                self.emit(&format!(
+                    "    guard = function(s) return _spin_chan_poll({}, {}) ~= nil end,",
+                    chan_name, val_str
+                ));
+                self.emit("    effect = function(s) end");
+                self.indent -= 1;
+                self.emit("    })");
+            }
+            RecvTarget::Random(vars) => {
+                let vars_str = vars.join(", ");
+                self.emit("    table.insert(transitions, {");
+                self.indent += 1;
+                self.emit(&format!(
+                    "    guard = function(s) return not chan_empty({}) end,",
+                    chan_name
+                ));
+                self.emit(&format!(
+                    "    effect = function(s) local _v = _spin_chan_recv_random(s, {}); {} = _v end",
+                    chan_name, vars_str
+                ));
+                self.indent -= 1;
+                self.emit("    })");
             }
         }
     }
@@ -131,8 +200,13 @@ impl LuaGenerator {
     pub(crate) fn emit_stmts(&mut self, stmts: &[Stmt], depth: usize) {
         for stmt in stmts {
             match stmt {
-                Stmt::Assignment { target, value, .. } => {
-                    self.emit_assignment(target, value, depth);
+                Stmt::Assignment {
+                    target,
+                    field,
+                    value,
+                    ..
+                } => {
+                    self.emit_assignment(target, field.as_deref(), value, depth);
                 }
                 Stmt::If(guards) => {
                     self.emit_guards("if", guards, depth);
@@ -141,11 +215,10 @@ impl LuaGenerator {
                     self.emit_guards("do", guards, depth);
                 }
                 Stmt::Goto(label, _) => {
-                    self.emit(&format!("    -- goto {}", label));
-                    self.emit("    -- TODO: handle goto in codegen");
+                    self.emit_goto_stmt(label);
                 }
                 Stmt::Break(_) => {
-                    self.emit("    -- break (handled in guard effect)");
+                    self.emit_break_stmt();
                 }
                 Stmt::Assert(expr, _) => {
                     self.emit_assert_stmt(expr);
@@ -173,49 +246,15 @@ impl LuaGenerator {
                     let args_concat = args_str.join(", ");
                     self.emit(&format!("    run({}, {})", name, args_concat));
                 }
-                Stmt::Unless { .. } => {
-                    self.emit("    -- unless (TODO)");
+                Stmt::Unless { body, handler, .. } => {
+                    self.emit_unless_block(body, handler, depth);
                 }
                 Stmt::Skip(_) => {
                     self.emit("    -- skip");
                 }
                 Stmt::Atomic(body, _) | Stmt::DStep(body, _) => {
-                    self.emit("    -- atomic/d_step block");
-                    // Generate combined guard: all inner stmts executable
-                    let guards: Vec<String> = body.iter().map(|s| self.guard_for_stmt(s)).collect();
-                    let combined_guard = if guards.iter().all(|g| g == "true") {
-                        "true".to_string()
-                    } else {
-                        let non_trivial: Vec<&str> = guards
-                            .iter()
-                            .filter_map(|g| if *g != "true" { Some(g.as_str()) } else { None })
-                            .collect();
-                        if non_trivial.is_empty() {
-                            "true".to_string()
-                        } else {
-                            non_trivial.join(" and ")
-                        }
-                    };
-                    // Generate combined effect: all inner effects in sequence
-                    self.emit(&format!("    if {} then", combined_guard));
-                    self.indent += 1;
-                    self.emit("    table.insert(transitions, {");
-                    self.indent += 1;
-                    self.emit(&format!(
-                        "    guard = function() return {} end,",
-                        combined_guard
-                    ));
-                    self.emit("    effect = function(s)");
-                    self.indent += 1;
-                    for s in body {
-                        self.emit_effect_for_stmt(s);
-                    }
-                    self.indent -= 1;
-                    self.emit("    end");
-                    self.indent -= 1;
-                    self.emit("    })");
-                    self.indent -= 1;
-                    self.emit("    end");
+                    let is_dstep = matches!(stmt, Stmt::DStep(_, _));
+                    self.emit_atomic_block(body, is_dstep, depth);
                 }
                 Stmt::Expr(e, _) => {
                     // Check if this is an inline function call
@@ -262,8 +301,8 @@ impl LuaGenerator {
                     self.emit_stmts(std::slice::from_ref(update.as_ref()), depth);
                     self.emit("    -- end");
                 }
-                Stmt::Label(_, _) => {
-                    self.emit("    -- label");
+                Stmt::Label(name, _) => {
+                    self.emit_label_stmt(name);
                 }
             }
         }
@@ -325,107 +364,5 @@ impl LuaGenerator {
                 }
             }
         }
-    }
-}
-
-impl LuaGenerator {
-    /// Emit a statement from an inline body with parameter substitutions.
-    fn emit_inline_stmt_with_subs(&mut self, stmt: &Stmt, subs: &[(String, String)], depth: usize) {
-        match stmt {
-            Stmt::Atomic(body, _) | Stmt::DStep(body, _) => {
-                self.emit(&format!(
-                    "    -- atomic/d_step from inline (depth {})",
-                    depth
-                ));
-                for s in body {
-                    self.emit_inline_stmt_with_subs(s, subs, depth + 1);
-                }
-            }
-            Stmt::Assignment {
-                target,
-                index,
-                value,
-                ..
-            } => {
-                let v = self.substitute_expr(value, subs);
-                let t = self.substitute_var(target, subs);
-                let target_name = if self.global_vars.contains(t.as_str()) {
-                    t
-                } else if let Some(ref pname) = self.current_proctype {
-                    format!("{}_{}", pname, t)
-                } else {
-                    t
-                };
-                if let Some(idx) = index {
-                    let idx_str = self.substitute_expr(idx, subs);
-                    self.emit(&format!(
-                        "    table.insert(transitions, {{ guard = function(s) return true end, effect = function(s) s.{}[{} + 1] = {} end }})",
-                        target_name, idx_str, v
-                    ));
-                } else {
-                    self.emit(&format!(
-                        "    table.insert(transitions, {{ guard = function(s) return true end, effect = function(s) s.{} = {} end }})",
-                        target_name, v
-                    ));
-                }
-            }
-            Stmt::Skip(_) => {}
-            Stmt::Expr(e, _) => {
-                if let Expression::FuncCall { name, args } = e
-                    && let Some(inline_def) = self.inlines.get(name.as_str()).cloned()
-                {
-                    let inner_subs: Vec<(String, String)> = inline_def
-                        .parameters
-                        .iter()
-                        .zip(args.iter())
-                        .map(|(p, a)| (p.clone(), self.substitute_expr(a, subs)))
-                        .collect();
-                    for s in &inline_def.body {
-                        self.emit_inline_stmt_with_subs(s, &inner_subs, depth + 1);
-                    }
-                }
-            }
-            Stmt::If(guards) => {
-                if let Some(guard) = guards.first() {
-                    for s in &guard.body {
-                        self.emit_inline_stmt_with_subs(s, subs, depth + 1);
-                    }
-                }
-            }
-            _ => {
-                self.emit("    -- (inline stmt not expanded)");
-            }
-        }
-    }
-
-    pub(crate) fn substitute_expr(&self, expr: &Expression, subs: &[(String, String)]) -> String {
-        match expr {
-            Expression::Ident(name) => self.substitute_var(name, subs),
-            Expression::IntLit(n) => n.to_string(),
-            Expression::BoolLit(b) => b.to_string(),
-            Expression::ArrayAccess { name, index } => {
-                let idx = self.substitute_expr(index, subs);
-                format!("s.{}[{} + 1]", self.substitute_var(name, subs), idx)
-            }
-            Expression::BinaryOp { op, left, right } => {
-                let l = self.substitute_expr(left, subs);
-                let r = self.substitute_expr(right, subs);
-                format!("{}{}{}", l, self.binary_op_to_lua(op), r)
-            }
-            Expression::UnaryOp { op, expr: e } => {
-                let e_str = self.substitute_expr(e, subs);
-                format!("{}{}", self.unary_to_lua(op, e), e_str)
-            }
-            _ => self.expr_to_lua(expr),
-        }
-    }
-
-    pub(crate) fn substitute_var(&self, name: &str, subs: &[(String, String)]) -> String {
-        for (param, replacement) in subs {
-            if name == param {
-                return replacement.clone();
-            }
-        }
-        name.to_string()
     }
 }

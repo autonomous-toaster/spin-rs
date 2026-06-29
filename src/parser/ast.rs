@@ -7,6 +7,10 @@ use std::fmt;
 pub struct PromelaModel {
     pub declarations: Vec<TopLevel>,
     pub source: Option<String>,
+    /// Mtype name-to-value mapping: name -> integer ID
+    pub mtype_names: std::collections::HashMap<String, i64>,
+    /// Typedef definitions: name -> field list
+    pub typedefs: std::collections::HashMap<String, Vec<VarDecl>>,
 }
 
 /// Top-level items in a Promela model.
@@ -35,6 +39,17 @@ pub enum TopLevel {
         size: i64,
         line: usize,
     },
+    /// Mtype declaration: mtype = { name1, name2, ... }
+    MtypeDecl {
+        names: Vec<String>,
+        line: usize,
+    },
+    /// Typedef declaration: typedef MyStruct { byte a; int b }
+    Typedef {
+        name: String,
+        fields: Vec<VarDecl>,
+        line: usize,
+    },
 }
 
 /// A proctype definition (process template).
@@ -43,6 +58,7 @@ pub struct ProctypeDef {
     pub name: String,
     pub active: bool,
     pub provided: Option<Expression>,
+    pub priority: Option<i64>,
     pub parameters: Vec<VarDecl>,
     pub body: Vec<Stmt>,
     pub pid: Option<i64>,
@@ -112,6 +128,7 @@ pub enum Stmt {
     Assignment {
         target: String,
         index: Option<Box<Expression>>,
+        field: Option<String>,
         value: Box<Expression>,
         line: usize,
     },
@@ -165,6 +182,8 @@ pub struct Guard {
 pub enum SendTarget {
     Value(Expression),
     Ident(String),
+    /// Sorted send (`!!`): insert in sorted order
+    Sorted(Expression),
 }
 
 /// Target of a channel receive operation (`?`).
@@ -173,6 +192,8 @@ pub enum RecvTarget {
     VarList(Vec<String>),
     Eval(Expression),
     Poll(Expression),
+    /// Random receive (`??`): non-deterministically pick any message
+    Random(Vec<String>),
 }
 
 /// Expressions.
@@ -218,6 +239,19 @@ pub enum Expression {
     NEmpty(String),
     Enabled(String),
     Timeout,
+    /// np_() - non-progress check
+    NP_,
+    /// pc_value(pid) - get process program counter
+    PcValue(Box<Expression>),
+    /// eval(expr) - evaluate expression
+    Eval(Box<Expression>),
+    /// get_priority(pid) - get process priority
+    GetPriority(Box<Expression>),
+    /// set_priority(pid, val) - set process priority
+    SetPriority {
+        pid: Box<Expression>,
+        value: Box<Expression>,
+    },
     RemoteRef {
         pid: Box<Expression>,
         name: String,
@@ -290,6 +324,143 @@ fn write_vartype(f: &mut fmt::Formatter<'_>, vt: &VarType) -> fmt::Result {
 impl fmt::Display for VarType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write_vartype(f, self)
+    }
+}
+
+impl PromelaModel {
+    /// Replace mtype name identifiers with their integer values throughout the AST.
+    pub fn resolve_mtype_refs(&mut self) {
+        for decl in &mut self.declarations {
+            match decl {
+                TopLevel::Proctype(p) => {
+                    Self::resolve_mtype_in_stmts(&mut p.body, &self.mtype_names);
+                }
+                TopLevel::Init(i) => {
+                    Self::resolve_mtype_in_stmts(&mut i.body, &self.mtype_names);
+                }
+                TopLevel::NeverClaim(n) => {
+                    Self::resolve_mtype_in_stmts(&mut n.body, &self.mtype_names);
+                }
+                TopLevel::GlobalVar(v) => {
+                    if let Some(ref mut init) = v.init {
+                        Self::resolve_mtype_in_expr(init, &self.mtype_names);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn resolve_mtype_in_stmts(
+        stmts: &mut [Stmt],
+        mtype_names: &std::collections::HashMap<String, i64>,
+    ) {
+        for stmt in stmts.iter_mut() {
+            match stmt {
+                Stmt::Assignment { value, .. } => {
+                    Self::resolve_mtype_in_expr(value, mtype_names);
+                }
+                Stmt::If(guards) | Stmt::Do(guards) => {
+                    for g in guards.iter_mut() {
+                        if let Some(ref mut cond) = g.condition {
+                            Self::resolve_mtype_in_expr(cond, mtype_names);
+                        }
+                        Self::resolve_mtype_in_stmts(&mut g.body, mtype_names);
+                    }
+                }
+                Stmt::Atomic(body, _) | Stmt::DStep(body, _) => {
+                    Self::resolve_mtype_in_stmts(body, mtype_names);
+                }
+                Stmt::Unless { body, handler, .. } => {
+                    Self::resolve_mtype_in_stmts(body, mtype_names);
+                    Self::resolve_mtype_in_stmts(handler, mtype_names);
+                }
+                Stmt::Send { args, .. } => {
+                    for arg in args.iter_mut() {
+                        Self::resolve_mtype_in_expr(arg, mtype_names);
+                    }
+                }
+                Stmt::Assert(expr, _) => {
+                    Self::resolve_mtype_in_expr(expr, mtype_names);
+                }
+                Stmt::Expr(expr, _) => {
+                    Self::resolve_mtype_in_expr(expr, mtype_names);
+                }
+                Stmt::Printf(_, args, _) => {
+                    for arg in args.iter_mut() {
+                        Self::resolve_mtype_in_expr(arg, mtype_names);
+                    }
+                }
+                Stmt::Run(_, args, _) => {
+                    for arg in args.iter_mut() {
+                        Self::resolve_mtype_in_expr(arg, mtype_names);
+                    }
+                }
+                Stmt::For {
+                    condition, body, ..
+                } => {
+                    Self::resolve_mtype_in_expr(condition, mtype_names);
+                    for s in body.iter_mut() {
+                        Self::resolve_mtype_in_stmts(std::slice::from_mut(s), mtype_names);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn resolve_mtype_in_expr(
+        expr: &mut Expression,
+        mtype_names: &std::collections::HashMap<String, i64>,
+    ) {
+        match expr {
+            Expression::Ident(name) => {
+                if let Some(&val) = mtype_names.get(name) {
+                    *expr = Expression::IntLit(val);
+                }
+            }
+            Expression::BinaryOp { left, right, .. } => {
+                Self::resolve_mtype_in_expr(left, mtype_names);
+                Self::resolve_mtype_in_expr(right, mtype_names);
+            }
+            Expression::UnaryOp { expr: e, .. } => {
+                Self::resolve_mtype_in_expr(e, mtype_names);
+            }
+            Expression::FuncCall { args, .. } => {
+                for arg in args.iter_mut() {
+                    Self::resolve_mtype_in_expr(arg, mtype_names);
+                }
+            }
+            Expression::ArrayAccess { index, .. } => {
+                Self::resolve_mtype_in_expr(index, mtype_names);
+            }
+            Expression::RecordAccess { record, .. } => {
+                Self::resolve_mtype_in_expr(record, mtype_names);
+            }
+            Expression::RemoteRef { pid, .. } => {
+                Self::resolve_mtype_in_expr(pid, mtype_names);
+            }
+            Expression::ChannelSend { target, .. } => {
+                Self::resolve_mtype_in_expr(target, mtype_names);
+            }
+            Expression::ChannelPoll { condition, .. } => {
+                Self::resolve_mtype_in_expr(condition, mtype_names);
+            }
+            Expression::PcValue(pid) => {
+                Self::resolve_mtype_in_expr(pid, mtype_names);
+            }
+            Expression::Eval(expr) => {
+                Self::resolve_mtype_in_expr(expr, mtype_names);
+            }
+            Expression::GetPriority(pid) => {
+                Self::resolve_mtype_in_expr(pid, mtype_names);
+            }
+            Expression::SetPriority { pid, value } => {
+                Self::resolve_mtype_in_expr(pid, mtype_names);
+                Self::resolve_mtype_in_expr(value, mtype_names);
+            }
+            _ => {}
+        }
     }
 }
 

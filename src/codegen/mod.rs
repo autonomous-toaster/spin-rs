@@ -31,12 +31,20 @@ pub(crate) struct LuaGenerator {
     pub(crate) current_proctype: Option<String>,
     pub(crate) global_vars: std::collections::HashSet<String>,
     pub(crate) inlines: std::collections::HashMap<String, crate::parser::ast::InlineDef>,
+    /// Label step numbers for goto/break/label: label_name -> step_number
+    pub(crate) label_steps: std::collections::HashMap<String, usize>,
+    /// Do-loop exit steps: stack of exit step numbers for nested do-loops
+    pub(crate) do_exit_stack: Vec<usize>,
+    /// Next available step number for labels (starts after guard body steps)
+    pub(crate) next_label_step: usize,
 }
 
 mod core;
 mod effects;
+mod effects_guards;
 mod expr_utils;
 mod stmts;
+mod stmts_atomic;
 
 #[cfg(test)]
 mod tests;

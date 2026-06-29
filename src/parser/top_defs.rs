@@ -37,6 +37,7 @@ pub(crate) fn proctype_def(input: Input) -> IResult<Input, TopLevel> {
             name,
             active,
             provided: None,
+            priority: None,
             parameters: params.unwrap_or_default(),
             body,
             pid,
@@ -165,10 +166,41 @@ pub(crate) fn top_level(input: Input) -> IResult<Input, Vec<TopLevel>> {
         map(c_code_block, |c| vec![c]),
         map(chan_decl, |c| vec![c]),
         map(chan_array_decl, |ca| vec![ca]),
+        map(mtype_decl, |m| vec![m]),
+        map(typedef_decl, |t| vec![t]),
         map(var_decl_list, |vds| {
             vds.into_iter().map(TopLevel::GlobalVar).collect()
         }),
     ))(input)
+}
+
+/// Parse mtype declaration: `mtype = { name1, name2, ... }`
+pub(crate) fn mtype_decl(input: Input) -> IResult<Input, TopLevel> {
+    let (input, _) = keyword("mtype")(input)?;
+    let (input, _) = symbol("=")(input)?;
+    let (input, _) = ws_char('{')(input)?;
+    let (input, names) = separated_list1(symbol(","), ident)(input)?;
+    let (input, _) = ws_char('}')(input)?;
+    let (input, _) = opt(symbol(";"))(input)?;
+    Ok((input, TopLevel::MtypeDecl { names, line: 0 }))
+}
+
+/// Parse typedef declaration: `typedef MyStruct { byte a; int b }`
+pub(crate) fn typedef_decl(input: Input) -> IResult<Input, TopLevel> {
+    let (input, _) = keyword("typedef")(input)?;
+    let (input, name) = ident(input)?;
+    let (input, _) = ws_char('{')(input)?;
+    let (input, fields) = many0(var_decl)(input)?;
+    let (input, _) = ws_char('}')(input)?;
+    let (input, _) = opt(symbol(";"))(input)?;
+    Ok((
+        input,
+        TopLevel::Typedef {
+            name,
+            fields,
+            line: 0,
+        },
+    ))
 }
 
 /// Parse a list of comma-separated variable declarations: `type name1, name2 = init;`

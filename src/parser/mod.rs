@@ -87,6 +87,7 @@ fn stmt(input: Input) -> IResult<Input, Stmt> {
         var_decl_stmt,
         assignment_stmt,
         send_stmt,
+        label_stmt,
         expr_stmt,
     ))(input)
 }
@@ -98,6 +99,26 @@ fn var_decl_stmt(input: Input) -> IResult<Input, Stmt> {
 }
 
 fn assignment_stmt(input: Input) -> IResult<Input, Stmt> {
+    // Try to parse as record access first: ident.field = expr
+    if let Ok((rest, (target, field))) = pair(ident, preceded(ws_char('.'), ident))(input)
+        && let Ok((rest2, _)) = symbol("=")(rest)
+    {
+        // This is a record assignment
+        let (rest3, val) = expr(rest2)?;
+        let (rest4, _) = opt(symbol(";"))(rest3)?;
+        return Ok((
+            rest4,
+            Stmt::Assignment {
+                target,
+                index: None,
+                field: Some(field),
+                value: Box::new(val),
+                line: 0,
+            },
+        ));
+    }
+
+    // Regular assignment: ident[expr] = expr or ident = expr
     let (input, target) = ident(input)?;
     let (input, index) = opt(delimited(ws_char('['), expr, ws_char(']')))(input)?;
     let (input, _) = symbol("=")(input)?;
@@ -108,6 +129,7 @@ fn assignment_stmt(input: Input) -> IResult<Input, Stmt> {
         Stmt::Assignment {
             target,
             index: index.map(Box::new),
+            field: None,
             value: Box::new(value),
             line: 0,
         },
@@ -277,6 +299,14 @@ fn break_stmt(input: Input) -> IResult<Input, Stmt> {
     let (input, _) = opt(symbol(";"))(input)?;
     Ok((input, Stmt::Break(0)))
 }
+fn label_stmt(input: Input) -> IResult<Input, Stmt> {
+    let (input, name) = ident(input)?;
+    let (input, _) = ws_char(':')(input)?;
+    // A label is followed by a statement (or another label)
+    // We parse the label and let the caller handle the following statement
+    let (input, _) = opt(symbol(";"))(input)?;
+    Ok((input, Stmt::Label(name, 0)))
+}
 fn assert_stmt(input: Input) -> IResult<Input, Stmt> {
     let (input, _) = keyword("assert")(input)?;
     let (input, e) = delimited(ws_char('('), expr, ws_char(')'))(input)?;
@@ -332,9 +362,14 @@ fn channel_expr(input: Input) -> IResult<Input, Expression> {
 
 fn send_stmt(input: Input) -> IResult<Input, Stmt> {
     let (input, channel) = channel_expr(input)?;
-    let (input, _) = symbol("!")(input)?;
-    let (input, target_val) =
-        alt((map(expr, SendTarget::Value), map(ident, SendTarget::Ident)))(input)?;
+    // Try `!!` (sorted send) first, then `!` (regular send)
+    let (input, is_sorted) =
+        alt((map(symbol("!!"), |_| true), map(symbol("!"), |_| false)))(input)?;
+    let (input, target_val) = if is_sorted {
+        map(expr, SendTarget::Sorted)(input)?
+    } else {
+        alt((map(expr, SendTarget::Value), map(ident, SendTarget::Ident)))(input)?
+    };
     let (input, args) = opt(delimited(
         ws_char('('),
         separated_list0(symbol(","), expr),
@@ -353,16 +388,28 @@ fn send_stmt(input: Input) -> IResult<Input, Stmt> {
 }
 fn recv_stmt(input: Input) -> IResult<Input, Stmt> {
     let (input, channel) = channel_expr(input)?;
-    let (input, _) = symbol("?")(input)?;
-    let (input, target) = alt((
-        map(
-            delimited(ws_char('['), expr, ws_char(']')),
-            RecvTarget::Eval,
-        ),
-        map(separated_list1(symbol(","), ident), RecvTarget::VarList),
-        // Support `? expr` for receive-and-match (e.g., `ch ? 0`)
-        map(expr, RecvTarget::Eval),
-    ))(input)?;
+    // Try `??` (random receive) first, then `?` (regular receive)
+    let (input, is_random) =
+        alt((map(symbol("??"), |_| true), map(symbol("?"), |_| false)))(input)?;
+    let (input, target) = if is_random {
+        map(separated_list1(symbol(","), ident), RecvTarget::Random)(input)?
+    } else {
+        alt((
+            // `?[expr]` - poll receive: check without consuming
+            map(
+                delimited(ws_char('['), expr, ws_char(']')),
+                RecvTarget::Poll,
+            ),
+            // `? eval(expr)` - eval receive: consume only if matches
+            map(
+                preceded(keyword("eval"), delimited(ws_char('('), expr, ws_char(')'))),
+                RecvTarget::Eval,
+            ),
+            map(separated_list1(symbol(","), ident), RecvTarget::VarList),
+            // `? expr` for receive-and-match (e.g., `ch ? 0`)
+            map(expr, RecvTarget::Eval),
+        ))(input)?
+    };
     let (input, _) = opt(symbol(";"))(input)?;
     Ok((
         input,
@@ -407,6 +454,7 @@ fn for_promela_style(input: Input) -> IResult<Input, Stmt> {
         let assign = Stmt::Assignment {
             target: var_name.clone(),
             index: None,
+            field: None,
             value: Box::new(Expression::IntLit(val)),
             line: 0,
         };
@@ -440,10 +488,40 @@ pub fn parse(source: &str) -> anyhow::Result<PromelaModel> {
     let (_, declarations) =
         many0(top_level)(source).map_err(|e| anyhow::anyhow!("parse error: {:?}", e))?;
     let declarations: Vec<TopLevel> = declarations.into_iter().flatten().collect();
-    Ok(PromelaModel {
+
+    // Collect mtype names and assign sequential IDs
+    let mut mtype_names = std::collections::HashMap::new();
+    let mut next_id = 0i64;
+    for decl in &declarations {
+        if let TopLevel::MtypeDecl { names, .. } = decl {
+            for name in names {
+                if !mtype_names.contains_key(name) {
+                    mtype_names.insert(name.clone(), next_id);
+                    next_id += 1;
+                }
+            }
+        }
+    }
+
+    // Collect typedef definitions
+    let mut typedefs = std::collections::HashMap::new();
+    for decl in &declarations {
+        if let TopLevel::Typedef { name, fields, .. } = decl {
+            typedefs.insert(name.clone(), fields.clone());
+        }
+    }
+
+    let mut model = PromelaModel {
         declarations,
         source: Some(source.to_string()),
-    })
+        mtype_names,
+        typedefs,
+    };
+
+    // Post-process: replace mtype name identifiers with integer literals
+    model.resolve_mtype_refs();
+
+    Ok(model)
 }
 pub fn parse_file(path: &Path) -> anyhow::Result<PromelaModel> {
     let source = fs::read_to_string(path)

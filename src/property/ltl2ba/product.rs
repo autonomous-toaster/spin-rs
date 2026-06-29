@@ -111,6 +111,10 @@ where
         }
     }
 
+    // Always add "true" as true and "false" as false for Büchi conditions
+    props.insert("true".to_string(), true);
+    props.insert("false".to_string(), false);
+
     props
 }
 
@@ -122,7 +126,7 @@ where
 /// 3. Creates product transitions
 pub fn sync_transitions<S, M>(
     model: &M,
-    _state: &S,
+    state: &S,
     model_transitions: &[Transition<S>],
     buchi: &BuchiAutomaton,
     buchi_state: usize,
@@ -133,6 +137,9 @@ where
 {
     let mut product_transitions = Vec::new();
 
+    // Evaluate atomic propositions in the current state
+    let props = evaluate_atomic_props(model, state);
+
     for model_trans in model_transitions {
         let next_state = model_trans.next.clone();
         let next_hash = model.hash(&next_state);
@@ -141,8 +148,15 @@ where
         let buchi_transitions = buchi.transitions_from(buchi_state);
 
         for buchi_trans in buchi_transitions {
-            // For now, assume all Büchi transitions are enabled
-            // TODO: Evaluate atomic propositions to filter transitions
+            // Check if all conditions are satisfied
+            let all_conditions_met = buchi_trans.conditions.iter().all(|(prop, must_be_true)| {
+                let prop_val = props.get(prop.as_str()).copied().unwrap_or(false);
+                prop_val == *must_be_true
+            });
+
+            if !all_conditions_met {
+                continue;
+            }
 
             let next_product = ProductState::new(next_state.clone(), buchi_trans.to, next_hash);
 

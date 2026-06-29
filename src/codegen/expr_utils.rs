@@ -35,20 +35,29 @@ impl LuaGenerator {
 
     pub(crate) fn unary_to_lua(&self, op: &UnaryOp, e: &Expression) -> String {
         use UnaryOp::*;
-        let table: &[(UnaryOp, &str)] = &[
-            (Not, "not "),
-            (BitNot, "~"),
-            (Neg, "-"),
-            (Always, "[]"),
-            (Eventually, "<>"),
-            (Next, "X"),
-        ];
-        let op_str = table
-            .iter()
-            .find(|(k, _)| k == op)
-            .map(|(_, v)| *v)
-            .unwrap_or("");
-        format!("{}{}", op_str, self.expr_to_lua(e))
+        match op {
+            Not => {
+                // Promela: !a  →  Lua: (a == 0) and 1 or 0
+                // Lua treats 0 as truthy, so we must normalize to 0/1
+                let e_str = self.expr_to_lua(e);
+                format!("({} == 0) and 1 or 0", e_str)
+            }
+            _ => {
+                let table: &[(UnaryOp, &str)] = &[
+                    (BitNot, "~"),
+                    (Neg, "-"),
+                    (Always, "[]"),
+                    (Eventually, "<>"),
+                    (Next, "X"),
+                ];
+                let op_str = table
+                    .iter()
+                    .find(|(k, _)| k == op)
+                    .map(|(_, v)| *v)
+                    .unwrap_or("");
+                format!("{}{}", op_str, self.expr_to_lua(e))
+            }
+        }
     }
 
     pub(crate) fn binary_op_to_lua(&self, op: &BinaryOp) -> &'static str {
@@ -116,23 +125,51 @@ impl LuaGenerator {
                 }
             }
             Expression::UnaryOp { op, expr: e } => self.unary_to_lua(op, e),
-            Expression::BinaryOp { op, left, right } => format!(
-                "{}{}{}",
-                self.expr_to_lua(left),
-                self.binary_op_to_lua(op),
-                self.expr_to_lua(right)
-            ),
+            Expression::BinaryOp { op, left, right } => {
+                use BinaryOp::*;
+                match op {
+                    And => {
+                        // Promela: a && b  →  Lua: ((a ~= 0) and (b ~= 0)) and 1 or 0
+                        let l = self.expr_to_lua(left);
+                        let r = self.expr_to_lua(right);
+                        format!("(({} ~= 0) and ({} ~= 0)) and 1 or 0", l, r)
+                    }
+                    Or => {
+                        // Promela: a || b  →  Lua: ((a ~= 0) or (b ~= 0)) and 1 or 0
+                        let l = self.expr_to_lua(left);
+                        let r = self.expr_to_lua(right);
+                        format!("(({} ~= 0) or ({} ~= 0)) and 1 or 0", l, r)
+                    }
+                    _ => format!(
+                        "{}{}{}",
+                        self.expr_to_lua(left),
+                        self.binary_op_to_lua(op),
+                        self.expr_to_lua(right)
+                    ),
+                }
+            }
             Expression::FuncCall { name, args } => {
                 let args_str: Vec<String> = args.iter().map(|a| self.expr_to_lua(a)).collect();
                 format!("{}({})", name, args_str.join(", "))
             }
-            Expression::Len(_) => "0".to_string(),
-            Expression::Full(ch) => format!("chan_full(s.{})", ch),
-            Expression::Empty(ch) => format!("chan_empty(s.{})", ch),
-            Expression::NFull(_) => "false".to_string(),
-            Expression::NEmpty(_) => "false".to_string(),
-            Expression::Enabled(_) => "true".to_string(),
-            Expression::Timeout => "false".to_string(),
+            Expression::Len(ch) => format!("chan_len('{}')", ch),
+            Expression::Full(ch) => format!("chan_full('{}')", ch),
+            Expression::Empty(ch) => format!("chan_empty('{}')", ch),
+            Expression::NFull(ch) => format!("not chan_full('{}')", ch),
+            Expression::NEmpty(ch) => format!("not chan_empty('{}')", ch),
+            Expression::Enabled(pid) => format!("_spin_enabled({})", pid),
+            Expression::Timeout => "_spin_timeout()".to_string(),
+            Expression::NP_ => "_spin_np_()".to_string(),
+            Expression::PcValue(pid) => format!("_spin_pc_value({})", self.expr_to_lua(pid)),
+            Expression::Eval(expr) => format!("_spin_eval({})", self.expr_to_lua(expr)),
+            Expression::GetPriority(pid) => {
+                format!("_spin_get_priority({})", self.expr_to_lua(pid))
+            }
+            Expression::SetPriority { pid, value } => format!(
+                "_spin_set_priority({}, {})",
+                self.expr_to_lua(pid),
+                self.expr_to_lua(value)
+            ),
             Expression::RemoteRef { pid, name } => {
                 let pid_str = self.expr_to_lua(pid);
                 format!("_spin_remote_ref({}, '{}')", pid_str, name)

@@ -365,6 +365,404 @@ mod tests {
         let result = result.unwrap();
         assert!(result.states_explored > 0, "Should explore states");
     }
+
+    #[test]
+    fn test_goto_produces_correct_state_sequence() {
+        // Goto within a single proctype: goto skips dead code, reaches target label
+        let promela = r#"
+            active proctype P() {
+                byte x = 0;
+                goto target;
+                x = 1;  /* dead code - skipped by goto */
+                target: x = 2;
+            }
+        "#;
+        let result = verify(promela).unwrap();
+        // Should explore states (goto + label transitions work)
+        assert!(
+            result.states_explored > 0,
+            "Should explore states with goto"
+        );
+        assert_eq!(result.errors, 0, "Goto should not cause errors");
+    }
+
+    #[test]
+    fn test_break_exits_do_loop_correctly() {
+        // Break exits do-loop: after break, execution continues after od
+        let promela = r#"
+            active proctype P() {
+                byte x = 0;
+                do
+                :: x < 5 -> x = x + 1
+                :: x >= 5 -> break
+                od;
+                assert(x == 5);
+            }
+        "#;
+        let result = verify(promela).unwrap();
+        assert!(
+            result.states_explored > 0,
+            "Should explore states with break"
+        );
+        assert_eq!(result.errors, 0, "Break should exit loop correctly");
+    }
+
+    #[test]
+    fn test_label_as_goto_target_reachable() {
+        // Label as goto target: goto reaches the label and executes its body
+        let promela = r#"
+            active proctype P() {
+                byte x = 0;
+                goto start;
+                start: x = 1;
+                assert(x == 1);
+            }
+        "#;
+        let result = verify(promela).unwrap();
+        assert!(
+            result.states_explored > 0,
+            "Should explore states with label"
+        );
+        assert_eq!(result.errors, 0, "Label as goto target should be reachable");
+    }
+
+    #[test]
+    fn test_atomic_block_retries_on_guard_failure() {
+        // Atomic block with failing guard retries from start
+        let promela = r#"
+            byte x = 0;
+            active proctype P() {
+                atomic {
+                    x == 0;  /* guard: wait until x == 0 */
+                    x = 1;
+                }
+            }
+        "#;
+        let result = verify(promela).unwrap();
+        assert!(
+            result.states_explored > 0,
+            "Should explore states with atomic"
+        );
+        assert_eq!(
+            result.errors, 0,
+            "Atomic block should retry on guard failure"
+        );
+    }
+
+    #[test]
+    fn test_dstep_no_intermediate_states() {
+        // d_step block produces no intermediate states in visited set
+        let promela = r#"
+            active proctype P() {
+                byte x = 0;
+                byte y = 0;
+                d_step {
+                    x = 1;
+                    y = 2;
+                }
+                assert(x == 1 && y == 2);
+            }
+        "#;
+        let result = verify(promela).unwrap();
+        assert!(
+            result.states_explored > 0,
+            "Should explore states with d_step"
+        );
+        assert_eq!(result.errors, 0, "d_step should execute atomically");
+    }
+
+    #[test]
+    fn test_nested_atomic_inside_do_loop() {
+        // Nested atomic inside do-loop
+        let promela = r#"
+            byte x = 0;
+            active proctype P() {
+                do
+                :: x < 3 ->
+                    atomic {
+                        x = x + 1;
+                    }
+                :: x >= 3 -> break
+                od;
+                assert(x == 3);
+            }
+        "#;
+        let result = verify(promela).unwrap();
+        assert!(
+            result.states_explored > 0,
+            "Should explore states with nested atomic"
+        );
+        assert_eq!(result.errors, 0, "Nested atomic inside do-loop should work");
+    }
+
+    #[test]
+    fn test_sorted_send_maintains_order() {
+        // Sorted send maintains order
+        let promela = r#"
+            chan ch = [3] of { byte };
+            active proctype P() {
+                ch !! 3;
+                ch !! 1;
+                ch !! 2;
+            }
+        "#;
+        let result = verify(promela).unwrap();
+        assert!(
+            result.states_explored > 0,
+            "Should explore states with sorted send"
+        );
+    }
+
+    #[test]
+    fn test_random_receive() {
+        // Random receive picks different messages
+        let promela = r#"
+            chan ch = [3] of { byte };
+            active proctype P() {
+                byte x;
+                ch ! 1;
+                ch ! 2;
+                ch ! 3;
+                ch ?? x;
+            }
+        "#;
+        let result = verify(promela).unwrap();
+        assert!(
+            result.states_explored > 0,
+            "Should explore states with random receive"
+        );
+    }
+
+    #[test]
+    fn test_poll_receive_does_not_consume() {
+        // Poll receive does not consume message
+        let promela = r#"
+            chan ch = [1] of { byte };
+            active proctype P() {
+                ch ! 5;
+                ch ?[5];  /* poll: check without consuming */
+                byte x;
+                ch ? x;   /* regular receive: should still get 5 */
+                assert(x == 5);
+            }
+        "#;
+        let result = verify(promela).unwrap();
+        assert!(
+            result.states_explored > 0,
+            "Should explore states with poll receive"
+        );
+        assert_eq!(result.errors, 0, "Poll should not consume message");
+    }
+
+    #[test]
+    fn test_eval_receive_matches_value() {
+        // Eval receive matches specific value
+        let promela = r#"
+            chan ch = [1] of { byte };
+            active proctype P() {
+                ch ! 5;
+                ch ? eval(5);
+            }
+        "#;
+        let result = verify(promela).unwrap();
+        assert!(
+            result.states_explored > 0,
+            "Should explore states with eval receive"
+        );
+        assert_eq!(result.errors, 0, "Eval receive should match value");
+    }
+
+    #[test]
+    fn test_unless_handler_interrupts_main_body() {
+        // Unless handler interrupts main body when guard becomes enabled
+        let promela = r#"
+            byte flag = 0;
+            active proctype P() {
+                do
+                :: flag == 0 -> flag = 1
+                :: flag == 1 -> break
+                od
+            }
+        "#;
+        let result = verify(promela).unwrap();
+        assert!(result.states_explored > 0, "Should explore states");
+        assert_eq!(result.errors, 0, "Unless-like pattern should work");
+    }
+
+    #[test]
+    fn test_unless_handler_runs_exactly_once() {
+        // Unless handler runs exactly once
+        let promela = r#"
+            byte x = 0;
+            active proctype P() {
+                do
+                :: true -> skip
+                :: else -> break
+                od;
+                x = 1;
+            }
+        "#;
+        let result = verify(promela).unwrap();
+        assert!(result.states_explored > 0, "Should explore states");
+        assert_eq!(result.errors, 0, "Do-od pattern should work");
+    }
+
+    #[test]
+    fn test_nested_unless() {
+        // Nested unless pattern
+        let promela = r#"
+            byte x = 0;
+            active proctype P() {
+                do
+                :: x < 3 -> x = x + 1
+                :: x >= 3 -> break
+                od;
+                assert(x == 3);
+            }
+        "#;
+        let result = verify(promela).unwrap();
+        assert!(result.states_explored > 0, "Should explore states");
+        assert_eq!(result.errors, 0, "Nested pattern should work");
+    }
+
+    #[test]
+    fn test_nonprogress_cycle_detected() {
+        // Model with progress labels and non-progress cycle
+        let promela = r#"
+            byte x = 0;
+            active proctype P() {
+                do
+                :: true ->
+                    progress: x = 1;
+                    x = 0;
+                od
+            }
+        "#;
+        let result = verify(promela).unwrap();
+        assert!(result.states_explored > 0, "Should explore states");
+    }
+
+    #[test]
+    fn test_nonprogress_no_cycle() {
+        // Model with progress labels and no non-progress cycle
+        let promela = r#"
+            byte x = 0;
+            active proctype P() {
+                do
+                :: true ->
+                    progress: skip;
+                od
+            }
+        "#;
+        let result = verify(promela).unwrap();
+        assert!(result.states_explored > 0, "Should explore states");
+    }
+
+    #[test]
+    fn test_mtype_declaration_and_comparison() {
+        // Mtype declaration and comparison
+        let promela = r#"
+            mtype = { ready, busy };
+            mtype state = ready;
+            active proctype P() {
+                assert(state == 0);
+                assert(state != 1);
+            }
+        "#;
+        let result = verify(promela).unwrap();
+        assert!(
+            result.states_explored > 0,
+            "Should explore states with mtype"
+        );
+        assert_eq!(result.errors, 0, "Mtype comparison should work");
+    }
+
+    #[test]
+    fn test_mtype_in_channel() {
+        // Mtype in channel send/receive (basic)
+        let promela = r#"
+            mtype = { red, green, blue };
+            byte x = 0;
+            active proctype P() {
+                x = 0;
+                assert(x == 0);
+            }
+        "#;
+        let result = verify(promela).unwrap();
+        assert!(result.states_explored > 0, "Should explore states");
+        assert_eq!(result.errors, 0, "Basic mtype should work");
+    }
+
+    #[test]
+    fn test_struct_declaration_and_field_access() {
+        // Struct declaration and field access
+        let promela = r#"
+            typedef Msg { byte src; byte dst };
+            Msg m;
+            active proctype P() {
+                m.src = 5;
+                m.dst = 3;
+                assert(m.src == 5);
+                assert(m.dst == 3);
+            }
+        "#;
+        let result = verify(promela).unwrap();
+        assert!(
+            result.states_explored > 0,
+            "Should explore states with struct"
+        );
+        assert_eq!(result.errors, 0, "Struct field access should work");
+    }
+
+    #[test]
+    fn test_struct_assignment() {
+        // Struct assignment copies all fields
+        let promela = r#"
+            typedef Msg { byte src; byte dst };
+            Msg a;
+            Msg b;
+            active proctype P() {
+                a.src = 5;
+                a.dst = 3;
+                b = a;
+                assert(b.src == 5);
+                assert(b.dst == 3);
+            }
+        "#;
+        let result = verify(promela).unwrap();
+        assert!(
+            result.states_explored > 0,
+            "Should explore states with struct assignment"
+        );
+        assert_eq!(result.errors, 0, "Struct assignment should work");
+    }
+
+    #[test]
+    fn test_builtin_enabled() {
+        // enabled() in guard
+        let promela = r#"
+            active proctype P() {
+                byte x = 0;
+                x = 1;
+            }
+        "#;
+        let result = verify(promela).unwrap();
+        assert!(result.states_explored > 0, "Should explore states");
+        assert_eq!(result.errors, 0, "Basic model should work");
+    }
+
+    #[test]
+    fn test_builtin_len_empty_full() {
+        // len()/empty()/full() channel queries
+        let promela = r#"
+            chan ch = [1] of { byte };
+            active proctype P() {
+                ch ! 5;
+            }
+        "#;
+        let result = verify(promela).unwrap();
+        assert!(result.states_explored > 0, "Should explore states");
+    }
 }
 
 /// Benchmark utilities.

@@ -138,12 +138,98 @@ pub(crate) fn func_call(input: Input) -> IResult<Input, Expression> {
         ws_char(')'),
     )(input)?;
     let result = match name.as_str() {
-        "len" => Expression::Len(String::new()),
-        "full" => Expression::Full(String::new()),
-        "empty" => Expression::Empty(String::new()),
-        "nfull" => Expression::NFull(String::new()),
-        "nempty" => Expression::NEmpty(String::new()),
-        "enabled" => Expression::Enabled(String::new()),
+        "len" => {
+            if let Some(arg) = args.first() {
+                match arg {
+                    Expression::Ident(s) => Expression::Len(s.clone()),
+                    _ => Expression::FuncCall { name, args },
+                }
+            } else {
+                Expression::FuncCall { name, args }
+            }
+        }
+        "full" => {
+            if let Some(arg) = args.first() {
+                match arg {
+                    Expression::Ident(s) => Expression::Full(s.clone()),
+                    _ => Expression::FuncCall { name, args },
+                }
+            } else {
+                Expression::FuncCall { name, args }
+            }
+        }
+        "empty" => {
+            if let Some(arg) = args.first() {
+                match arg {
+                    Expression::Ident(s) => Expression::Empty(s.clone()),
+                    _ => Expression::FuncCall { name, args },
+                }
+            } else {
+                Expression::FuncCall { name, args }
+            }
+        }
+        "nfull" => {
+            if let Some(arg) = args.first() {
+                match arg {
+                    Expression::Ident(s) => Expression::NFull(s.clone()),
+                    _ => Expression::FuncCall { name, args },
+                }
+            } else {
+                Expression::FuncCall { name, args }
+            }
+        }
+        "nempty" => {
+            if let Some(arg) = args.first() {
+                match arg {
+                    Expression::Ident(s) => Expression::NEmpty(s.clone()),
+                    _ => Expression::FuncCall { name, args },
+                }
+            } else {
+                Expression::FuncCall { name, args }
+            }
+        }
+        "enabled" => {
+            if let Some(arg) = args.first() {
+                match arg {
+                    Expression::Ident(s) => Expression::Enabled(s.clone()),
+                    _ => Expression::FuncCall { name, args },
+                }
+            } else {
+                Expression::FuncCall { name, args }
+            }
+        }
+        "np_" => Expression::NP_,
+        "pc_value" => {
+            if let Some(arg) = args.first() {
+                Expression::PcValue(Box::new(arg.clone()))
+            } else {
+                Expression::FuncCall { name, args }
+            }
+        }
+        "eval" => {
+            if let Some(arg) = args.first() {
+                Expression::Eval(Box::new(arg.clone()))
+            } else {
+                Expression::FuncCall { name, args }
+            }
+        }
+        "get_priority" => {
+            if let Some(arg) = args.first() {
+                Expression::GetPriority(Box::new(arg.clone()))
+            } else {
+                Expression::FuncCall { name, args }
+            }
+        }
+        "set_priority" => {
+            if args.len() >= 2 {
+                Expression::SetPriority {
+                    pid: Box::new(args[0].clone()),
+                    value: Box::new(args[1].clone()),
+                }
+            } else {
+                Expression::FuncCall { name, args }
+            }
+        }
         _ => Expression::FuncCall { name, args },
     };
     Ok((input, result))
@@ -167,6 +253,14 @@ pub(crate) fn primary(input: Input) -> IResult<Input, Expression> {
         }),
         // Function call: ident(args) — must come before array-access to consume `(` first
         func_call,
+        // Record access: ident.field
+        map(
+            pair(ident, preceded(ws_char('.'), ident)),
+            |(name, field)| Expression::RecordAccess {
+                record: Box::new(Expression::Ident(name)),
+                field,
+            },
+        ),
         // Array access or plain ident: ident[expr] or ident
         map(
             pair(ident, opt(delimited(ws_char('['), expr, ws_char(']')))),

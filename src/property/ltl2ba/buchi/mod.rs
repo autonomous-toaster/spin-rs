@@ -205,11 +205,17 @@ fn always_to_buchi(atom: &LtlFormula) -> BuchiAutomaton {
         initial: 0,
         accepting: vec![0].into_iter().collect(),
         transitions: vec![
-            // s0: accepting, loop on p
-            vec![BuchiTransition {
-                to: 0,
-                conditions: vec![(atom_str.clone(), true)],
-            }],
+            // s0: accepting, loop on p; transition to sink on !p
+            vec![
+                BuchiTransition {
+                    to: 0,
+                    conditions: vec![(atom_str.clone(), true)],
+                },
+                BuchiTransition {
+                    to: 1,
+                    conditions: vec![(atom_str.clone(), false)],
+                },
+            ],
             // s1: rejecting sink
             vec![BuchiTransition {
                 to: 1,

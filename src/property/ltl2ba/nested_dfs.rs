@@ -13,17 +13,20 @@ use crate::property::ltl2ba::product::{ProductState, ProductTransition};
 /// Implements the nested DFS algorithm for detecting accepting cycles
 /// in the product space (model × Büchi automaton).
 ///
-/// **Algorithm**:
+/// **Algorithm** (standard Spin nested DFS):
 /// 1. Outer DFS (dfs1) explores the product space
-/// 2. When reaching an accepting state, inner DFS (dfs2) searches for a cycle
-/// 3. If inner DFS finds a state already visited, an accepting cycle exists
+/// 2. When backtracking from an accepting state, inner DFS (dfs2) starts
+/// 3. Inner DFS searches for a cycle back to the accepting state
+/// 4. If inner DFS finds a state already on its stack, an accepting cycle exists
 pub struct NestedDFS<S> {
     /// Outer DFS visited set
     visited1: HashSet<u64>,
     /// Inner DFS visited set
     visited2: HashSet<u64>,
-    /// Current path (for cycle detection)
-    stack: Vec<u64>,
+    /// Outer DFS stack (for cycle detection in dfs2 seed)
+    stack1: Vec<u64>,
+    /// Inner DFS stack (for cycle detection)
+    stack2: Vec<u64>,
     /// Transition labels (for error trail)
     trail: Vec<String>,
     /// Maximum search depth (optional)
@@ -41,7 +44,8 @@ where
         Self {
             visited1: HashSet::new(),
             visited2: HashSet::new(),
-            stack: Vec::new(),
+            stack1: Vec::new(),
+            stack2: Vec::new(),
             trail: Vec::new(),
             max_depth: None,
             _phantom: PhantomData,
@@ -76,7 +80,8 @@ where
         None
     }
 
-    /// Outer DFS: explore product space, detect accepting states.
+    /// Outer DFS: explore product space.
+    /// When backtracking from an accepting state, start inner DFS (dfs2).
     fn dfs1<M>(
         &mut self,
         model: &M,
@@ -96,7 +101,7 @@ where
         }
 
         self.visited1.insert(hash);
-        self.stack.push(hash);
+        self.stack1.push(hash);
 
         // Get model transitions
         let model_transitions = model.transitions(&product.model_state);
@@ -122,19 +127,23 @@ where
                     return Some(violation);
                 }
                 self.trail.pop();
-            } else if prod_trans.is_accepting && self.visited2.contains(&next_hash) {
-                // Accepting state already in inner DFS visited - start inner DFS
-                if let Some(violation) = self.dfs2(model, buchi, prod_trans.next, next_hash) {
-                    return Some(violation);
-                }
             }
         }
 
-        self.stack.pop();
+        // After exploring all successors, if this is an accepting state,
+        // start inner DFS to search for a cycle
+        if buchi.is_accepting(product.buchi_state)
+            && let Some(violation) = self.dfs2(model, buchi, product, hash)
+        {
+            return Some(violation);
+        }
+
+        self.stack1.pop();
         None
     }
 
     /// Inner DFS: search for cycle back to accepting state.
+    /// Uses stack2 to detect cycles (a state already on stack2 means a cycle).
     fn dfs2<M>(
         &mut self,
         model: &M,
@@ -146,15 +155,11 @@ where
         M: Model<State = S>,
     {
         if self.visited2.contains(&hash) {
-            // Cycle detected!
-            return Some(Violation {
-                property_name: "LTL".to_string(),
-                trail: self.trail.clone(),
-                description: "Accepting cycle detected (liveness violation)".to_string(),
-            });
+            return None; // Already explored by inner DFS
         }
 
         self.visited2.insert(hash);
+        self.stack2.push(hash);
 
         // Get model transitions
         let model_transitions = model.transitions(&product.model_state);
@@ -171,6 +176,15 @@ where
         for prod_trans in product_transitions {
             let next_hash = prod_trans.next.cached_hash();
 
+            if self.stack2.contains(&next_hash) {
+                // Cycle detected: state already on inner DFS stack
+                return Some(Violation {
+                    property_name: "LTL".to_string(),
+                    trail: self.trail.clone(),
+                    description: "Accepting cycle detected (liveness violation)".to_string(),
+                });
+            }
+
             if !self.visited2.contains(&next_hash)
                 && let Some(violation) = self.dfs2(model, buchi, prod_trans.next, next_hash)
             {
@@ -178,6 +192,7 @@ where
             }
         }
 
+        self.stack2.pop();
         None
     }
 
@@ -216,7 +231,7 @@ mod tests {
         let dfs: NestedDFS<i32> = NestedDFS::new();
         assert!(dfs.visited1.is_empty());
         assert!(dfs.visited2.is_empty());
-        assert!(dfs.stack.is_empty());
+        assert!(dfs.stack1.is_empty());
         assert!(dfs.trail.is_empty());
         assert!(dfs.max_depth.is_none());
     }
@@ -248,7 +263,7 @@ mod tests {
                 ],
                 1 => vec![crate::engine::checker::Transition {
                     label: "c".into(),
-                    next: 0,
+                    next: 3,
                 }],
                 _ => vec![],
             }

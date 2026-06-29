@@ -151,3 +151,51 @@ fn test_generate_recv_in_guard() {
     let lua = generate(&model);
     assert!(lua.source.contains("recv") || lua.source.contains("chan"));
 }
+
+#[test]
+fn test_generate_goto_label() {
+    // Goto within a single proctype produces correct state sequence
+    let source = "active proctype P() {\n    goto target;\n    x = 1;\n    target: x = 2;\n}";
+    let model = parser::parse(source).unwrap();
+    let lua = generate(&model);
+    // Should emit goto transition with _pc set
+    assert!(lua.source.contains("goto:target"));
+    // Should emit label transition with _pc check
+    assert!(lua.source.contains("label:target"));
+    // Should have _pc_P variable
+    assert!(lua.source.contains("_pc_P"));
+}
+
+#[test]
+fn test_generate_break_in_do() {
+    // Break exits do-loop correctly
+    let source = "active proctype P() {\n    do\n    :: (x > 0) -> x = x - 1\n    :: else -> break\n    od\n    y = 1;\n}";
+    let model = parser::parse(source).unwrap();
+    let lua = generate(&model);
+    // Should have _done_P for break (break inside do guard sets _done_P)
+    assert!(lua.source.contains("_done_P"));
+    // Should have step-counter for do-loop body
+    assert!(lua.source.contains("_step_P"));
+}
+
+#[test]
+fn test_generate_standalone_break() {
+    // Standalone break statement (not inside guard body)
+    let source = "active proctype P() {\n    break;\n}";
+    let model = parser::parse(source).unwrap();
+    let lua = generate(&model);
+    // Should have break transition with _pc
+    assert!(lua.source.contains("break:exit"));
+}
+
+#[test]
+fn test_generate_label_reachable() {
+    // Label as goto target is reachable
+    let source = "active proctype P() {\n    goto start;\n    start: x = 1;\n}";
+    let model = parser::parse(source).unwrap();
+    let lua = generate(&model);
+    // Should have label transition
+    assert!(lua.source.contains("label:start"));
+    // Should have goto transition
+    assert!(lua.source.contains("goto:start"));
+}
