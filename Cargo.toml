@@ -40,8 +40,3 @@ bench = []
 
 [package.metadata.cargo-machete]
 ignored = ["rayon"]
-
-
-[[bin]]
-name = "test_chan"
-path = "/tmp/test_chan.rs"

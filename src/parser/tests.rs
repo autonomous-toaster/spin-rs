@@ -357,3 +357,31 @@ fn test_chan_array_indexed_recv() {
         _ => panic!("Expected Proctype"),
     }
 }
+
+#[test]
+fn test_promela_for_loop() {
+    // Simple for loop without complex body
+    let source = r#"
+init { byte i; for (i in 0 .. 4) { i = i + 1 } }
+"#;
+    let model = match parse(source) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("DEBUG parse error: {}", e);
+            panic!("parse failed");
+        }
+    };
+    eprintln!("DEBUG: {} declarations", model.declarations.len());
+    for d in &model.declarations {
+        eprintln!("DEBUG: {:?}", d);
+    }
+    assert_eq!(model.declarations.len(), 1);
+    match &model.declarations[0] {
+        TopLevel::Init(init) => {
+            assert!(init.body.len() >= 2);
+            let has_atomic = init.body.iter().any(|s| matches!(s, Stmt::Atomic(_, _)));
+            assert!(has_atomic, "For loop should be expanded into Atomic block");
+        }
+        other => panic!("Expected Init, got {:?}", other),
+    }
+}

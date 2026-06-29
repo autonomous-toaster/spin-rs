@@ -175,9 +175,10 @@ impl LuaGenerator {
             let has_inline_calls: bool = guards.iter().any(|g| {
                 g.body.iter().any(|s| {
                     if let Stmt::Expr(e, _) = s
-                        && let Expression::FuncCall { name, .. } = e {
-                            return self.inlines.contains_key(name.as_str());
-                        }
+                        && let Expression::FuncCall { name, .. } = e
+                    {
+                        return self.inlines.contains_key(name.as_str());
+                    }
                     false
                 })
             });
@@ -234,9 +235,10 @@ impl LuaGenerator {
                     Stmt::Expr(e, _) => {
                         // Skip inline function calls — these are action statements
                         if let Expression::FuncCall { name, .. } = e
-                            && self.inlines.contains_key(name.as_str()) {
-                                return None;
-                            }
+                            && self.inlines.contains_key(name.as_str())
+                        {
+                            return None;
+                        }
                         Some(self.expr_to_lua(e))
                     }
                     _ => None,
@@ -309,19 +311,25 @@ impl LuaGenerator {
             // Inline calls: emit_inline_body produces the full transition
             if let Stmt::Expr(e, _) = s
                 && let Expression::FuncCall { name, args } = e
-                    && let Some(inline_def) = self.inlines.get(name.as_str()).cloned() {
-                        self.emit(&format!("    -- {} body step {} (inline: {})", kind, step, name));
-                        let subs: Vec<(String, String)> = inline_def
-                            .parameters.iter().zip(args.iter())
-                            .map(|(p, a)| (p.clone(), self.expr_to_lua(a)))
-                            .collect();
-                        self.emit("    table.insert(transitions, {");
-                        self.indent += 1;
-                        self.emit_inline_body(&inline_def, &subs, step_var.as_str(), *step, next);
-                        self.indent -= 1;
-                        self.emit("    })");
-                        continue;
-                    }
+                && let Some(inline_def) = self.inlines.get(name.as_str()).cloned()
+            {
+                self.emit(&format!(
+                    "    -- {} body step {} (inline: {})",
+                    kind, step, name
+                ));
+                let subs: Vec<(String, String)> = inline_def
+                    .parameters
+                    .iter()
+                    .zip(args.iter())
+                    .map(|(p, a)| (p.clone(), self.expr_to_lua(a)))
+                    .collect();
+                self.emit("    table.insert(transitions, {");
+                self.indent += 1;
+                self.emit_inline_body(&inline_def, &subs, step_var.as_str(), *step, next);
+                self.indent -= 1;
+                self.emit("    })");
+                continue;
+            }
 
             self.emit(&format!("    -- {} body step {}", kind, step));
             self.emit("    table.insert(transitions, {");
@@ -414,31 +422,22 @@ impl LuaGenerator {
                         ));
                     }
                 }
-                Stmt::Expr(e, _) => {
-                    if let Expression::FuncCall { name, args } = e {
-                        if let Some(inline_def) = self.inlines.get(name.as_str()).cloned() {
-                            self.emit(&format!("    -- inline {} expansion (guard body)", name));
-                            let subs: Vec<(String, String)> = inline_def
-                                .parameters
-                                .iter()
-                                .zip(args.iter())
-                                .map(|(p, a)| (p.clone(), self.expr_to_lua(a)))
-                                .collect();
-                            // Emit inline body as separate transitions with step counter
-                            // For atomic inline bodies, emit on separate fn
-                            self.emit_inline_body(
-                                &inline_def,
-                                &subs,
-                                step_var.as_str(),
-                                *step,
-                                next,
-                            );
-                        } else {
-                            self.emit(&format!(
-                                "    effect = function(s) s.{} = {} end,",
-                                step_var, next
-                            ));
-                        }
+                Stmt::Expr(Expression::FuncCall { name, args }, _) => {
+                    if let Some(inline_def) = self.inlines.get(name.as_str()).cloned() {
+                        self.emit(&format!("    -- inline {} expansion (guard body)", name));
+                        let subs: Vec<(String, String)> = inline_def
+                            .parameters
+                            .iter()
+                            .zip(args.iter())
+                            .map(|(p, a)| (p.clone(), self.expr_to_lua(a)))
+                            .collect();
+                        self.emit_inline_body(
+                            &inline_def,
+                            &subs,
+                            step_var.as_str(),
+                            *step,
+                            next,
+                        );
                     } else {
                         self.emit(&format!(
                             "    effect = function(s) s.{} = {} end,",
@@ -530,10 +529,7 @@ impl LuaGenerator {
                         step_var, current_step, additional_guard
                     ));
                     self.emit(&format!("    effect = function(s) {} end,", effect_str));
-                    self.emit(&format!(
-                        "    label = \"inline:{}\",",
-                        inline_def.name
-                    ));
+                    self.emit(&format!("    label = \"inline:{}\",", inline_def.name));
                 }
                 _ => {
                     // Non-atomic inline statements handled by emit_inline_stmt_with_subs in stmts.rs

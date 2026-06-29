@@ -1,12 +1,12 @@
 //! Top-level definition parsers.
 
 use nom::{
+    IResult,
     branch::alt,
     character::complete::char,
     combinator::{map, opt},
     multi::{many0, separated_list0, separated_list1},
     sequence::{delimited, pair, preceded},
-    IResult,
 };
 
 use super::Input;

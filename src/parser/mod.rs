@@ -171,17 +171,25 @@ fn guard_body(input: Input) -> IResult<Input, Guard> {
                 match chars.next() {
                     Some('[') => depth += 1,
                     Some(']') => depth -= 1,
-                    Some(_) => {},
+                    Some(_) => {}
                     None => break,
                 }
             }
             while let Some(&ch) = chars.peek() {
-                if ch.is_whitespace() { chars.next(); } else { break; }
+                if ch.is_whitespace() {
+                    chars.next();
+                } else {
+                    break;
+                }
             }
             matches!(chars.peek(), Some('=') | Some('!') | Some('?'))
         } else if has_ident {
             while let Some(&ch) = chars.peek() {
-                if ch.is_whitespace() { chars.next(); } else { break; }
+                if ch.is_whitespace() {
+                    chars.next();
+                } else {
+                    break;
+                }
             }
             matches!(chars.peek(), Some('=') | Some('!') | Some('?'))
         } else {
@@ -379,6 +387,37 @@ fn run_stmt(input: Input) -> IResult<Input, Stmt> {
 fn for_stmt(input: Input) -> IResult<Input, Stmt> {
     let (input, _) = keyword("for")(input)?;
     let (input, _) = ws_char('(')(input)?;
+
+    // Try Promela-style first, then C-style
+    alt((for_promela_style, for_c_style))(input)
+}
+
+/// Parse Promela-style: for (var in start .. end) { body } and expand at parse time.
+fn for_promela_style(input: Input) -> IResult<Input, Stmt> {
+    let (input, var_name) = ident(input)?;
+    let (input, _) = symbol("in")(input)?;
+    let (input, start_val) = int_literal(input)?;
+    let (input, _) = symbol("..")(input)?;
+    let (input, end_val) = int_literal(input)?;
+    let (input, _) = ws_char(')')(input)?;
+    let (input, body) = delimited(ws_char('{'), many0(stmt), ws_char('}'))(input)?;
+    // Expand at parse time: i = start; body; i = start+1; body; ...; i = end; body;
+    let mut expanded = Vec::new();
+    for val in start_val..=end_val {
+        let assign = Stmt::Assignment {
+            target: var_name.clone(),
+            index: None,
+            value: Box::new(Expression::IntLit(val)),
+            line: 0,
+        };
+        expanded.push(assign);
+        expanded.extend(body.clone());
+    }
+    Ok((input, Stmt::Atomic(expanded, 0)))
+}
+
+/// Parse C-style: for (init; condition; update) { body }
+fn for_c_style(input: Input) -> IResult<Input, Stmt> {
     let (input, init) = var_decl_stmt(input)?;
     let (input, _) = symbol(";")(input)?;
     let (input, condition) = expr(input)?;

@@ -206,8 +206,8 @@ impl std::fmt::Display for LtlFormula {
 }
 
 /// Property checker for LTL and safety properties.
-pub struct PropertyChecker<M: Model> {
-    model: M,
+pub struct PropertyChecker<'a, M: Model> {
+    model: &'a M,
     property_name: String,
     formula: Option<LtlFormula>,
 }
@@ -253,9 +253,9 @@ fn convert_to_ltl2ba_formula(formula: &LtlFormula) -> crate::property::ltl2ba::f
     }
 }
 
-impl<M: Model> PropertyChecker<M> {
+impl<'a, M: Model> PropertyChecker<'a, M> {
     /// Create a property checker for an LTL formula.
-    pub fn new_ltl(model: M, formula: LtlFormula, name: &str) -> Self {
+    pub fn new_ltl(model: &'a M, formula: LtlFormula, name: &str) -> Self {
         Self {
             model,
             property_name: name.to_string(),
@@ -264,7 +264,7 @@ impl<M: Model> PropertyChecker<M> {
     }
 
     /// Create a property checker for safety properties (assertions).
-    pub fn new_safety(model: M, name: &str) -> Self {
+    pub fn new_safety(model: &'a M, name: &str) -> Self {
         Self {
             model,
             property_name: name.to_string(),
@@ -310,7 +310,7 @@ impl<M: Model> PropertyChecker<M> {
             let init_product = ProductState::new(init_state.clone(), 0, init_hash);
 
             let mut dfs = NestedDFS::new();
-            if let Some(violation) = dfs.check(&self.model, &buchi, init_product) {
+            if let Some(violation) = dfs.check::<M>(self.model, &buchi, init_product) {
                 violations.push(violation);
                 break; // Found a violation, stop searching
             }
@@ -407,7 +407,7 @@ pub fn verify_ltl(
 
     let formula = LtlFormula::parse(ltl_formula)?;
     let model = LuaModel::from_source(source)?;
-    let checker = PropertyChecker::new_ltl(model, formula, property_name);
+    let checker = PropertyChecker::new_ltl(&model, formula, property_name);
     checker.check_liveness()
 }
 

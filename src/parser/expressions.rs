@@ -1,17 +1,17 @@
 //! Expression parsers: arithmetic, comparison, logical, function calls.
 
 use nom::{
+    IResult,
     branch::alt,
     combinator::{map, opt},
     multi::separated_list0,
     sequence::{delimited, pair, preceded},
-    IResult,
 };
 
+use super::Input;
 use super::ast::*;
 use super::helpers::*;
 use super::literals::*;
-use super::Input;
 
 // ─── Expressions ────────────────────────────────────────────────
 pub(crate) fn expr(input: Input) -> IResult<Input, Expression> {

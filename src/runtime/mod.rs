@@ -528,6 +528,14 @@ impl Model for LuaModel {
         }
         None
     }
+
+    fn ltl_formulas(&self) -> &[crate::parser::ast::LtlFormula] {
+        &self.ltl_formulas
+    }
+
+    fn state_to_string(&self, state: &Self::State) -> Option<String> {
+        Some(state.0.clone())
+    }
 }
 
 // ─── Parsing helpers ────────────────────────────────────────────

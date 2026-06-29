@@ -1,5 +1,5 @@
-use super::default_value;
 use super::LuaGenerator;
+use super::default_value;
 use crate::parser::ast::*;
 
 impl LuaGenerator {

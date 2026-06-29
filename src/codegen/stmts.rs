@@ -372,17 +372,18 @@ impl LuaGenerator {
             Stmt::Skip(_) => {}
             Stmt::Expr(e, _) => {
                 if let Expression::FuncCall { name, args } = e
-                    && let Some(inline_def) = self.inlines.get(name.as_str()).cloned() {
-                        let inner_subs: Vec<(String, String)> = inline_def
-                            .parameters
-                            .iter()
-                            .zip(args.iter())
-                            .map(|(p, a)| (p.clone(), self.substitute_expr(a, subs)))
-                            .collect();
-                        for s in &inline_def.body {
-                            self.emit_inline_stmt_with_subs(s, &inner_subs, depth + 1);
-                        }
+                    && let Some(inline_def) = self.inlines.get(name.as_str()).cloned()
+                {
+                    let inner_subs: Vec<(String, String)> = inline_def
+                        .parameters
+                        .iter()
+                        .zip(args.iter())
+                        .map(|(p, a)| (p.clone(), self.substitute_expr(a, subs)))
+                        .collect();
+                    for s in &inline_def.body {
+                        self.emit_inline_stmt_with_subs(s, &inner_subs, depth + 1);
                     }
+                }
             }
             Stmt::If(guards) => {
                 if let Some(guard) = guards.first() {
