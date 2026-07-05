@@ -155,6 +155,91 @@ impl<S: Clone + Hash + Eq + Send> StateStore<S> for CollapseStore<S> {
     }
 }
 
+/// Hash-compact storage: stores 64-bit hashes with an LRU cache for collision detection.
+///
+/// On collision (same hash, different state), falls back to exact storage for that state.
+pub struct HashCompactStore<S> {
+    /// Hash table: hash -> (state_count, fallback_to_exact)
+    hash_table: HashMap<u64, (u32, bool)>,
+    /// LRU cache of recent full states for collision detection
+    lru_cache: std::collections::VecDeque<(u64, S)>,
+    /// Maximum size of the LRU cache
+    lru_max_size: usize,
+    /// Fallback exact store for states that had collisions
+    fallback: ExactStore<S>,
+    /// Total count of stored states
+    count: usize,
+}
+
+impl<S: Clone + Hash + Eq + Send> HashCompactStore<S> {
+    /// Create a new hash-compact store with the given LRU cache size.
+    pub fn new(lru_size: usize) -> Self {
+        Self {
+            hash_table: HashMap::new(),
+            lru_cache: std::collections::VecDeque::with_capacity(lru_size),
+            lru_max_size: lru_size,
+            fallback: ExactStore::new(),
+            count: 0,
+        }
+    }
+
+    /// Check if a state matches a cached entry (collision detection).
+    fn check_cache(&self, hash: u64, state: &S) -> Option<bool> {
+        for (cached_hash, cached_state) in &self.lru_cache {
+            if *cached_hash == hash && cached_state == state {
+                return Some(true);
+            }
+        }
+        None
+    }
+
+    /// Add a state to the LRU cache.
+    fn add_to_cache(&mut self, hash: u64, state: &S) {
+        if self.lru_cache.len() >= self.lru_max_size {
+            self.lru_cache.pop_front();
+        }
+        self.lru_cache.push_back((hash, state.clone()));
+    }
+}
+
+impl<S: Clone + Hash + Eq + Send> StateStore<S> for HashCompactStore<S> {
+    fn insert(&mut self, hash: u64, state: &S) -> bool {
+        if let Some((count, fallback)) = self.hash_table.get(&hash) {
+            if *fallback {
+                return self.fallback.insert(hash, state);
+            }
+
+            if let Some(found) = self.check_cache(hash, state)
+                && found {
+                    return false;
+                }
+
+            // Hash collision detected: same hash, different state
+            self.hash_table.insert(hash, (*count, true));
+            let cached_states: Vec<S> = self.lru_cache.iter()
+                .filter(|(h, _)| *h == hash)
+                .map(|(_, s)| s.clone())
+                .collect();
+            for s in cached_states {
+                self.fallback.insert(hash, &s);
+            }
+            self.fallback.insert(hash, state);
+            self.count += 1;
+            return true;
+        }
+
+        // New hash — store it
+        self.hash_table.insert(hash, (1, false));
+        self.add_to_cache(hash, state);
+        self.count += 1;
+        true
+    }
+
+    fn len(&self) -> usize {
+        self.count
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,5 +267,56 @@ mod tests {
         let store: ExactStore<String> = ExactStore::new();
         assert!(store.is_empty());
         assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn test_hash_compact_store_basic() {
+        let mut store = HashCompactStore::new(16);
+        assert!(store.insert(1, &"state_a".to_string()));
+        assert!(!store.insert(1, &"state_a".to_string()));
+        assert!(store.insert(2, &"state_b".to_string()));
+        assert_eq!(store.len(), 2);
+    }
+
+    #[test]
+    fn test_hash_compact_collision_fallback() {
+        let mut store = HashCompactStore::new(16);
+        // Same hash, different states -> collision -> fallback to exact
+        assert!(store.insert(42, &"state_a".to_string()));
+        assert!(store.insert(42, &"state_b".to_string()));
+        // After collision, both should be stored
+        assert!(!store.insert(42, &"state_a".to_string()));
+        assert!(!store.insert(42, &"state_b".to_string()));
+        assert_eq!(store.len(), 2);
+    }
+
+    #[test]
+    fn test_hash_compact_matches_exact() {
+        let mut exact = ExactStore::new();
+        let mut hc = HashCompactStore::new(1024);
+
+        let states = vec!["a", "b", "c", "d", "e"];
+        for (i, s) in states.iter().enumerate() {
+            let hash = i as u64;
+            assert_eq!(exact.insert(hash, &s.to_string()), hc.insert(hash, &s.to_string()));
+        }
+
+        // Re-insert all (should be duplicates)
+        for (i, s) in states.iter().enumerate() {
+            let hash = i as u64;
+            assert_eq!(exact.insert(hash, &s.to_string()), hc.insert(hash, &s.to_string()));
+        }
+
+        assert_eq!(exact.len(), hc.len());
+    }
+
+    #[test]
+    fn test_hash_compact_lru_eviction() {
+        let mut store = HashCompactStore::new(4); // Small LRU cache
+        for i in 0..10u64 {
+            assert!(store.insert(i, &format!("state_{}", i)));
+        }
+        // All 10 states should be stored (LRU only affects collision detection, not storage)
+        assert_eq!(store.len(), 10);
     }
 }

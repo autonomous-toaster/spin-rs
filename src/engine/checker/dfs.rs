@@ -1,4 +1,6 @@
 use super::*;
+use crate::engine::fairness::{FairnessMode, FairnessTracker};
+use crate::engine::storage::HashCompactStore;
 
 impl<M: Model> Checker<M> {
     pub fn check_dfs(&self) -> CheckResult {
@@ -17,6 +19,10 @@ impl<M: Model> Checker<M> {
         let mut trail: Vec<(String, usize)> = Vec::new(); // (transition_label, parent_index)
         let mut transitions_count = 0;
         let mut violations = Vec::new();
+
+        // Fairness tracking
+        let mut fairness = FairnessTracker::new(self.config.fairness_mode);
+        let mut fairness_check_counter: usize = 0;
 
         for s in init_states {
             let h = self.model.hash(&s);
@@ -82,12 +88,49 @@ impl<M: Model> Checker<M> {
             let trans = self.model.transitions(&state);
             transitions_count += trans.len();
 
+            // Record enabled transitions for fairness tracking
+            if self.config.fairness_mode != FairnessMode::None {
+                let labels: Vec<String> = trans.iter().map(|t| t.label.clone()).collect();
+                fairness.record_enabled(&labels);
+            }
+
             for t in trans {
+                // Record fired transition for fairness
+                if self.config.fairness_mode != FairnessMode::None {
+                    fairness.record_fired(&t.label);
+                }
+
                 let h = self.model.hash(&t.next);
                 if storage.insert(h, &t.next) {
                     let idx = trail.len();
                     trail.push((t.label, state_idx));
                     stack.push((t.next, depth + 1, idx));
+                }
+            }
+
+            // Periodic fairness check (every 1000 states)
+            if self.config.fairness_mode == FairnessMode::Strong {
+                fairness_check_counter += 1;
+                if fairness_check_counter >= 1000 {
+                    fairness_check_counter = 0;
+                    let prioritized = fairness.get_prioritized_transitions();
+                    for label in &prioritized {
+                        let enabled = fairness.enabled_count(label);
+                        let fired = fairness.fired_count(label);
+                        if enabled > 10 && fired == 0 {
+                            violations.push(Violation {
+                                property_name: "strong_fairness".to_string(),
+                                trail: vec![],
+                                description: format!(
+                                    "Strong fairness violation: transition '{}' was enabled {} times but never taken",
+                                    label, enabled
+                                ),
+                            });
+                            if violations.len() >= 100 {
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -168,6 +211,10 @@ impl<M: Model> Checker<M> {
         let mut violations = Vec::new();
         let mut max_depth = 0;
 
+        // Fairness tracking
+        let mut fairness = FairnessTracker::new(self.config.fairness_mode);
+        let mut fairness_check_counter: usize = 0;
+
         for s in init_states {
             let h = self.model.hash(&s);
             if storage.insert(h, &s) {
@@ -205,12 +252,49 @@ impl<M: Model> Checker<M> {
             let trans = self.model.transitions(&state);
             transitions_count += trans.len();
 
+            // Record enabled transitions for fairness tracking
+            if self.config.fairness_mode != FairnessMode::None {
+                let labels: Vec<String> = trans.iter().map(|t| t.label.clone()).collect();
+                fairness.record_enabled(&labels);
+            }
+
             for t in trans {
+                // Record fired transition for fairness
+                if self.config.fairness_mode != FairnessMode::None {
+                    fairness.record_fired(&t.label);
+                }
+
                 let h = self.model.hash(&t.next);
                 if storage.insert(h, &t.next) {
                     let idx = trail.len();
                     trail.push((t.label, state_idx));
                     queue.push_back((t.next, depth + 1, idx));
+                }
+            }
+
+            // Periodic fairness check (every 1000 states)
+            if self.config.fairness_mode == FairnessMode::Strong {
+                fairness_check_counter += 1;
+                if fairness_check_counter >= 1000 {
+                    fairness_check_counter = 0;
+                    let prioritized = fairness.get_prioritized_transitions();
+                    for label in &prioritized {
+                        let enabled = fairness.enabled_count(label);
+                        let fired = fairness.fired_count(label);
+                        if enabled > 10 && fired == 0 {
+                            violations.push(Violation {
+                                property_name: "strong_fairness".to_string(),
+                                trail: vec![],
+                                description: format!(
+                                    "Strong fairness violation: transition '{}' was enabled {} times but never taken",
+                                    label, enabled
+                                ),
+                            });
+                            if violations.len() >= 100 {
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -255,6 +339,9 @@ impl<M: Model> Checker<M> {
                 Box::new(BitstateStore::new((self.config.max_states / 8).max(1024)))
             }
             StorageMode::Collapse => Box::new(CollapseStore::<M::State>::new(4)),
+            StorageMode::HashCompact => {
+                Box::new(HashCompactStore::<M::State>::new(1024))
+            }
         }
     }
 

@@ -114,6 +114,16 @@ impl FairnessTracker {
     pub fn reset(&mut self) {
         self.continuously_enabled.clear();
     }
+
+    /// Get the enabled count for a transition.
+    pub fn enabled_count(&self, label: &str) -> u64 {
+        self.enabled_counts.get(label).copied().unwrap_or(0)
+    }
+
+    /// Get the fired count for a transition.
+    pub fn fired_count(&self, label: &str) -> u64 {
+        self.fired_counts.get(label).copied().unwrap_or(0)
+    }
 }
 
 #[cfg(test)]

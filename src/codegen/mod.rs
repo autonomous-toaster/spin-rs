@@ -24,6 +24,17 @@ pub fn generate(model: &PromelaModel) -> GeneratedLua {
     g.finish()
 }
 
+/// Compile a Promela model into Lua source code with optimizations.
+pub fn generate_with_opt(model: &PromelaModel, opt: &optimize::OptLevel) -> GeneratedLua {
+    let optimized = optimize::apply_to_model(model, opt);
+    let mut g = LuaGenerator::new();
+    g.emit_header();
+    g.emit_state_layout(&optimized);
+    g.emit_proctypes(&optimized);
+    g.emit_trailer();
+    g.finish()
+}
+
 pub(crate) struct LuaGenerator {
     pub(crate) source: String,
     pub(crate) indent: usize,
@@ -43,6 +54,7 @@ mod core;
 mod effects;
 mod effects_guards;
 mod expr_utils;
+pub mod optimize;
 mod stmts;
 mod stmts_atomic;
 

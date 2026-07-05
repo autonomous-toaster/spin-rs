@@ -153,12 +153,10 @@ fn test_cli_run_nonexistent_file() {
     let args = vec!["spin-rs".to_string(), "_.nonexistent_.pml".to_string()];
     let result = run(&args);
     assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("Cannot read model file")
-    );
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("Cannot read model file"));
 }
 
 #[test]

@@ -275,6 +275,7 @@ mod tests {
             search_mode: SearchMode::DepthFirst,
             por_enabled: false,
             check_assertions: true,
+            fairness_mode: crate::engine::fairness::FairnessMode::None,
         };
         let result = verify_with_config(promela, &config).unwrap();
         assert!(result.states_explored > 0);

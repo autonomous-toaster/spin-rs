@@ -86,6 +86,78 @@ impl ErrorTrail {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 
+    /// Load trail from Spin-compatible text format.
+    pub fn load_spin_format(path: &Path) -> std::io::Result<Self> {
+        let content = std::fs::read_to_string(path)?;
+        Self::parse_spin_format(&content)
+    }
+
+    /// Parse Spin-compatible trail text format.
+    ///
+    /// Format:
+    /// ```text
+    /// spin trail: <property_name>
+    /// description: <description>
+    /// states explored: <N>
+    /// depth reached: <N>
+    ///
+    /// error trail:
+    ///    1: <label> (state hash: <hex>)
+    ///    2: <label> (state hash: <hex>)
+    /// ```
+    pub fn parse_spin_format(content: &str) -> std::io::Result<Self> {
+        let mut property_name = String::from("unknown");
+        let mut description = String::new();
+        let mut states_explored: usize = 0;
+        let mut depth_reached: usize = 0;
+        let mut steps = Vec::new();
+
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            if let Some(rest) = line.strip_prefix("spin trail:") {
+                property_name = rest.trim().to_string();
+            } else if let Some(rest) = line.strip_prefix("description:") {
+                description = rest.trim().to_string();
+            } else if let Some(rest) = line.strip_prefix("states explored:") {
+                states_explored = rest.trim().parse().unwrap_or(0);
+            } else if let Some(rest) = line.strip_prefix("depth reached:") {
+                depth_reached = rest.trim().parse().unwrap_or(0);
+            } else if line.starts_with(|c: char| c.is_ascii_digit()) && line.contains("state hash:")
+            {
+                // Parse trail step: "   1: <label> (state hash: <hex>)"
+                // Find the first colon (after the step number)
+                if let Some(colon_pos) = line.find(':') {
+                    let after_colon = line[colon_pos + 1..].trim();
+                    if let Some(paren_pos) = after_colon.find(" (state hash:") {
+                        let label = after_colon[..paren_pos].trim().to_string();
+                        let hash_part = &after_colon[paren_pos + " (state hash:".len()..];
+                        let hash_str = hash_part.trim_end_matches(')').trim();
+                        let state_hash = u64::from_str_radix(hash_str, 16).unwrap_or(0);
+                        steps.push(TrailStep {
+                            label,
+                            state_hash,
+                            state_snapshot: None,
+                            source_loc: None,
+                        });
+                    }
+                }
+            }
+        }
+
+        let violation = Violation {
+            property_name: property_name.clone(),
+            trail: steps.iter().map(|s| s.label.clone()).collect(),
+            description,
+        };
+
+        let state_hashes: Vec<u64> = steps.iter().map(|s| s.state_hash).collect();
+        Ok(ErrorTrail::new(violation, state_hashes, states_explored, depth_reached))
+    }
+
     /// Save trail in Spin-compatible text format.
     pub fn save_spin_format(&self, path: &Path) -> std::io::Result<()> {
         let mut file = File::create(path)?;
@@ -195,6 +267,41 @@ impl<M: crate::engine::checker::Model> TrailReplayer<M> {
                     step.label,
                     states.len()
                 );
+            }
+        }
+
+        Ok(states)
+    }
+
+    /// Replay the trail with state inspection at each step.
+    /// Prints the state vector at each step to stdout.
+    pub fn replay_with_inspect(&self) -> anyhow::Result<Vec<M::State>> {
+        let states = self.replay()?;
+
+        println!("\n=== Trail Replay with State Inspection ===");
+        println!("Trail: {} ({} steps)", self.trail.property_name, self.trail.len());
+        println!("Description: {}", self.trail.description);
+
+        for (i, (step, state)) in self.trail.steps.iter().zip(states.iter()).enumerate() {
+            println!("\n--- Step {} ---", i + 1);
+            println!("Transition: {}", step.label);
+            println!("State hash: {:016x}", self.model.hash(state));
+
+            if let Some(state_str) = self.model.state_to_string(state) {
+                println!("State: {}", state_str);
+            }
+
+            if let Some(ref snapshot) = step.state_snapshot {
+                println!("Snapshot: {}", snapshot);
+            }
+        }
+
+        // Print final state
+        if let Some(final_state) = states.last() {
+            println!("\n--- Final State ---");
+            println!("State hash: {:016x}", self.model.hash(final_state));
+            if let Some(state_str) = self.model.state_to_string(final_state) {
+                println!("State: {}", state_str);
             }
         }
 
@@ -415,5 +522,126 @@ mod tests {
 
         assert_eq!(states.len(), 4);
         assert_eq!(states, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn test_trail_spin_format_roundtrip() {
+        let trail = sample_trail();
+        let temp_path = std::env::temp_dir().join("test_roundtrip.trail");
+
+        // Save in Spin format
+        trail.save_spin_format(&temp_path).unwrap();
+
+        // Load back
+        let loaded = ErrorTrail::load_spin_format(&temp_path).unwrap();
+
+        assert_eq!(loaded.len(), trail.len());
+        assert_eq!(loaded.property_name, trail.property_name);
+        assert_eq!(loaded.description, trail.description);
+        assert_eq!(loaded.states_explored, trail.states_explored);
+        assert_eq!(loaded.depth_reached, trail.depth_reached);
+
+        // Verify step labels match
+        for (orig, loaded) in trail.steps.iter().zip(loaded.steps.iter()) {
+            assert_eq!(orig.label, loaded.label);
+        }
+
+        std::fs::remove_file(temp_path).ok();
+    }
+
+    #[test]
+    fn test_trail_replay_with_inspect() {
+        use crate::engine::checker::{Model, Transition};
+
+        struct InspectModel;
+        impl Model for InspectModel {
+            type State = u8;
+            fn init_states(&self) -> Vec<u8> {
+                vec![0]
+            }
+            fn transitions(&self, state: &u8) -> Vec<Transition<u8>> {
+                match state {
+                    0 => vec![Transition {
+                        label: "init→1".into(),
+                        next: 1,
+                    }],
+                    1 => vec![Transition {
+                        label: "1→2".into(),
+                        next: 2,
+                    }],
+                    _ => vec![],
+                }
+            }
+            fn hash(&self, state: &u8) -> u64 {
+                *state as u64
+            }
+            fn state_to_string(&self, state: &u8) -> Option<String> {
+                Some(format!("x={}", state))
+            }
+        }
+
+        let model = InspectModel;
+        let violation = Violation {
+            property_name: "inspect_test".into(),
+            trail: vec!["init→1".into(), "1→2".into()],
+            description: "inspect test".into(),
+        };
+        let hashes = vec![0, 1, 2];
+        let trail = ErrorTrail::new(violation, hashes, 3, 2);
+
+        let replayer = TrailReplayer::new(model, trail);
+        let states = replayer.replay_with_inspect().unwrap();
+
+        assert_eq!(states.len(), 3);
+        assert_eq!(states, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn test_trail_replay_state_values_match_expected() {
+        use crate::engine::checker::{Model, Transition};
+
+        struct ValueModel;
+        impl Model for ValueModel {
+            type State = u8;
+            fn init_states(&self) -> Vec<u8> {
+                vec![10]
+            }
+            fn transitions(&self, state: &u8) -> Vec<Transition<u8>> {
+                match state {
+                    10 => vec![Transition {
+                        label: "inc".into(),
+                        next: 20,
+                    }],
+                    20 => vec![Transition {
+                        label: "inc".into(),
+                        next: 30,
+                    }],
+                    _ => vec![],
+                }
+            }
+            fn hash(&self, state: &u8) -> u64 {
+                *state as u64
+            }
+            fn state_to_string(&self, state: &u8) -> Option<String> {
+                Some(format!("x={}", state))
+            }
+        }
+
+        let model = ValueModel;
+        let violation = Violation {
+            property_name: "value_test".into(),
+            trail: vec!["inc".into(), "inc".into()],
+            description: "value test".into(),
+        };
+        let hashes = vec![10, 20, 30];
+        let trail = ErrorTrail::new(violation, hashes, 3, 2);
+
+        let replayer = TrailReplayer::new(model, trail);
+        let states = replayer.replay().unwrap();
+
+        // Verify state values match expected
+        assert_eq!(states, vec![10, 20, 30]);
+        assert_eq!(replayer.trail().steps[0].state_hash, 10);
+        assert_eq!(replayer.trail().steps[1].state_hash, 20);
     }
 }

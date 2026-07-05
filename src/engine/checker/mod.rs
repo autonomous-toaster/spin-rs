@@ -2,6 +2,7 @@
 
 pub mod dfs;
 
+use crate::engine::fairness::FairnessMode;
 use crate::engine::storage::{BitstateStore, CollapseStore, ExactStore, StateStore};
 use std::collections::VecDeque;
 
@@ -53,6 +54,8 @@ pub enum StorageMode {
     Bitstate,
     /// Use collapse compression (per-component canonical ordinals).
     Collapse,
+    /// Use hash-compact storage: 64-bit hashes with LRU cache for collision detection.
+    HashCompact,
 }
 
 /// Search mode.
@@ -71,6 +74,7 @@ pub struct CheckerConfig {
     pub search_mode: SearchMode,
     pub por_enabled: bool,
     pub check_assertions: bool,
+    pub fairness_mode: FairnessMode,
 }
 
 impl Default for CheckerConfig {
@@ -82,6 +86,7 @@ impl Default for CheckerConfig {
             search_mode: SearchMode::DepthFirst,
             por_enabled: false,
             check_assertions: true,
+            fairness_mode: FairnessMode::None,
         }
     }
 }
@@ -155,6 +160,11 @@ impl<M: Model> CheckerBuilder<M> {
 
     pub fn check_assertions(mut self, enabled: bool) -> Self {
         self.config.check_assertions = enabled;
+        self
+    }
+
+    pub fn fairness_mode(mut self, mode: FairnessMode) -> Self {
+        self.config.fairness_mode = mode;
         self
     }
 

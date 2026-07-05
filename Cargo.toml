@@ -20,13 +20,19 @@ clap = { version = "4", features = ["derive"] }
 fxhash = "0.2"
 
 # Lua runtime
-mlua = { version = "0.10", features = ["lua54", "vendored"], optional = true }
+mlua = { version = "0.10", features = [
+  "lua54",
+  "vendored",
+  "send",
+], optional = true }
 
 # Error handling
 anyhow = "1"
 
 # Parallel verification
 rayon = { version = "1", optional = true }
+crossbeam = { version = "0.8" }
+dashmap = { version = "6" }
 
 # Logging
 log = "0.4"

@@ -68,12 +68,52 @@ pub struct Cli {
     pub no_assertions: bool,
 
     /// Output trail file path
-    #[arg(long, default_value = "spin.trail")]
+    #[arg(short = 'k', long, default_value = "spin.trail")]
     pub trail_file: String,
 
     /// Verbose output
     #[arg(short, long)]
     pub verbose: bool,
+
+    /// Interactive simulation mode
+    #[arg(short = 'i', long)]
+    pub interactive: bool,
+
+    /// Inspect state during trail replay
+    #[arg(long)]
+    pub inspect: bool,
+
+    /// Replay a trail file (Spin-compatible format)
+    #[arg(short = 't', long)]
+    pub trail: bool,
+
+    /// Swarm verification: N workers, M iterations (e.g. --swarm 4,1)
+    #[arg(long)]
+    pub swarm: Option<String>,
+
+    /// Parallel BFS with N threads (e.g. --bfspar 4)
+    #[arg(long)]
+    pub bfspar: Option<usize>,
+
+    /// Use hash-compact storage (memory-efficient, 64-bit hashes)
+    #[arg(long)]
+    pub hc: bool,
+
+    /// Enable strong fairness constraints for liveness verification
+    #[arg(long)]
+    pub strong_fairness: bool,
+
+    /// Optimization level 2: dead variable elimination
+    #[arg(short = 'o', long = "opt2")]
+    pub opt2: bool,
+
+    /// Optimization level 3: statement merging
+    #[arg(long = "opt3")]
+    pub opt3: bool,
+
+    /// Optimization level 4: rendezvous optimization
+    #[arg(long = "opt4")]
+    pub opt4: bool,
 }
 
 /// Run the CLI with the given arguments.
@@ -89,21 +129,153 @@ pub fn run(args: &[String]) -> Result<(), anyhow::Error> {
         )
     })?;
 
+    if cli.interactive {
+        return handle_interactive_mode(&source);
+    }
+
     if cli.generate {
-        return handle_generate_mode(&source);
+        return handle_generate_mode(&cli, &source);
     }
 
     if let Some(ltl_args) = &cli.ltl_property {
         return handle_ltl_mode(&source, ltl_args);
     }
 
+    if cli.trail {
+        return handle_trail_replay_mode(&cli, &source);
+    }
+
+    if let Some(swarm_arg) = &cli.swarm {
+        return handle_swarm_mode(&cli, &source, swarm_arg);
+    }
+
+    if let Some(num_threads) = cli.bfspar {
+        return handle_parallel_bfs_mode(&cli, &source, num_threads);
+    }
+
     handle_verify_mode(&cli, &source)
 }
 
-fn handle_generate_mode(source: &str) -> Result<(), anyhow::Error> {
+fn handle_generate_mode(cli: &Cli, source: &str) -> Result<(), anyhow::Error> {
     let model = parser::parse(source)?;
+    let opt = build_opt_level(cli);
+    let model = if opt != codegen::optimize::OptLevel::none() {
+        codegen::optimize::apply_to_model(&model, &opt)
+    } else {
+        model
+    };
     let generated = codegen::generate(&model);
     println!("{}", generated.source);
+    Ok(())
+}
+
+fn handle_interactive_mode(source: &str) -> Result<(), anyhow::Error> {
+    let model = parser::parse(source)?;
+    let lua_model = runtime::LuaModel::from_model(&model)?;
+
+    let mut sim = crate::engine::interactive::InteractiveSimulator::new(lua_model);
+    sim.run_interactive();
+    Ok(())
+}
+
+fn handle_trail_replay_mode(cli: &Cli, source: &str) -> Result<(), anyhow::Error> {
+    let model = parser::parse(source)?;
+    let lua_model = runtime::LuaModel::from_model(&model)?;
+
+    let trail_path = std::path::PathBuf::from(&cli.trail_file);
+    if !trail_path.exists() {
+        anyhow::bail!("Trail file not found: {}", trail_path.display());
+    }
+
+    let trail = crate::trail::ErrorTrail::load_spin_format(&trail_path)?;
+    println!(
+        "Loaded trail: {} ({} steps)",
+        trail.property_name,
+        trail.len()
+    );
+
+    let replayer = crate::trail::TrailReplayer::new(lua_model, trail);
+
+    if cli.inspect {
+        replayer.replay_with_inspect()?;
+    } else {
+        let states = replayer.replay()?;
+        println!("Trail replay complete: {} states visited", states.len());
+    }
+
+    Ok(())
+}
+
+fn handle_swarm_mode(cli: &Cli, source: &str, swarm_arg: &str) -> Result<(), anyhow::Error> {
+    // Parse "N,M" format
+    let parts: Vec<&str> = swarm_arg.split(',').collect();
+    if parts.is_empty() || parts.len() > 2 {
+        anyhow::bail!("Invalid swarm format. Use --swarm N,M where N=workers, M=iterations");
+    }
+    let num_workers: usize = parts[0]
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Invalid worker count: {}", parts[0]))?;
+    let iterations_per_worker: usize = if parts.len() > 1 {
+        parts[1]
+            .parse()
+            .map_err(|_| anyhow::anyhow!("Invalid iteration count: {}", parts[1]))?
+    } else {
+        1
+    };
+
+    println!(
+        "Swarm verification: {} workers, {} iterations each",
+        num_workers, iterations_per_worker
+    );
+
+    let _model = parser::parse(source)?;
+    let source_clone = source.to_string();
+
+    let config = crate::engine::swarm::SwarmConfig {
+        num_workers,
+        iterations_per_worker,
+        base_max_states: cli.max_states,
+        base_max_depth: cli.max_depth,
+    };
+
+    let result = crate::engine::swarm::run_swarm(
+        move || {
+            let model = parser::parse(&source_clone).unwrap();
+            runtime::LuaModel::from_model(&model).unwrap()
+        },
+        &config,
+    );
+    print_result(&result);
+
+    Ok(())
+}
+
+fn handle_parallel_bfs_mode(
+    cli: &Cli,
+    source: &str,
+    num_threads: usize,
+) -> Result<(), anyhow::Error> {
+    println!("Parallel BFS: {} threads", num_threads);
+
+    let source_clone = source.to_string();
+
+    let config = crate::engine::parallel_bfs::ParallelBfsConfig {
+        num_threads,
+        max_states: cli.max_states,
+        max_depth: cli.max_depth,
+        check_assertions: !cli.no_assertions,
+        ..Default::default()
+    };
+
+    let result = crate::engine::parallel_bfs::run_parallel_bfs(
+        move || {
+            let model = parser::parse(&source_clone).unwrap();
+            runtime::LuaModel::from_model(&model).unwrap()
+        },
+        &config,
+    );
+    print_result(&result);
+
     Ok(())
 }
 
@@ -145,7 +317,17 @@ fn parse_storage_mode(storage: &str) -> StorageMode {
     match storage {
         "bitstate" => StorageMode::Bitstate,
         "collapse" => StorageMode::Collapse,
+        "hashcompact" | "hc" => StorageMode::HashCompact,
         _ => StorageMode::Exact,
+    }
+}
+
+fn build_opt_level(cli: &Cli) -> codegen::optimize::OptLevel {
+    codegen::optimize::OptLevel {
+        dataflow: cli.opt2 || cli.opt3 || cli.opt4,
+        dead_var_elim: cli.opt2,
+        stmt_merging: cli.opt3,
+        rendezvous: cli.opt4,
     }
 }
 
@@ -159,6 +341,18 @@ fn handle_verify_mode(cli: &Cli, source: &str) -> Result<(), anyhow::Error> {
     // Parse model
     let model = parser::parse(source)?;
 
+    // Apply optimizations if requested
+    let opt = build_opt_level(cli);
+    let model = if opt != codegen::optimize::OptLevel::none() {
+        println!(
+            "Applying optimizations: dataflow={}, dve={}, merging={}, rendezvous={}",
+            opt.dataflow, opt.dead_var_elim, opt.stmt_merging, opt.rendezvous
+        );
+        codegen::optimize::apply_to_model(&model, &opt)
+    } else {
+        model
+    };
+
     // Generate Lua code
     let _generated = codegen::generate(&model);
 
@@ -167,7 +361,11 @@ fn handle_verify_mode(cli: &Cli, source: &str) -> Result<(), anyhow::Error> {
 
     // Configure checker
     let search_mode = parse_search_mode(&cli.search);
-    let storage_mode = parse_storage_mode(&cli.storage);
+    let storage_mode = if cli.hc {
+        StorageMode::HashCompact
+    } else {
+        parse_storage_mode(&cli.storage)
+    };
 
     let mut builder = CheckerBuilder::new()
         .model(lua_model)
@@ -179,6 +377,10 @@ fn handle_verify_mode(cli: &Cli, source: &str) -> Result<(), anyhow::Error> {
 
     if cli.por {
         builder = builder.por_enabled(true);
+    }
+
+    if cli.strong_fairness {
+        builder = builder.fairness_mode(crate::engine::fairness::FairnessMode::Strong);
     }
 
     let checker = builder.build();
