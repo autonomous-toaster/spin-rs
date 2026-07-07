@@ -11,8 +11,8 @@ impl<M: Model> Checker<M> {
             return self.empty_result(0.0);
         }
 
-        // Parse LTL formulas and identify []p invariants for fast-path checking
-        let invariants = self.parse_invariants();
+        // Parse LTL formulas into safety checks ([]expr where expr is propositional)
+        let safety_checks = self.parse_safety_formulas();
 
         let mut storage = self.make_storage();
         let mut stack: Vec<(M::State, usize, usize)> = Vec::new(); // (state, depth, parent_index)
@@ -57,25 +57,19 @@ impl<M: Model> Checker<M> {
                 continue;
             }
 
-            // Check []p invariants during DFS (fast path)
-            if !invariants.is_empty()
+            // Check safety properties ([]expr) during DFS
+            if !safety_checks.is_empty()
                 && let Some(state_str) = self.model.state_to_string(&state)
             {
-                for inv in &invariants {
-                    let var_val = extract_var_from_state(&state_str, &inv.var_name);
-                    let holds = if inv.expect_nonzero {
-                        var_val != 0
-                    } else {
-                        var_val == 0
-                    };
-                    if !holds {
+                for check in &safety_checks {
+                    if !evaluate_propositional(&check.formula, &state_str) {
                         let state_trail = self.build_trail(&trail, state_idx);
                         violations.push(Violation {
-                            property_name: inv.prop_name.clone(),
+                            property_name: check.prop_name.clone(),
                             trail: state_trail,
                             description: format!(
-                                "[]p violation: '{}' is false in state ({} = {})",
-                                inv.prop_name, inv.var_name, var_val
+                                "Safety violation: '{}' is false in state {}",
+                                check.prop_name, state_str
                             ),
                         });
                         if violations.len() >= 100 {
@@ -157,7 +151,7 @@ impl<M: Model> Checker<M> {
     }
 
     /// Check LTL properties using PropertyChecker (nested DFS).
-    /// Skips []p formulas that were already checked as invariants during DFS.
+    /// Skips []expr formulas that were already checked as safety properties during DFS.
     fn check_ltl_properties(&self, result: &mut CheckResult) {
         let formulas = self.model.ltl_formulas();
         if formulas.is_empty() {
@@ -168,8 +162,8 @@ impl<M: Model> Checker<M> {
             let formula_str = ltl_ast.formula.trim();
             let prop_name = ltl_ast.name.as_deref().unwrap_or("ltl");
 
-            // Skip []p formulas — they were checked as invariants during DFS
-            if is_always_atom_formula(formula_str) {
+            // Skip formulas that were already checked as safety properties during DFS
+            if is_safety_formula(formula_str) {
                 continue;
             }
 
@@ -203,6 +197,9 @@ impl<M: Model> Checker<M> {
         if init_states.is_empty() {
             return self.empty_result(0.0);
         }
+
+        // Parse LTL formulas into safety checks ([]expr where expr is propositional)
+        let safety_checks = self.parse_safety_formulas();
 
         let mut storage = self.make_storage();
         let mut queue: VecDeque<(M::State, usize, usize)> = VecDeque::new(); // (state, depth, parent_index)
@@ -247,6 +244,28 @@ impl<M: Model> Checker<M> {
                     break;
                 }
                 continue;
+            }
+
+            // Check safety properties ([]expr) during BFS
+            if !safety_checks.is_empty()
+                && let Some(state_str) = self.model.state_to_string(&state)
+            {
+                for check in &safety_checks {
+                    if !evaluate_propositional(&check.formula, &state_str) {
+                        let state_trail = self.build_trail(&trail, state_idx);
+                        violations.push(Violation {
+                            property_name: check.prop_name.clone(),
+                            trail: state_trail,
+                            description: format!(
+                                "Safety violation: '{}' is false in state {}",
+                                check.prop_name, state_str
+                            ),
+                        });
+                        if violations.len() >= 100 {
+                            break;
+                        }
+                    }
+                }
             }
 
             let trans = self.model.transitions(&state);
@@ -365,72 +384,94 @@ impl<M: Model> Checker<M> {
         self.check_dfs()
     }
 
-    /// Parse LTL formulas and extract []p invariants for fast-path checking.
-    fn parse_invariants(&self) -> Vec<InvariantCheck> {
+    /// Parse LTL formulas into safety checks ([]expr where expr is propositional).
+    /// These are checked during DFS by evaluating expr against each state.
+    fn parse_safety_formulas(&self) -> Vec<SafetyCheck> {
         let formulas = self.model.ltl_formulas();
-        let mut invariants = Vec::new();
+        let mut checks = Vec::new();
 
         for ltl_ast in formulas {
             let formula_str = ltl_ast.formula.trim();
             let prop_name = ltl_ast.name.as_deref().unwrap_or("ltl").to_string();
 
-            // Try to parse as []p or []!p
-            if let Some(var_name) = parse_always_atom(formula_str) {
-                let (var_name, expect_nonzero) = if let Some(negated) = var_name.strip_prefix('!') {
-                    (negated.to_string(), false)
-                } else {
-                    (var_name, true)
-                };
-                invariants.push(InvariantCheck {
-                    prop_name,
-                    var_name,
-                    expect_nonzero,
-                });
+            // Parse the formula and check if it's []expr where expr is propositional
+            if let Ok(formula) = crate::property::LtlFormula::parse(formula_str) {
+                if let crate::property::LtlFormula::Always(inner) = &formula {
+                    if is_propositional(inner) {
+                        checks.push(SafetyCheck {
+                            prop_name,
+                            formula: *inner.clone(),
+                        });
+                    }
+                }
             }
         }
 
-        invariants
+        checks
     }
 }
 
-/// A []p invariant to check during DFS.
-struct InvariantCheck {
+/// A safety property to check during DFS: []expr where expr is propositional.
+struct SafetyCheck {
     /// Property name for error reporting.
     prop_name: String,
-    /// Variable name to check.
-    var_name: String,
-    /// If true, expect variable to be non-zero; if false, expect zero.
-    expect_nonzero: bool,
+    /// The propositional formula (inner of []).
+    formula: crate::property::LtlFormula,
 }
 
-/// Check if a formula string is `[]p` or `[]!p` where p is a simple atom.
-/// Returns the inner atom (possibly negated) if so, None otherwise.
-fn parse_always_atom(formula: &str) -> Option<String> {
-    let formula = formula.trim();
-    // Match []p or []!p
-    if let Some(rest) = formula.strip_prefix("[]") {
-        let rest = rest.trim();
-        if !rest.is_empty()
-            && !rest.contains(' ')
-            && !rest.contains('(')
-            && !rest.contains(')')
-            && !rest.contains('&')
-            && !rest.contains('|')
-            && !rest.contains('>')
-            && !rest.contains('U')
-            && !rest.contains('V')
-            && !rest.contains('<')
-            && !rest.contains('X')
-        {
-            return Some(rest.to_string());
+/// Check if an LTL formula is purely propositional (no temporal operators).
+fn is_propositional(formula: &crate::property::LtlFormula) -> bool {
+    match formula {
+        crate::property::LtlFormula::True | crate::property::LtlFormula::False => true,
+        crate::property::LtlFormula::Atom(_) => true,
+        crate::property::LtlFormula::Not(inner) => is_propositional(inner),
+        crate::property::LtlFormula::And(l, r)
+        | crate::property::LtlFormula::Or(l, r)
+        | crate::property::LtlFormula::Implies(l, r) => {
+            is_propositional(l) && is_propositional(r)
+        }
+        // Temporal operators
+        crate::property::LtlFormula::Always(_)
+        | crate::property::LtlFormula::Eventually(_)
+        | crate::property::LtlFormula::Next(_)
+        | crate::property::LtlFormula::Until(_, _)
+        | crate::property::LtlFormula::Release(_, _) => false,
+    }
+}
+
+/// Evaluate a propositional LTL formula against a state string.
+/// Returns true if the formula holds in the state.
+fn evaluate_propositional(formula: &crate::property::LtlFormula, state_str: &str) -> bool {
+    match formula {
+        crate::property::LtlFormula::True => true,
+        crate::property::LtlFormula::False => false,
+        crate::property::LtlFormula::Atom(name) => {
+            let val = extract_var_from_state(state_str, name);
+            val != 0
+        }
+        crate::property::LtlFormula::Not(inner) => !evaluate_propositional(inner, state_str),
+        crate::property::LtlFormula::And(l, r) => {
+            evaluate_propositional(l, state_str) && evaluate_propositional(r, state_str)
+        }
+        crate::property::LtlFormula::Or(l, r) => {
+            evaluate_propositional(l, state_str) || evaluate_propositional(r, state_str)
+        }
+        crate::property::LtlFormula::Implies(l, r) => {
+            !evaluate_propositional(l, state_str) || evaluate_propositional(r, state_str)
+        }
+        // Temporal operators inside []expr shouldn't reach here (filtered by is_propositional)
+        _ => true,
+    }
+}
+
+/// Check if a formula string is a safety formula ([]expr where expr is propositional).
+fn is_safety_formula(formula_str: &str) -> bool {
+    if let Ok(formula) = crate::property::LtlFormula::parse(formula_str) {
+        if let crate::property::LtlFormula::Always(inner) = &formula {
+            return is_propositional(inner);
         }
     }
-    None
-}
-
-/// Check if a formula string is `[]p` (always p) — used to skip in nested DFS.
-fn is_always_atom_formula(formula: &str) -> bool {
-    parse_always_atom(formula).is_some()
+    false
 }
 
 /// Extract a variable's integer value from a state blob string.
