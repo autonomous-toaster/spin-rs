@@ -48,8 +48,9 @@ impl<M: Model> Checker<M> {
                 && let Some(desc) = self.model.check_violation(&state)
             {
                 let state_trail = self.build_trail(&trail, state_idx);
+                let name = model_violation_name(&desc);
                 violations.push(Violation {
-                    property_name: "assertion".to_string(),
+                    property_name: name.to_string(),
                     trail: state_trail,
                     description: desc,
                 });
@@ -300,8 +301,9 @@ impl<M: Model> Checker<M> {
                 && let Some(desc) = self.model.check_violation(&state)
             {
                 let state_trail = self.build_trail(&trail, state_idx);
+                let name = model_violation_name(&desc);
                 violations.push(Violation {
-                    property_name: "assertion".to_string(),
+                    property_name: name.to_string(),
                     trail: state_trail,
                     description: desc,
                 });
@@ -513,6 +515,21 @@ impl<M: Model> Checker<M> {
         }
 
         checks
+    }
+}
+
+/// Name a model-level violation so it can never be mistaken for a claim.
+///
+/// Callers such as veriplan attribute a violation to a requirement by reading the claim index
+/// out of the property name, so a deadlock reported as "assertion" is misleading and a
+/// deadlock reported as a claim name would be actively wrong.
+fn model_violation_name(description: &str) -> &'static str {
+    if description.starts_with("deadlock") {
+        "deadlock"
+    } else if description.starts_with("no transitions explored") {
+        "model"
+    } else {
+        "assertion"
     }
 }
 

@@ -31,6 +31,9 @@ pub struct NestedDFS<S> {
     trail: Vec<String>,
     /// Maximum search depth (optional)
     max_depth: Option<usize>,
+    /// Name reported on a violation. It must be the claim's own name, otherwise a
+    /// per-property caller cannot attribute the violation and drops it.
+    property_name: String,
     /// Phantom data for state type
     _phantom: PhantomData<S>,
 }
@@ -48,8 +51,15 @@ where
             stack2: Vec::new(),
             trail: Vec::new(),
             max_depth: None,
+            property_name: "ltl".to_string(),
             _phantom: PhantomData,
         }
+    }
+
+    /// Set the claim name reported on a violation.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.property_name = name.into();
+        self
     }
 
     /// Set maximum search depth.
@@ -184,7 +194,7 @@ where
             // automaton state was reported as a liveness violation.
             if next_hash == seed {
                 return Some(Violation {
-                    property_name: "LTL".to_string(),
+                    property_name: self.property_name.clone(),
                     trail: self.trail.clone(),
                     description: "Accepting cycle detected (liveness violation)".to_string(),
                 });

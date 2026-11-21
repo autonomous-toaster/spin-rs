@@ -473,9 +473,13 @@ fn print_result(result: &CheckResult) {
         }
     } else if result.unverified.is_empty() {
         println!("\n✅ Verification successful - no errors found");
-    } else {
-        // The state space closed without a violation, but at least one property produced no
-        // verdict. Claiming success here is what let a false property read as verified.
+    }
+    // Report undecided properties whether or not there were also violations: a run can be
+    // both partially refuted and partially unchecked, and hiding the second hides that the
+    // clean properties were never judged.
+    if !result.unverified.is_empty() {
+        // At least one property produced no verdict. Claiming success here is what let a
+        // false property read as verified.
         println!(
             "\n⚠️  Inconclusive: {} propert(y/ies) were not checked",
             result.unverified.len()

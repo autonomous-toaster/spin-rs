@@ -214,3 +214,23 @@ fn test_satisfied_conditional_is_not_an_error() {
         result.unverified
     );
 }
+
+#[test]
+fn test_liveness_violation_is_named_after_its_claim() {
+    // A caller attributes a violation to a requirement by the claim name. Reporting the
+    // generic label "LTL" made the violation unattributable, so a per-property consumer
+    // dropped it and counted the constraint as satisfied.
+    let source = "bool ca = 0;\nbool cb = 0;\n\
+                  active proctype CanaryA() { do :: (1) -> ca = 1; break od }\n\
+                  active proctype CanaryB() { do :: (1) -> cb = 1; break od }\n\
+                  ltl p0 { [] ( ca -> <> (cb && !(cb)) ) }";
+
+    let result = crate::runtime::verify(source).unwrap();
+    assert!(result.errors > 0, "the claim must be refuted");
+    for v in &result.violations {
+        assert_eq!(
+            v.property_name, "p0",
+            "a violation must carry its claim name, not a generic label"
+        );
+    }
+}

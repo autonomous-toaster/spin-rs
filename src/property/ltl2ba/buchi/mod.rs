@@ -610,48 +610,123 @@ fn complement_implies_eventually(inner: &LtlFormula) -> Option<BuchiAutomaton> {
     let LtlFormula::Eventually(rhs) = right.as_ref() else {
         return None;
     };
-    let (lhs_name, lhs_val) = atom_polarity(lhs)?;
-    let (rhs_name, rhs_val) = atom_polarity(rhs)?;
+
+    // The automaton must commit to ONE point where the antecedent fires and from which the
+    // consequent never arrives. Letting it return to the waiting state on the consequent
+    // allowed it to re-guess, so a run where the consequent keeps arriving was accepted as
+    // a violation -- a false positive on a property that holds. A dead state on the
+    // consequent removes the re-guess.
+    //
+    // The guards are propositional, not necessarily single literals: the consequent may be
+    // any boolean combination of atoms (a contradiction such as (x && !x) is a legitimate
+    // way to write an unsatisfiable obligation).
+    let dnf_enter = literals_dnf(lhs, false)?;
+    let dnf_wait = literals_dnf(lhs, true)?;
+    let dnf_stay = literals_dnf(rhs, true)?;
+    let dnf_stop = literals_dnf(rhs, false)?;
+
+    let mut s0 = Vec::new();
+    for cube in dnf_enter {
+        s0.push(BuchiTransition {
+            to: 1,
+            conditions: cube,
+        });
+    }
+    for cube in dnf_wait {
+        s0.push(BuchiTransition {
+            to: 0,
+            conditions: cube,
+        });
+    }
+
+    let mut s1 = Vec::new();
+    // Stay accepting while the consequent has not arrived.
+    for cube in dnf_stay {
+        s1.push(BuchiTransition {
+            to: 1,
+            conditions: cube,
+        });
+    }
+    // The consequent arrived, so this guess cannot witness a violation.
+    for cube in dnf_stop {
+        s1.push(BuchiTransition {
+            to: 2,
+            conditions: cube,
+        });
+    }
 
     Some(BuchiAutomaton {
-        num_states: 2,
+        num_states: 3,
         initial: 0,
         accepting: vec![1].into_iter().collect(),
         transitions: vec![
-            // S0: antecedent not yet satisfied.
-            vec![
-                BuchiTransition {
-                    to: 1,
-                    conditions: vec![(lhs_name.clone(), lhs_val)],
-                },
-                BuchiTransition {
-                    to: 0,
-                    conditions: vec![(lhs_name, !lhs_val)],
-                },
-            ],
-            // S1: antecedent fired; the consequent must arrive to clear the obligation.
-            vec![
-                BuchiTransition {
-                    to: 0,
-                    conditions: vec![(rhs_name.clone(), rhs_val)],
-                },
-                BuchiTransition {
-                    to: 1,
-                    conditions: vec![(rhs_name, !rhs_val)],
-                },
-            ],
+            s0,
+            s1,
+            vec![BuchiTransition {
+                to: 2,
+                conditions: vec![],
+            }],
         ],
     })
 }
 
-/// Name and required polarity of a bare atom (optionally negated).
-fn atom_polarity(f: &LtlFormula) -> Option<(String, bool)> {
+/// Disjunctive normal form of a propositional formula, as a list of cubes.
+///
+/// Each cube is a conjunction of literals. `negate` asks for the DNF of the negated formula.
+/// Returns `None` for anything temporal, so unsupported shapes are reported rather than
+/// guessed. Empty cubes are dropped because they can never be satisfied.
+fn literals_dnf(f: &LtlFormula, negate: bool) -> Option<Vec<Vec<(String, bool)>>> {
     match f {
-        LtlFormula::Atom(name) => Some((name.clone(), true)),
-        LtlFormula::Not(inner) => match inner.as_ref() {
-            LtlFormula::Atom(name) => Some((name.clone(), false)),
-            _ => None,
-        },
-        _ => None,
+        LtlFormula::Atom(name) => Some(vec![vec![(name.clone(), !negate)]]),
+        LtlFormula::True => Some(if negate { vec![] } else { vec![vec![]] }),
+        LtlFormula::False => Some(if negate { vec![vec![]] } else { vec![] }),
+        LtlFormula::Not(inner) => literals_dnf(inner, !negate),
+        LtlFormula::And(a, b) => {
+            if negate {
+                // !(a && b) = !a || !b
+                let mut out = literals_dnf(a, true)?;
+                out.extend(literals_dnf(b, true)?);
+                Some(out)
+            } else {
+                Some(cross(literals_dnf(a, false)?, literals_dnf(b, false)?))
+            }
+        }
+        LtlFormula::Or(a, b) => {
+            if negate {
+                // !(a || b) = !a && !b
+                Some(cross(literals_dnf(a, true)?, literals_dnf(b, true)?))
+            } else {
+                let mut out = literals_dnf(a, false)?;
+                out.extend(literals_dnf(b, false)?);
+                Some(out)
+            }
+        }
+        LtlFormula::Always(_) | LtlFormula::Eventually(_) | LtlFormula::Next(_) => None,
     }
+}
+
+/// Combine two DNFs by conjunction, dropping cubes that demand both polarities of an atom.
+fn cross(
+    left: Vec<Vec<(String, bool)>>,
+    right: Vec<Vec<(String, bool)>>,
+) -> Vec<Vec<(String, bool)>> {
+    let mut out = Vec::new();
+    for l in &left {
+        for r in &right {
+            let mut cube = l.clone();
+            cube.extend(r.clone());
+            if !cube_is_contradictory(&cube) {
+                out.push(cube);
+            }
+        }
+    }
+    out
+}
+
+fn cube_is_contradictory(cube: &[(String, bool)]) -> bool {
+    cube.iter().enumerate().any(|(i, (name, val))| {
+        cube[i + 1..]
+            .iter()
+            .any(|(other, other_val)| other == name && other_val != val)
+    })
 }

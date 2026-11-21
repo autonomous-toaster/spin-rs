@@ -345,7 +345,7 @@ impl<'a, M: Model> PropertyChecker<'a, M> {
             let init_hash = self.model.hash(&init_state);
             let init_product = ProductState::new(init_state.clone(), 0, init_hash);
 
-            let mut dfs = NestedDFS::new();
+            let mut dfs = NestedDFS::new().with_name(self.property_name.clone());
             if let Some(violation) = dfs.check::<M>(self.model, &buchi, init_product) {
                 violations.push(violation);
                 break; // Found a violation, stop searching
