@@ -79,6 +79,30 @@ Fixed by routing the target through `state_field`, which is the same mapping eve
 uses. This is a precondition for T1.1 rather than part of POR: metadata cannot name the right
 field if the emitter names a different one, and T1.3 catches exactly that.
 
+## Correction: C2 is not discharged by persistence
+
+This document originally said C2 "for safety is discharged by including all transitions that
+are not independent of the set", which describes persistence, not the cycle proviso. That is
+wrong, and implementing it as written shipped an unsound reduction in v0.4.0:
+
+    byte tmp; bool bad;
+    active proctype A() { do :: (1) -> skip od }
+    active proctype B() { do :: (1) -> tmp = 1; bad = 1; break od }
+    ltl p { [] ( !bad ) }
+
+    v0.4.0: 2 states, 0 errors.   unreduced and pan: 1 error.
+
+Every state's ample set was persistent, and every state pruned B, because pruning B was locally
+justified each time. A loops, so the DFS never returned to the state where B had been dropped.
+The corpus contained no looping process, so the gate passed on a wrong algorithm.
+
+The condition that was missing is dynamic, not a property of one state: at any state whose
+successor is already on the search path, explore the whole enabled set. Every cycle in the
+reduced graph is then broken, the reduced graph is acyclic, and the persistence argument
+terminates. Fixed in v0.4.1 (e056815) with two fixtures added to the gate.
+
+Read the C2 bullet below as the reasoning that turned out to be insufficient, not as the design.
+
 ## Ample set (T2.1)
 
 Standard persistent-set selection over the enabled transitions of a state, with:
