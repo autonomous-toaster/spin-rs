@@ -385,3 +385,54 @@ fn pan_agrees_with_our_error_counts_on_the_whole_corpus() {
         );
     }
 }
+
+/// A deterministic sweep over a small family of shapes, rather than one fixture per shape.
+///
+/// The cycle proviso bug that shipped in v0.4.0 was found by a caller's model, not by this
+/// corpus, and the reason is structural: every fixture here was a terminated process, and a
+/// terminated process has no cycle to hide a transition behind. A curated fixture list can only
+/// contain the shapes someone thought of. This sweep enumerates the small family that did contain
+/// the bug - looping and terminating processes crossed with the claims they violate - so the next
+/// proviso mistake fails a test instead of reaching a consumer.
+#[test]
+fn reduction_preserves_verdicts_across_a_sweep_of_small_shapes() {
+    let claims = [
+        "[] ( !(fA && fB) )",
+        "[] ( fA -> fB )",
+        "[] ( !fB )",
+        "[] ( fA )",
+        "[] ( !fA )",
+    ];
+    let mut checked = 0usize;
+    for a_loops in [false, true] {
+        for b_loops in [false, true] {
+            for b_guarded in [false, true] {
+                for claim in claims {
+                    let a_body = if a_loops {
+                        "do :: (1) -> fA = 1 od"
+                    } else {
+                        "do :: (1) -> fA = 1; break od"
+                    };
+                    let b_guard = if b_guarded { "fA" } else { "1" };
+                    let b_body = if b_loops {
+                        format!("do :: ({b_guard}) -> fB = 1 od")
+                    } else {
+                        format!("do :: ({b_guard}) -> fB = 1; break od")
+                    };
+                    let src = format!(
+                        "bool fA, fB;\nactive proctype A() {{ {a_body} }}\nactive proctype B() {{ {b_body} }}\nltl p {{ {claim} }}\n"
+                    );
+                    let full = run(&src, false, 1_000_000);
+                    let reduced = run(&src, true, 1_000_000);
+                    assert_eq!(
+                        verdicts(&full),
+                        verdicts(&reduced),
+                        "reduction changed the verdict for a_loops={a_loops} b_loops={b_loops} b_guarded={b_guarded} claim={claim}\n{src}"
+                    );
+                    checked += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(checked, 40, "the sweep must actually enumerate its shapes");
+}
