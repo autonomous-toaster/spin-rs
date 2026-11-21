@@ -117,6 +117,7 @@ pub mod trail;
 pub use engine::checker::CheckerBuilder;
 pub use engine::checker::{
     CheckResult, Checker, CheckerConfig, Model, SearchMode, StorageMode, Transition, Unverified,
+    UnverifiedKind, VerifyError,
 };
 pub use parser::ast::PromelaModel;
 
@@ -178,8 +179,10 @@ pub fn verify_with_config(source: &str, config: &CheckerConfig) -> anyhow::Resul
     let checker = builder.build();
     let result = checker.check();
     // Same contract as verify(): a failed evaluation means nothing was checked.
-    if let Some(err) = checker.model().take_error() {
-        anyhow::bail!("{}", err);
+    if let Some(detail) = checker.model().take_error() {
+        return Err(anyhow::Error::new(
+            crate::engine::checker::VerifyError::EvalFailed { detail },
+        ));
     }
     Ok(result)
 }

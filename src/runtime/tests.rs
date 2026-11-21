@@ -305,3 +305,41 @@ fn test_channel_array_registration() {
         );
     }
 }
+
+#[test]
+fn test_verify_error_is_typed_and_classifiable() {
+    // A caller must be able to classify an error by kind, not by matching message text.
+    let source = "bool f = 0;\n\
+                  active proctype P() { do :: (1) -> if :: f = 1; f = 0; :: skip; fi; break od }\n\
+                  ltl p0 { [] ( !(f) ) }";
+
+    let err = super::verify(source).expect_err("must not produce a verdict");
+    let typed = err
+        .downcast_ref::<crate::engine::checker::VerifyError>()
+        .expect("the error must carry a typed payload");
+    assert_eq!(typed.kind(), "eval_failed");
+}
+
+#[test]
+fn test_state_budget_is_a_typed_kind() {
+    // Truncation must be visible as a kind, not inferred from states_explored >= budget.
+    let source = "bool t1_1, t1_2, t2_1;\n\
+                  active proctype a() { do :: (1) -> t1_1 = 1; break od }\n\
+                  active proctype b() { do :: (1) -> t1_2 = 1; break od }\n\
+                  active proctype c() { do :: (t1_1 && t1_2) -> t2_1 = 1; break od }\n\
+                  ltl p0 { [] ( true ) }";
+
+    let config = crate::engine::checker::CheckerConfig {
+        max_states: 2,
+        ..Default::default()
+    };
+    let result = crate::verify_with_config(source, &config).unwrap();
+    assert!(
+        result
+            .unverified
+            .iter()
+            .any(|u| u.kind == crate::engine::checker::UnverifiedKind::StateBudget),
+        "a truncated search must report a typed kind: {:?}",
+        result.unverified
+    );
+}

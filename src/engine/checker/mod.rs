@@ -128,11 +128,38 @@ pub struct Violation {
 /// unverified property means the checker could not produce a verdict at all. Callers must
 /// not map it to "invalid". It also covers a search that stopped at `max_states` before the
 /// state space closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UnverifiedKind {
+    /// The property uses an operator, or a nesting, the automaton builder cannot complement.
+    UnsupportedProperty,
+    /// The formula did not parse.
+    UnparsableFormula,
+    /// The search stopped at `max_states` before the state space closed.
+    StateBudget,
+    /// The search stopped at `max_depth`.
+    DepthBudget,
+}
+
+impl UnverifiedKind {
+    /// Stable machine-readable tag, safe to classify on instead of matching messages.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            UnverifiedKind::UnsupportedProperty => "unsupported_property",
+            UnverifiedKind::UnparsableFormula => "unparsable_formula",
+            UnverifiedKind::StateBudget => "state_budget",
+            UnverifiedKind::DepthBudget => "depth_budget",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Unverified {
     /// Name of the property, or "model" for a whole-model limitation.
     pub property_name: String,
-    /// Why no verdict was produced.
+    /// Why no verdict was produced, as a stable tag rather than only prose.
+    pub kind: UnverifiedKind,
+    /// Human-readable detail.
     pub reason: String,
 }
 
@@ -149,6 +176,47 @@ pub struct CheckResult {
     /// `errors == 0` does not license a success claim.
     pub unverified: Vec<Unverified>,
     pub elapsed_secs: f64,
+}
+
+/// A model the checker could not explore or evaluate.
+///
+/// Returned as the payload of the `Err` from `verify` and `verify_with_config`, so a caller can
+/// classify it with `downcast_ref` instead of matching message text. Every variant means
+/// "no verdict", never "invalid".
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum VerifyError {
+    /// No process was enabled in the initial state, so nothing was explored.
+    NotExplored { processes: usize },
+    /// A generated guard or effect failed to evaluate.
+    EvalFailed { detail: String },
+}
+
+impl std::fmt::Display for VerifyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VerifyError::NotExplored { processes } => write!(
+                f,
+                "no transitions explored: the model declares {} process(es) but none are enabled in the initial state, so nothing was verified",
+                processes
+            ),
+            VerifyError::EvalFailed { detail } => {
+                write!(f, "transition evaluation failed: {}", detail)
+            }
+        }
+    }
+}
+
+impl std::error::Error for VerifyError {}
+
+impl VerifyError {
+    /// Stable machine-readable tag, safe to classify on.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            VerifyError::NotExplored { .. } => "not_explored",
+            VerifyError::EvalFailed { .. } => "eval_failed",
+        }
+    }
 }
 
 // ─── Checker Builder ───────────────────────────────────────────

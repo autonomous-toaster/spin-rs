@@ -390,13 +390,18 @@ fn parse_done_flags(blob: &str) -> (usize, usize) {
 
 // ─── Convenience ────────────────────────────────────────────────
 
+/// Wrap an evaluation failure so callers can downcast it instead of matching text.
+fn typed_eval_failure(detail: String) -> anyhow::Error {
+    anyhow::Error::new(crate::engine::checker::VerifyError::EvalFailed { detail })
+}
+
 /// Parse Promela, generate Lua, create a checker, and run once.
 pub fn verify(source: &str) -> anyhow::Result<CheckResult> {
     let model = LuaModel::from_source(source)?;
     let checker = CheckerBuilder::new().model(model).build();
     let result = checker.check_dfs();
-    if let Some(err) = checker.model().take_error() {
-        anyhow::bail!("{}", err);
+    if let Some(detail) = checker.model().take_error() {
+        return Err(typed_eval_failure(detail));
     }
     Ok(result)
 }

@@ -191,6 +191,7 @@ impl<M: Model> Checker<M> {
         if hit_state_limit {
             result.unverified.push(Unverified {
                 property_name: "model".to_string(),
+                kind: UnverifiedKind::StateBudget,
                 reason: format!(
                     "search stopped at the state limit of {} before the state space closed",
                     self.config.max_states
@@ -239,6 +240,7 @@ impl<M: Model> Checker<M> {
                             log::warn!("LTL check error for '{}': {}", prop_name, e);
                             result.unverified.push(Unverified {
                                 property_name: prop_name.to_string(),
+                                kind: UnverifiedKind::UnsupportedProperty,
                                 reason: format!("{}", e),
                             });
                         }
@@ -248,6 +250,7 @@ impl<M: Model> Checker<M> {
                     log::warn!("Failed to parse LTL formula '{}': {}", prop_name, e);
                     result.unverified.push(Unverified {
                         property_name: prop_name.to_string(),
+                        kind: UnverifiedKind::UnparsableFormula,
                         reason: format!("LTL formula could not be parsed: {}", e),
                     });
                 }
