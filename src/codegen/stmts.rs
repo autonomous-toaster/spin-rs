@@ -19,22 +19,28 @@ impl LuaGenerator {
         self.emit("    table.insert(transitions, {");
         self.indent += 1;
         self.emit("    guard = function() return true end,");
-        // Prefix local variables with current proctype name
-        let target_name = if let Some(ref pname) = self.current_proctype {
-            format!("{}_{}", pname, target)
-        } else {
-            target.to_string()
-        };
+        // Globals are stored unprefixed; only proctype locals carry the prefix. Using the
+        // proctype name unconditionally wrote `P_g` for a global `g`, creating a field nothing
+        // reads: the global never changed and a property refuting it came back clean.
+        let target_name = self.state_field(target);
         if let Some(f) = field {
             self.emit(&format!(
-                "    effect = function(s) s.{}[\"{}\"] = {} end",
+                "    effect = function(s) s.{}[\"{}\"] = {} end,",
                 target_name, f, expr_str
             ));
         } else {
             self.emit(&format!(
-                "    effect = function(s) s.{} = {} end",
+                "    effect = function(s) s.{} = {} end,",
                 target_name, expr_str
             ));
+        }
+        {
+            let tfield = self.state_field(target);
+            let mut deps = self.deps_of(None, &[], &[tfield.as_str()]);
+            let map = self.map_fn_pub();
+            deps.read_expr(value, &map);
+            drop(map);
+            self.emit_deps(&deps);
         }
         self.indent -= 1;
         self.emit("    })");
@@ -48,7 +54,11 @@ impl LuaGenerator {
         // Assert condition is the guard: if condition is true, assertion passes (enabled);
         // if false, the transition is not enabled, causing deadlock -> violation detected.
         self.emit(&format!("    guard = function(s) return {} end,", e));
-        self.emit("    effect = function(s) end");
+        self.emit("    effect = function(s) end,");
+        {
+            let deps = self.deps_of(Some(expr), &[], &[]);
+            self.emit_deps(&deps);
+        }
         self.indent -= 1;
         self.emit("    })");
     }
@@ -78,7 +88,7 @@ impl LuaGenerator {
         let args_concat = args_str.join(", ");
         match target {
             SendTarget::Ident(id) => {
-                self.emit("    table.insert(transitions, {");
+                self.open_opaque_transition();
                 self.indent += 1;
                 self.emit(&format!(
                     "    guard = function(s) return not chan_full({}) end,",
@@ -98,7 +108,7 @@ impl LuaGenerator {
             }
             SendTarget::Value(val) => {
                 let val_str = self.expr_to_lua(val);
-                self.emit("    table.insert(transitions, {");
+                self.open_opaque_transition();
                 self.indent += 1;
                 self.emit(&format!(
                     "    guard = function(s) return not chan_full({}) end,",
@@ -118,7 +128,7 @@ impl LuaGenerator {
             }
             SendTarget::Sorted(val) => {
                 let val_str = self.expr_to_lua(val);
-                self.emit("    table.insert(transitions, {");
+                self.open_opaque_transition();
                 self.indent += 1;
                 self.emit(&format!(
                     "    guard = function(s) return not chan_full({}) end,",
@@ -139,7 +149,7 @@ impl LuaGenerator {
         match target {
             RecvTarget::VarList(vars) => {
                 let vars_str = vars.join(", ");
-                self.emit("    table.insert(transitions, {");
+                self.open_opaque_transition();
                 self.indent += 1;
                 self.emit(&format!(
                     "    guard = function(s) return not chan_empty({}) end,",
@@ -154,7 +164,7 @@ impl LuaGenerator {
             }
             RecvTarget::Eval(expr) => {
                 let val_str = self.expr_to_lua(expr);
-                self.emit("    table.insert(transitions, {");
+                self.open_opaque_transition();
                 self.indent += 1;
                 self.emit(&format!(
                     "    guard = function(s) return _spin_chan_poll({}, {}) ~= nil end,",
@@ -169,7 +179,7 @@ impl LuaGenerator {
             }
             RecvTarget::Poll(expr) => {
                 let val_str = self.expr_to_lua(expr);
-                self.emit("    table.insert(transitions, {");
+                self.open_opaque_transition();
                 self.indent += 1;
                 self.emit(&format!(
                     "    guard = function(s) return _spin_chan_poll({}, {}) ~= nil end,",
@@ -181,7 +191,7 @@ impl LuaGenerator {
             }
             RecvTarget::Random(vars) => {
                 let vars_str = vars.join(", ");
-                self.emit("    table.insert(transitions, {");
+                self.open_opaque_transition();
                 self.indent += 1;
                 self.emit(&format!(
                     "    guard = function(s) return not chan_empty({}) end,",

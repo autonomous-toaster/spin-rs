@@ -413,7 +413,13 @@ fn handle_verify_mode(cli: &Cli, source: &str) -> Result<(), anyhow::Error> {
         .check_assertions(!cli.no_assertions);
 
     if cli.por {
-        builder = builder.por_enabled(true);
+        // The flag used to set a config field that no search path read, so it silently did
+        // nothing. Reduction is not implemented yet; saying so is better than a flag that
+        // reports success while exploring everything.
+        anyhow::bail!(
+            "--por is not implemented: partial order reduction is under construction and this \
+             build explores the full state space regardless. Remove --por to verify normally."
+        );
     }
 
     if cli.stop_at_first_violation {

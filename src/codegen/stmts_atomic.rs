@@ -36,13 +36,13 @@ impl LuaGenerator {
                 if let Some(idx) = index {
                     let idx_str = self.substitute_expr(idx, subs);
                     self.emit(&format!(
-                        "    table.insert(transitions, {{ guard = function(s) return true end, effect = function(s) s.{}[{} + 1] = {} end }})",
-                        target_name, idx_str, v
+                        "    table.insert(transitions, {{ owner = \"{}\", reads = {{}}, writes = {{}}, internal = false, opaque = true, guard = function(s) return true end, effect = function(s) s.{}[{} + 1] = {} end }})",
+                        self.owner_for_deps(), target_name, idx_str, v
                     ));
                 } else {
                     self.emit(&format!(
-                        "    table.insert(transitions, {{ guard = function(s) return true end, effect = function(s) s.{} = {} end }})",
-                        target_name, v
+                        "    table.insert(transitions, {{ owner = \"{}\", reads = {{}}, writes = {{}}, internal = false, opaque = true, guard = function(s) return true end, effect = function(s) s.{} = {} end }})",
+                        self.owner_for_deps(), target_name, v
                     ));
                 }
             }
@@ -152,7 +152,7 @@ impl LuaGenerator {
         };
         let target_step = self.label_steps.get(label).copied().unwrap_or(0);
         self.emit(&format!("    -- goto {}", label));
-        self.emit("    table.insert(transitions, {");
+        self.open_opaque_transition();
         self.indent += 1;
         self.emit("    guard = function(s) return true end,");
         self.emit(&format!(
@@ -179,7 +179,7 @@ impl LuaGenerator {
         };
         let exit_step = self.do_exit_stack.last().copied().unwrap_or(0);
         self.emit("    -- break");
-        self.emit("    table.insert(transitions, {");
+        self.open_opaque_transition();
         self.indent += 1;
         self.emit("    guard = function(s) return true end,");
         self.emit(&format!(
@@ -217,7 +217,7 @@ impl LuaGenerator {
             label_step,
             if is_progress { " [progress]" } else { "" }
         ));
-        self.emit("    table.insert(transitions, {");
+        self.open_opaque_transition();
         self.indent += 1;
         self.emit(&format!(
             "    guard = function(s) return s.{} == {} end,",
@@ -259,7 +259,7 @@ impl LuaGenerator {
         for (i, stmt) in body.iter().enumerate() {
             let next_step = if i + 1 >= num_steps { 0 } else { i + 1 };
             let is_last = i + 1 >= num_steps;
-            self.emit("    table.insert(transitions, {");
+            self.open_opaque_transition();
             self.indent += 1;
             let stmt_guard = self.guard_for_stmt(stmt);
             if i == 0 {
@@ -330,7 +330,7 @@ impl LuaGenerator {
         for (i, stmt) in body.iter().enumerate() {
             let next_step = i + 1;
             let is_last = i + 1 >= num_steps;
-            self.emit("    table.insert(transitions, {");
+            self.open_opaque_transition();
             self.indent += 1;
             let stmt_guard = self.guard_for_stmt(stmt);
             if stmt_guard == "true" {
@@ -360,7 +360,7 @@ impl LuaGenerator {
             if let Some(handler_first) = handler.first() {
                 let handler_guard = self.guard_for_stmt(handler_first);
                 if handler_guard != "false" {
-                    self.emit("    table.insert(transitions, {");
+                    self.open_opaque_transition();
                     self.indent += 1;
                     if handler_guard == "true" {
                         self.emit(&format!(
@@ -390,7 +390,7 @@ impl LuaGenerator {
             } else {
                 current_step + 1
             };
-            self.emit("    table.insert(transitions, {");
+            self.open_opaque_transition();
             self.indent += 1;
             let stmt_guard = self.guard_for_stmt(stmt);
             if stmt_guard == "true" {

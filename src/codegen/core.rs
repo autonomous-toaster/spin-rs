@@ -305,6 +305,7 @@ impl LuaGenerator {
                     self.indent += 1;
                     self.emit("        guard = function() return true end,");
                     self.emit("        effect = function(s) s._done_init = true end,");
+                    self.emit("        owner = \"init\", reads = {}, writes = {\"_done_init\"}, internal = true, opaque = false,");
                     self.emit("        label = \"init:done\",");
                     self.indent -= 1;
                     self.emit("    })");

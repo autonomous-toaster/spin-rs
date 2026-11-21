@@ -51,6 +51,7 @@ pub(crate) struct LuaGenerator {
 }
 
 mod core;
+mod deps;
 mod effects;
 mod effects_guards;
 mod expr_utils;

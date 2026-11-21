@@ -201,3 +201,102 @@ fn test_generate_label_reachable() {
     // Should have goto transition
     assert!(lua.source.contains("goto:start"));
 }
+
+// ─── T1.3: dependency metadata must cover everything a transition touches ───────
+
+/// Parse the declared metadata and the actual `s.<field>` references out of a generated
+/// transition, and assert the declared sets cover the actual ones.
+///
+/// Only the covering direction is asserted: declaring more than a transition touches is safe
+/// (it costs reduction), while declaring less would claim independence from a transition it
+/// actually conflicts with, which is unsound. Opaque transitions declare nothing and are exempt,
+/// because "unknown" is already the conservative answer.
+#[test]
+fn test_transition_dependencies_cover_effects() {
+    fn field_set(s: &str) -> std::collections::BTreeSet<String> {
+        let mut out = std::collections::BTreeSet::new();
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        while i + 2 < bytes.len() {
+            if bytes[i] == b's' && bytes[i + 1] == b'.' {
+                let start = i + 2;
+                let mut j = start;
+                while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+                    j += 1;
+                }
+                if j > start {
+                    out.insert(s[start..j].to_string());
+                }
+                i = j;
+            } else {
+                i += 1;
+            }
+        }
+        out
+    }
+
+    fn declared(s: &str, key: &str) -> std::collections::BTreeSet<String> {
+        let pat = format!("{} = {{", key);
+        let Some(p) = s.find(&pat) else {
+            return Default::default();
+        };
+        let rest = &s[p + pat.len()..];
+        let Some(end) = rest.find('}') else {
+            return Default::default();
+        };
+        rest[..end]
+            .split(',')
+            .map(|v| v.trim().trim_matches('"').to_string())
+            .filter(|v| !v.is_empty())
+            .collect()
+    }
+
+    let models = [
+        "bool g = 0;\nactive proctype P() { g = 1; }\nltl p0 { [] ( !(g) ) }",
+        "byte x = 0;\nactive proctype P() { x = 1; assert(x == 1); }",
+        "bool f = 0;\nactive proctype P() { do :: (1) -> if :: f = 1; :: skip; fi; break od }",
+        "chan ch = [1] of { byte };\nactive proctype P() { ch ! 1 }\nactive proctype Q() { byte v; ch ? v }",
+    ];
+
+    let mut checked = 0usize;
+    for src in models {
+        let ast = crate::parser::parse(src).unwrap();
+        let lua = crate::codegen::generate(&ast);
+        // Split on transition starts; the generated subset has no nested table literals except
+        // inside the transition table itself.
+        let mut rest = lua.source.as_str();
+        while let Some(p) = rest.find("table.insert(transitions, {") {
+            let after = &rest[p..];
+            let Some(end) = after.find("})") else { break };
+            let block = &after[..end];
+            rest = &after[end..];
+
+            assert!(
+                block.contains("owner = "),
+                "every transition must declare an owner: {block}"
+            );
+            let opaque = block.contains("opaque = true");
+            if opaque {
+                continue;
+            }
+            let mut covered = declared(block, "reads");
+            covered.extend(declared(block, "writes"));
+            let actual = field_set(block);
+            for f in &actual {
+                // _pid is engine bookkeeping the emitter sets outside the table.
+                if f == "_pid" {
+                    continue;
+                }
+                assert!(
+                    covered.contains(f),
+                    "transition touches `{}` but does not declare it. declared={:?} block:\n{}",
+                    f,
+                    covered,
+                    block
+                );
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked > 0, "the scan found no transitions to verify");
+}

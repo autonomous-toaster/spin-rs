@@ -74,7 +74,8 @@ fn phase1_correctness(spin_available: bool) -> (Vec<serde_json::Value>, String) 
     for model in ALL_MODELS {
         for &(config, search, por, tol) in &[
             ("Exact+DFS+noPOR", SearchMode::DepthFirst, false, 0),
-            ("Exact+DFS+POR  ", SearchMode::DepthFirst, true, 1),
+            // The "POR" row is gone: por_enabled set a field no search path read, so that row
+            // was measuring the unreduced search under a different label.
             ("Exact+BFS+noPOR", SearchMode::BreadthFirst, false, 0),
         ] {
             let sr = run_spin_rs(model.source, StorageMode::Exact, search, por);

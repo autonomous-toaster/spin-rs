@@ -152,6 +152,22 @@ impl LuaGenerator {
                 "    effect = function(s) s.{} = {} end,",
                 step_var, target_step
             ));
+            // The selection step only evaluates the guard and moves the counter; it executes
+            // none of the body, so the body's writes must not be attributed to it.
+            let readings: Vec<Expression> = guard.condition.iter().cloned().collect();
+            let mut deps = {
+                let refs: Vec<&Expression> = readings.iter().collect();
+                self.deps_selection(&refs, &[step_var.as_str()])
+            };
+            {
+                let map = self.map_fn_pub();
+                for st in &guard.body {
+                    if let Stmt::Expr(e, _) = st {
+                        deps.read_expr(e, &map);
+                    }
+                }
+            }
+            self.emit_deps(&deps);
             self.emit(&format!("    label = \"{}:sel{}\",", kind, gi));
             self.indent -= 1;
             self.emit("    })");
@@ -203,6 +219,7 @@ impl LuaGenerator {
                     .collect();
                 self.emit("    table.insert(transitions, {");
                 self.indent += 1;
+                self.emit_opaque_deps();
                 self.emit_inline_body(&inline_def, &subs, step_var.as_str(), *step, next);
                 self.indent -= 1;
                 self.emit("    })");
@@ -224,6 +241,7 @@ impl LuaGenerator {
                 // cannot express yet. Fail loudly rather than drop the block.
                 self.emit(&format!("    -- {} body step {} (nested do)", kind, step));
                 self.emit("    table.insert(transitions, {");
+                self.emit_opaque_deps();
                 self.emit("        guard = function(s) error('nested do/od inside a guard body is not supported') end,");
                 self.emit("        effect = function(s) end,");
                 self.emit("    })");
@@ -346,6 +364,14 @@ impl LuaGenerator {
                     ));
                 }
             }
+            // The step counter is always moved; the done flag is written only on break, and
+            // declaring it either way over-approximates rather than under-approximates.
+            let mut deps = self.deps_of(None, &[*s], &[step_var.as_str()]);
+            if let Some(ref pname) = self.current_proctype {
+                let done = format!("_done_{}", pname);
+                deps.write_field(done);
+            }
+            self.emit_deps(&deps);
             self.emit(&format!("    label = \"{}:step{}\",", kind, step));
             self.indent -= 1;
             self.emit("    })");
@@ -391,6 +417,7 @@ impl LuaGenerator {
             self.emit("    -- one step, which would run the statements atomically and hide the");
             self.emit("    -- states between them");
             self.emit("    table.insert(transitions, {");
+            self.emit_opaque_deps();
             self.emit(
                 "        guard = function(s) error('multi-statement branch in a nested if inside a guard body is not supported') end,",
             );
@@ -521,6 +548,15 @@ impl LuaGenerator {
                 "    effect = function(s) {} end,",
                 effects.join("; ")
             ));
+            {
+                let body_refs: Vec<&Stmt> = g.body.iter().collect();
+                let mut deps = self.deps_of(g.condition.as_ref(), &body_refs, &[step_var]);
+                if let Some(ref pname) = self.current_proctype {
+                    let done = format!("_done_{}", pname);
+                    deps.write_field(done);
+                }
+                self.emit_deps(&deps);
+            }
             self.emit(&format!("    label = \"if:branch{}\",", gi));
             self.indent -= 1;
             self.emit("    })");
@@ -738,6 +774,11 @@ impl LuaGenerator {
             }
             self.indent -= 1;
             self.emit("    end,");
+            {
+                let body_refs: Vec<&Stmt> = guard.body.iter().collect();
+                let deps = self.deps_of(guard.condition.as_ref(), &body_refs, &[]);
+                self.emit_deps(&deps);
+            }
             self.emit(&format!("    label = \"{}:guard{}\",", kind, i));
             self.indent -= 1;
             self.emit("    })");
