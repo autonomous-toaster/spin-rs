@@ -176,6 +176,25 @@ pub struct Unverified {
 }
 
 /// Verification result.
+///
+/// # The invariant this type exists to protect
+///
+/// **Every claim must appear in `violations` or in `unverified`. Absence must never be allowed
+/// to mean anything.**
+///
+/// Three separate defects in this checker had the same root, and each one produced a wrong
+/// verdict that looked like a clean run:
+///
+/// - a budget was pruned and never reported, so a truncated search read as a completed one;
+/// - a liveness violation was reported under a generic label instead of its claim, so a caller
+///   that attributes by name dropped it and counted the requirement as satisfied;
+/// - an early stop simply omitted the claims it never reached, so "no violation reported" was
+///   read as "satisfied".
+///
+/// When adding a way to skip work - a budget, a depth cut, an early stop, a new unsupported
+/// shape - the claim being skipped must land in `unverified` with a `kind`. A comment is not
+/// enough: the property is asserted by tests, because the failure mode is invisible at the
+/// call site and only shows up as a false green downstream.
 #[derive(Debug, Clone)]
 pub struct CheckResult {
     pub states_explored: usize,
