@@ -206,7 +206,35 @@ fn handle_trail_replay_mode(cli: &Cli, source: &str) -> Result<(), anyhow::Error
     Ok(())
 }
 
+/// Refuse to run an engine that does not evaluate LTL on a model that declares it.
+///
+/// The swarm and parallel-BFS engines search the model's own state space and never build a
+/// product with a Büchi automaton, so every ltl property would go unchecked while the run
+/// still reported a verdict.
+fn reject_ltl_for_engine(engine: &str, source: &str) -> Result<(), anyhow::Error> {
+    let model = parser::parse(source)?;
+    let declared: Vec<&str> = model
+        .declarations
+        .iter()
+        .filter_map(|d| match d {
+            crate::parser::ast::TopLevel::Ltl(l) => Some(l.name.as_deref().unwrap_or("(unnamed)")),
+            _ => None,
+        })
+        .collect();
+    if declared.is_empty() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "{} does not check LTL properties, but this model declares {}: {}. No verdict was \
+         produced; use the default checker (or --search bfs) instead.",
+        engine,
+        declared.len(),
+        declared.join(", ")
+    )
+}
+
 fn handle_swarm_mode(cli: &Cli, source: &str, swarm_arg: &str) -> Result<(), anyhow::Error> {
+    reject_ltl_for_engine("--swarm", source)?;
     // Parse "N,M" format
     let parts: Vec<&str> = swarm_arg.split(',').collect();
     if parts.is_empty() || parts.len() > 2 {
@@ -255,6 +283,8 @@ fn handle_parallel_bfs_mode(
     source: &str,
     num_threads: usize,
 ) -> Result<(), anyhow::Error> {
+    reject_ltl_for_engine("--bfspar", source)?;
+
     println!("Parallel BFS: {} threads", num_threads);
 
     let source_clone = source.to_string();

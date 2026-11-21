@@ -407,7 +407,7 @@ impl<M: Model> Checker<M> {
 
         let violations = dedup_violations(violations);
 
-        CheckResult {
+        let mut result = CheckResult {
             states_explored: storage.len(),
             states_stored: storage.len(),
             transitions: transitions_count,
@@ -415,7 +415,14 @@ impl<M: Model> Checker<M> {
             errors: violations.len(),
             violations,
             elapsed_secs: elapsed,
-        }
+        };
+
+        // BFS previously returned before this call, so every non-propositional LTL
+        // property was silently unchecked under --search bfs while still reported as a
+        // clean verification.
+        self.check_ltl_properties(&mut result);
+
+        result
     }
 
     /// Build an error trail from parent pointers.

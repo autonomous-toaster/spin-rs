@@ -133,7 +133,8 @@ where
         // After exploring all successors, if this is an accepting state,
         // start inner DFS to search for a cycle
         if buchi.is_accepting(product.buchi_state)
-            && let Some(violation) = self.dfs2(model, buchi, product, hash)
+            // The accepting state itself is the seed for the inner search.
+            && let Some(violation) = self.dfs2(model, buchi, product, hash, hash)
         {
             return Some(violation);
         }
@@ -150,6 +151,7 @@ where
         buchi: &BuchiAutomaton,
         product: ProductState<S>,
         hash: u64,
+        seed: u64,
     ) -> Option<Violation>
     where
         M: Model<State = S>,
@@ -176,8 +178,11 @@ where
         for prod_trans in product_transitions {
             let next_hash = prod_trans.next.cached_hash();
 
-            if self.stack2.contains(&next_hash) {
-                // Cycle detected: state already on inner DFS stack
+            // Only a return edge to the SEED that started this inner search closes an
+            // accepting cycle. Reporting any back-edge flagged cycles that never touch
+            // an accepting state: a model whose states all loop inside a rejecting
+            // automaton state was reported as a liveness violation.
+            if next_hash == seed {
                 return Some(Violation {
                     property_name: "LTL".to_string(),
                     trail: self.trail.clone(),
@@ -186,7 +191,7 @@ where
             }
 
             if !self.visited2.contains(&next_hash)
-                && let Some(violation) = self.dfs2(model, buchi, prod_trans.next, next_hash)
+                && let Some(violation) = self.dfs2(model, buchi, prod_trans.next, next_hash, seed)
             {
                 return Some(violation);
             }

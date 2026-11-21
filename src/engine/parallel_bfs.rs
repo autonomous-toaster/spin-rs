@@ -48,6 +48,10 @@ struct BfsShared<S> {
     violations: Mutex<Vec<Violation>>,
     violation_found: AtomicBool,
     config: ParallelBfsConfig,
+    /// Items sent but not yet taken off the frontier.
+    pending: AtomicUsize,
+    /// Workers currently expanding an item.
+    active: AtomicUsize,
 }
 
 /// Run parallel BFS verification using a model factory.
@@ -89,6 +93,8 @@ where
         violations: Mutex::new(Vec::new()),
         violation_found: AtomicBool::new(false),
         config: config.clone(),
+        pending: AtomicUsize::new(0),
+        active: AtomicUsize::new(0),
     });
 
     // Create the BFS frontier channel
@@ -104,6 +110,7 @@ where
             if !bucket.iter().any(|x| x == &s) {
                 bucket.push(s.clone());
                 shared.visited_count.fetch_add(1, Ordering::Relaxed);
+                shared.pending.fetch_add(1, Ordering::AcqRel);
                 let _ = tx.send((s, 0));
             }
         }
@@ -154,49 +161,67 @@ fn bfs_worker<M>(
     M: Model + 'static,
     M::State: Send + 'static,
 {
+    // Every worker holds a clone of the sending end of the frontier, so a blocking recv
+    // never reports disconnection while any worker is still alive: waiting on it
+    // deadlocked as soon as the frontier drained. Termination is therefore decided by
+    // counters instead of by the channel. An item is pending from the moment it is sent
+    // until it is taken, and a worker is active while it expands one. When both reach
+    // zero there is nothing queued and nobody working, so the search is complete.
     loop {
         if shared.violation_found.load(Ordering::Relaxed) {
             break;
         }
+        if shared.pending.load(Ordering::Acquire) == 0 && shared.active.load(Ordering::Acquire) == 0
+        {
+            break;
+        }
 
-        let (state, depth) = match rx.recv() {
+        let (state, depth) = match rx.recv_timeout(std::time::Duration::from_millis(20)) {
             Ok(item) => item,
-            Err(_) => break,
+            Err(crossbeam::channel::RecvTimeoutError::Timeout) => continue,
+            Err(crossbeam::channel::RecvTimeoutError::Disconnected) => break,
         };
 
-        if depth >= shared.config.max_depth {
-            continue;
-        }
-        if shared.visited_count.load(Ordering::Relaxed) >= shared.config.max_states {
-            break;
-        }
+        shared.pending.fetch_sub(1, Ordering::AcqRel);
+        shared.active.fetch_add(1, Ordering::AcqRel);
 
-        // Check for violations
-        if shared.config.check_assertions
-            && let Some(desc) = model.check_violation(&state)
+        let mut stop = false;
+        if depth < shared.config.max_depth
+            && shared.visited_count.load(Ordering::Relaxed) < shared.config.max_states
         {
-            let mut violations = shared.violations.lock().unwrap();
-            violations.push(Violation {
-                property_name: "assertion".to_string(),
-                trail: vec![],
-                description: desc,
-            });
-            shared.violation_found.store(true, Ordering::Relaxed);
-            break;
+            // Check for violations
+            if shared.config.check_assertions
+                && let Some(desc) = model.check_violation(&state)
+            {
+                let mut violations = shared.violations.lock().unwrap();
+                violations.push(Violation {
+                    property_name: "assertion".to_string(),
+                    trail: vec![],
+                    description: desc,
+                });
+                shared.violation_found.store(true, Ordering::Relaxed);
+                stop = true;
+            } else {
+                // Expand transitions
+                let transitions = model.transitions(&state);
+                for t in transitions {
+                    let h = model.hash(&t.next);
+                    let mut visited = shared.visited.lock().unwrap();
+                    let bucket = visited.entry(h).or_default();
+                    if !bucket.iter().any(|x| x == &t.next) {
+                        bucket.push(t.next.clone());
+                        shared.visited_count.fetch_add(1, Ordering::Relaxed);
+                        drop(visited);
+                        shared.pending.fetch_add(1, Ordering::AcqRel);
+                        let _ = tx.send((t.next, depth + 1));
+                    }
+                }
+            }
         }
 
-        // Expand transitions
-        let transitions = model.transitions(&state);
-        for t in transitions {
-            let h = model.hash(&t.next);
-            let mut visited = shared.visited.lock().unwrap();
-            let bucket = visited.entry(h).or_default();
-            if !bucket.iter().any(|x| x == &t.next) {
-                bucket.push(t.next.clone());
-                shared.visited_count.fetch_add(1, Ordering::Relaxed);
-                drop(visited);
-                let _ = tx.send((t.next, depth + 1));
-            }
+        shared.active.fetch_sub(1, Ordering::AcqRel);
+        if stop {
+            break;
         }
     }
 }

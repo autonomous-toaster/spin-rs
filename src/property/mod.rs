@@ -7,8 +7,6 @@
 //! - Büchi automaton types (for v2 LTL → Büchi conversion)
 //! - Simplified LTL → Büchi conversion (ltl2ba-rs-simplified)
 
-use std::collections::HashSet;
-
 use crate::engine::checker::{Model, Violation};
 
 pub mod buchi;
@@ -292,23 +290,24 @@ impl<'a, M: Model> PropertyChecker<'a, M> {
         }
 
         // Convert LTL formula to Büchi automaton using ltl2ba
-        use crate::property::ltl2ba::{NestedDFS, ProductState, to_buchi};
+        use crate::property::ltl2ba::{NestedDFS, ProductState};
 
         // Convert from property::LtlFormula to ltl2ba::formula::LtlFormula
         let ltl2ba_formula = convert_to_ltl2ba_formula(formula);
 
-        let buchi = match to_buchi(&ltl2ba_formula) {
-            Ok(b) => b,
-            Err(e) => {
-                // LTL formula not supported by ltl2ba, fall back to simple cycle detection
-                log::warn!(
-                    "LTL formula '{}' not fully supported: {}",
-                    self.property_name,
-                    e
-                );
-                return self.check_liveness_simple();
-            }
-        };
+        // Build the automaton for the NEGATION of the property. A property is violated
+        // when a run satisfies its negation, so the product search must look for
+        // accepting cycles of the negated automaton. Building the property itself and
+        // looking for accepting cycles reported the opposite verdict: it flagged
+        // satisfied properties (a model where <>p holds was reported as a violation) and
+        // missed violated ones (a model where p never becomes true was reported clean).
+        //
+        // The previous fallback for unsupported formulas reported ANY cycle as a
+        // violation, which is not a verdict about the property at all. An unsupported
+        // property now fails loudly instead.
+        let buchi = crate::property::ltl2ba::buchi::to_buchi_not(&ltl2ba_formula).map_err(|e| {
+            anyhow::anyhow!("property '{}' cannot be checked: {}", self.property_name, e)
+        })?;
 
         // Every atom in the automaton must resolve against a real variable before the
         // product search runs. The product code reads an absent atom as false, which
@@ -354,78 +353,6 @@ impl<'a, M: Model> PropertyChecker<'a, M> {
         }
 
         Ok(violations.into_iter().next())
-    }
-
-    /// Simple cycle detection (fallback for unsupported LTL formulas).
-    fn check_liveness_simple(&self) -> anyhow::Result<Option<Violation>> {
-        let init_states = self.model.init_states();
-        if init_states.is_empty() {
-            return Ok(None);
-        }
-
-        let mut visited1: HashSet<u64> = HashSet::new();
-        let mut visited2: HashSet<u64> = HashSet::new();
-        let mut trail: Vec<String> = Vec::new();
-
-        for init_state in init_states {
-            let init_hash = self.model.hash(&init_state);
-
-            if !visited1.contains(&init_hash)
-                && let Some(violation) = self.dfs1(
-                    &init_state,
-                    init_hash,
-                    &mut visited1,
-                    &mut visited2,
-                    &mut trail,
-                )?
-            {
-                return Ok(Some(violation));
-            }
-        }
-
-        Ok(None)
-    }
-
-    fn dfs1(
-        &self,
-        state: &M::State,
-        state_hash: u64,
-        visited1: &mut HashSet<u64>,
-        visited2: &mut HashSet<u64>,
-        trail: &mut Vec<String>,
-    ) -> anyhow::Result<Option<Violation>> {
-        visited1.insert(state_hash);
-        visited2.insert(state_hash); // on recursion stack
-
-        let transitions = self.model.transitions(state);
-        for trans in transitions {
-            let next_hash = self.model.hash(&trans.next);
-
-            if visited2.contains(&next_hash) {
-                // Back-edge to state on current stack → cycle
-                return Ok(Some(Violation {
-                    property_name: self.property_name.clone(),
-                    trail: trail.clone(),
-                    description: format!(
-                        "Liveness violation: cycle found in property '{}'",
-                        self.property_name
-                    ),
-                }));
-            }
-
-            if !visited1.contains(&next_hash) {
-                trail.push(trans.label.clone());
-                if let Some(violation) =
-                    self.dfs1(&trans.next, next_hash, visited1, visited2, trail)?
-                {
-                    return Ok(Some(violation));
-                }
-                trail.pop();
-            }
-        }
-
-        visited2.remove(&state_hash); // done exploring subtree
-        Ok(None)
     }
 
     /// Check safety properties (assertions, invariants).

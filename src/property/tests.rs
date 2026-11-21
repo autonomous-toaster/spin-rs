@@ -156,7 +156,29 @@ fn test_verify_ltl_empty_model() {
 
 #[test]
 fn test_verify_ltl_false_formula() {
+    // <>(false) is unsatisfiable, so it is violated in every run: verifying it must
+    // fail. This assertion used to be the opposite because the product search built the
+    // automaton for the property instead of its negation. Real spin reports 1 error for
+    // this model and property.
     let source = "active proctype P() { byte x; x = 1; }";
     let result = verify_ltl(source, "<>(false)", "never").unwrap();
-    assert!(result.is_none());
+    assert!(
+        result.is_some(),
+        "<>(false) can never hold, so it must be refuted"
+    );
+}
+
+#[test]
+fn test_ltl_liveness_verdict_is_not_inverted() {
+    // An accepting cycle of the property automaton means the property HOLDS. Before the
+    // negation was introduced these two models produced opposite answers: the satisfied
+    // property was refuted and the violated one was accepted.
+    let violated = "bool p = 0;\nactive proctype P() { do :: (1) -> p = 0; od }";
+    let satisfied = "bool p = 0;\nactive proctype P() { do :: (1) -> p = 1; od }";
+
+    let v = verify_ltl(violated, "<>(p)", "l0").unwrap();
+    let s = verify_ltl(satisfied, "<>(p)", "l0").unwrap();
+
+    assert!(v.is_some(), "<>(p) never holds here, so it must be refuted");
+    assert!(s.is_none(), "<>(p) holds here, so it must not be refuted");
 }

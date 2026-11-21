@@ -418,3 +418,170 @@ fn product_disjunction(left: &BuchiAutomaton, right: &BuchiAutomaton) -> BuchiAu
 
 #[cfg(test)]
 mod tests;
+
+/// Construct the Büchi automaton for the NEGATION of a formula.
+///
+/// A property is violated when a run satisfies its negation, so the product search must
+/// look for accepting cycles of the negated automaton. Building the automaton for the
+/// formula itself and looking for accepting cycles reports the opposite verdict: it flags
+/// satisfied properties and misses violated ones.
+///
+/// Only the deterministic shapes produced by the builders below are complemented, where
+/// the complement is obtained by swapping the accepting set and the condition polarity.
+/// Anything else returns an error rather than a guess.
+pub fn to_buchi_not(formula: &LtlFormula) -> Result<BuchiAutomaton, LtlError> {
+    match formula {
+        // !true is unsatisfiable; !false holds everywhere.
+        LtlFormula::True => Ok(trivial_rejecting()),
+        LtlFormula::False => Ok(trivial_accepting()),
+
+        // A propositional property is violated exactly when the atom is false here.
+        LtlFormula::Atom(name) => Ok(single_state_with(name.clone(), false)),
+        LtlFormula::Not(inner) => match inner.as_ref() {
+            LtlFormula::Atom(name) => Ok(single_state_with(name.clone(), true)),
+            _ => Err(LtlError::unsupported(
+                "negation of a non-atomic proposition",
+                Some("Only !p is supported where p is atomic"),
+            )),
+        },
+
+        // ![]p  is  <>!p
+        LtlFormula::Always(inner) => {
+            let (name, must_be_true) = atom_with_polarity(inner, "always")?;
+            Ok(eventually_holds(name, !must_be_true))
+        }
+        // !<>p  is  []!p
+        LtlFormula::Eventually(inner) => {
+            let (name, must_be_true) = atom_with_polarity(inner, "eventually")?;
+            Ok(always_holds(name, !must_be_true))
+        }
+        // !Xp  is  X!p
+        LtlFormula::Next(inner) => {
+            let (name, must_be_true) = atom_with_polarity(inner, "next")?;
+            Ok(next_holds(name, !must_be_true))
+        }
+
+        LtlFormula::And(_, _) | LtlFormula::Or(_, _) => Err(LtlError::unsupported(
+            "liveness property",
+            Some("Only p, !p, []p, <>p and Xp are supported under negation"),
+        )),
+    }
+}
+
+/// Extract the atom name and the polarity the property requires of it.
+fn atom_with_polarity(atom: &LtlFormula, ctx: &'static str) -> Result<(String, bool), LtlError> {
+    match atom {
+        LtlFormula::Atom(name) => Ok((name.clone(), true)),
+        LtlFormula::True => Ok(("true".to_string(), true)),
+        LtlFormula::False => Ok(("false".to_string(), true)),
+        LtlFormula::Not(inner) => match inner.as_ref() {
+            LtlFormula::Atom(name) => Ok((name.clone(), false)),
+            LtlFormula::True => Ok(("true".to_string(), false)),
+            LtlFormula::False => Ok(("false".to_string(), false)),
+            _ => Err(LtlError::unsupported(
+                "complex atom under a temporal operator",
+                Some(match ctx {
+                    "always" => "Only []p is supported where p is atomic",
+                    "eventually" => "Only <>p is supported where p is atomic",
+                    _ => "Only Xp is supported where p is atomic",
+                }),
+            )),
+        },
+        _ => Err(LtlError::unsupported(
+            "complex atom under a temporal operator",
+            Some("Only p or !p is supported where p is atomic"),
+        )),
+    }
+}
+
+/// One accepting state looping while `name` equals `value`.
+fn single_state_with(name: String, value: bool) -> BuchiAutomaton {
+    BuchiAutomaton {
+        num_states: 1,
+        initial: 0,
+        accepting: vec![0].into_iter().collect(),
+        transitions: vec![vec![BuchiTransition {
+            to: 0,
+            conditions: vec![(name, value)],
+        }]],
+    }
+}
+
+/// s0 --match--> s0 (accepting); s0 --!match--> s1 (rejecting sink); s1 any-> s1.
+fn always_holds(name: String, value: bool) -> BuchiAutomaton {
+    BuchiAutomaton {
+        num_states: 2,
+        initial: 0,
+        accepting: vec![0].into_iter().collect(),
+        transitions: vec![
+            vec![
+                BuchiTransition {
+                    to: 0,
+                    conditions: vec![(name.clone(), value)],
+                },
+                BuchiTransition {
+                    to: 1,
+                    conditions: vec![(name, !value)],
+                },
+            ],
+            vec![BuchiTransition {
+                to: 1,
+                conditions: vec![],
+            }],
+        ],
+    }
+}
+
+/// s0 --!match--> s0; s0 --match--> s1 (accepting); s1 any-> s1.
+fn eventually_holds(name: String, value: bool) -> BuchiAutomaton {
+    BuchiAutomaton {
+        num_states: 2,
+        initial: 0,
+        accepting: vec![1].into_iter().collect(),
+        transitions: vec![
+            vec![
+                BuchiTransition {
+                    to: 0,
+                    conditions: vec![(name.clone(), !value)],
+                },
+                BuchiTransition {
+                    to: 1,
+                    conditions: vec![(name, value)],
+                },
+            ],
+            vec![BuchiTransition {
+                to: 1,
+                conditions: vec![],
+            }],
+        ],
+    }
+}
+
+/// s0 any-> s1; s1 --match--> s1 (accepting); s1 --!match--> s2 (rejecting); s2 any-> s2.
+fn next_holds(name: String, value: bool) -> BuchiAutomaton {
+    BuchiAutomaton {
+        num_states: 3,
+        initial: 0,
+        accepting: vec![1].into_iter().collect(),
+        transitions: vec![
+            vec![BuchiTransition {
+                to: 1,
+                conditions: vec![],
+            }],
+            vec![
+                BuchiTransition {
+                    to: 1,
+                    conditions: vec![(name.clone(), value)],
+                },
+                BuchiTransition {
+                    to: 2,
+                    conditions: vec![(name, !value)],
+                },
+            ],
+            vec![BuchiTransition {
+                to: 2,
+                conditions: vec![],
+            }],
+        ],
+    }
+}
