@@ -185,6 +185,27 @@ impl LuaGenerator {
                 continue;
             }
 
+            // Nested control flow inside a guard body used to fall through to the
+            // catch-all arm below, which emitted only "advance the step counter" and
+            // silently discarded the block. A model whose only assignment to a variable
+            // sat inside a nested if therefore never set it, and a property it violates
+            // was reported clean.
+            if let Stmt::If(inner) = s {
+                self.emit(&format!("    -- {} body step {} (nested if)", kind, step));
+                self.emit_nested_if_choice(inner, step_var.as_str(), *step, next);
+                continue;
+            }
+            if matches!(s, Stmt::Do(_)) {
+                // A nested do/od needs its own selection loop, which this step machine
+                // cannot express yet. Fail loudly rather than drop the block.
+                self.emit(&format!("    -- {} body step {} (nested do)", kind, step));
+                self.emit("    table.insert(transitions, {");
+                self.emit("        guard = function(s) error('nested do/od inside a guard body is not supported') end,");
+                self.emit("        effect = function(s) end,");
+                self.emit("    })");
+                continue;
+            }
+
             self.emit(&format!("    -- {} body step {}", kind, step));
             self.emit("    table.insert(transitions, {");
             self.indent += 1;
@@ -307,6 +328,147 @@ impl LuaGenerator {
         }
     }
 
+    /// Expand a nested `if` inside a guard body into one transition per branch.
+    ///
+    /// Each branch runs from `step` and continues at `next`, which is what the flat
+    /// emitter does for a top-level if. A branch that contains further nested control
+    /// flow, or anything whose effect cannot be expressed in one step, emits a transition
+    /// that raises at evaluation time: the run then reports "could not be checked" instead
+    /// of silently dropping the block.
+    fn emit_nested_if_choice(
+        &mut self,
+        guards: &[Guard],
+        step_var: &str,
+        step: usize,
+        next: usize,
+    ) {
+        let cond_strs: Vec<String> = guards
+            .iter()
+            .map(|g| match &g.condition {
+                Some(e) => self.expr_to_lua(e),
+                None => "true".to_string(),
+            })
+            .collect();
+
+        for (gi, g) in guards.iter().enumerate() {
+            let mut cond = if g.condition.is_none() {
+                let others: Vec<&str> = cond_strs
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, s)| *j != gi && s.as_str() != "true")
+                    .map(|(_, s)| s.as_str())
+                    .collect();
+                if others.is_empty() {
+                    "true".to_string()
+                } else {
+                    format!("not ({})", others.join(" or "))
+                }
+            } else {
+                cond_strs[gi].clone()
+            };
+
+            // Blocking expressions in the branch body become part of the guard.
+            let blocking: Vec<String> = g
+                .body
+                .iter()
+                .filter_map(|s| match s {
+                    Stmt::Expr(e, _) => {
+                        if let Expression::FuncCall { name, .. } = e
+                            && self.inlines.contains_key(name.as_str())
+                        {
+                            return None;
+                        }
+                        Some(self.expr_to_lua(e))
+                    }
+                    _ => None,
+                })
+                .collect();
+            if !blocking.is_empty() {
+                let extra = if blocking.len() == 1 {
+                    blocking[0].clone()
+                } else {
+                    format!("({})", blocking.join(" and "))
+                };
+                cond = if cond == "true" {
+                    extra
+                } else {
+                    format!("({}) and {}", cond, extra)
+                };
+            }
+
+            let mut effects: Vec<String> = Vec::new();
+            let mut guards_extra: Vec<String> = Vec::new();
+            let mut terminates = false;
+            let mut supported = true;
+            for st in &g.body {
+                match st {
+                    Stmt::Skip(_) => {}
+                    Stmt::Assignment {
+                        target,
+                        index,
+                        value,
+                        ..
+                    } => {
+                        let v = self.expr_to_lua(value);
+                        let target_name = if self.global_vars.contains(target.as_str()) {
+                            target.to_string()
+                        } else if let Some(ref pname) = self.current_proctype {
+                            format!("{}_{}", pname, target)
+                        } else {
+                            target.to_string()
+                        };
+                        if let Some(idx) = index {
+                            let idx_str = self.expr_to_lua(idx);
+                            effects.push(format!("s.{}[{} + 1] = {}", target_name, idx_str, v));
+                        } else {
+                            effects.push(format!("s.{} = {}", target_name, v));
+                        }
+                    }
+                    Stmt::Break(_) => match self.current_proctype {
+                        Some(ref pname) => {
+                            effects.push(format!("s._done_{} = true", pname));
+                            terminates = true;
+                        }
+                        None => supported = false,
+                    },
+                    Stmt::Goto(_, _) => {}
+                    Stmt::Assert(e, _) => guards_extra.push(self.expr_to_lua(e)),
+                    _ => supported = false,
+                }
+            }
+
+            self.emit("    table.insert(transitions, {");
+            self.indent += 1;
+            if !supported {
+                self.emit(
+                    "    guard = function(s) error('unsupported statement inside a nested if in a guard body') end,",
+                );
+                self.emit("    effect = function(s) end,");
+                self.indent -= 1;
+                self.emit("    })");
+                return;
+            }
+            let mut all_conds: Vec<String> = vec![format!("s.{} == {}", step_var, step)];
+            if cond != "true" {
+                all_conds.push(cond);
+            }
+            all_conds.extend(guards_extra);
+            self.emit(&format!(
+                "    guard = function(s) return {} end,",
+                all_conds.join(" and ")
+            ));
+            if !terminates {
+                effects.push(format!("s.{} = {}", step_var, next));
+            }
+            self.emit(&format!(
+                "    effect = function(s) {} end,",
+                effects.join("; ")
+            ));
+            self.emit(&format!("    label = \"if:branch{}\",", gi));
+            self.indent -= 1;
+            self.emit("    })");
+        }
+    }
     /// Emit inline body statements as atomic transitions within a guard body step.
     fn emit_inline_body(
         &mut self,

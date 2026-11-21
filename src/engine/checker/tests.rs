@@ -280,3 +280,26 @@ fn test_blocked_model_is_not_a_success() {
         "the error must identify the unexplored model"
     );
 }
+
+/// An `if/fi` nested inside a `do/od` body used to be dropped by guard codegen: the
+/// step-machine arm fell through to a catch-all that only advanced the step counter, so the
+/// block's assignment never happened. A variable that could only be set inside such a block
+/// stayed 0 and the property refuting it was reported clean.
+#[test]
+fn test_nested_if_branch_is_reachable() {
+    let source = "bool f = 0;\n\
+                  active proctype P() { do :: (1) -> if :: f = 1; :: skip; fi; break od }\n\
+                  ltl p0 { [] ( !(f) ) }";
+
+    let model = crate::runtime::LuaModel::from_source(source).expect("model must parse");
+    let result = CheckerBuilder::new().model(model).build().check_dfs();
+
+    assert!(
+        result.errors > 0,
+        "the branch that sets f must be reachable, so []!(f) must be refuted"
+    );
+    assert_eq!(
+        result.violations[0].property_name, "p0",
+        "and the violation must be attributed to its claim"
+    );
+}
