@@ -16,7 +16,10 @@ impl LuaGenerator {
                         if let Expression::FuncCall { name, .. } = e {
                             return self.inlines.contains_key(name.as_str());
                         }
-                        return false;
+                        // A blocking expression is a statement in its own right. Counting it
+                        // here is what stops the flat path from hoisting it in front of the
+                        // writes that precede it.
+                        return true;
                     }
                     true
                 })
@@ -80,37 +83,13 @@ impl LuaGenerator {
                 init_cond[gi].clone()
             };
 
-            // Merge blocking exprs from this guard's body into condition
-            // (exclude inline function calls which are action statements)
-            let blocking: Vec<String> = guard
-                .body
-                .iter()
-                .filter_map(|s| match s {
-                    Stmt::Expr(e, _) => {
-                        // Skip inline function calls — these are action statements
-                        if let Expression::FuncCall { name, .. } = e
-                            && self.inlines.contains_key(name.as_str())
-                        {
-                            return None;
-                        }
-                        Some(self.expr_to_lua(e))
-                    }
-                    _ => None,
-                })
-                .collect();
-            let mut sel_cond = gc.clone();
-            if !blocking.is_empty() {
-                let extra = if blocking.len() == 1 {
-                    blocking[0].clone()
-                } else {
-                    format!("({})", blocking.join(" and "))
-                };
-                if sel_cond == "true" {
-                    sel_cond = extra;
-                } else {
-                    sel_cond = format!("({}) and {}", sel_cond, extra);
-                }
-            }
+            // Blocking expressions are NOT merged into the selection guard. Merging them
+            // moved a wait that happens after a write to before it: for
+            //     do :: (1) -> ready = 1; (peer_ready); go = 1 od
+            // the selection guard became (1) and (peer_ready), so the process blocked before
+            // setting ready and the model could deadlock where spin explores a path. They are
+            // emitted as their own guarded steps below instead.
+            let sel_cond = gc.clone();
 
             let body_non_expr: Vec<&Stmt> = guard
                 .body
@@ -124,7 +103,8 @@ impl LuaGenerator {
                         if let Expression::FuncCall { name, .. } = e {
                             return self.inlines.contains_key(name.as_str());
                         }
-                        return false; // non-inline Expr is blocking condition
+                        // Non-inline: a blocking wait, which is a step of its own.
+                        return true;
                     }
                     true
                 })
@@ -299,6 +279,19 @@ impl LuaGenerator {
                         tail.trim_start_matches("; ")
                     ));
                 }
+                Stmt::Expr(e, _) => {
+                    // A blocking wait: enabled only while the condition holds, and it changes
+                    // nothing but the step counter.
+                    let cond = self.expr_to_lua(e);
+                    self.emit(&format!(
+                        "    guard = function(s) return s.{} == {} and ({}) end,",
+                        step_var, step, cond
+                    ));
+                    self.emit(&format!(
+                        "    effect = function(s) {} end,",
+                        tail.trim_start_matches("; ")
+                    ));
+                }
                 Stmt::Assert(expr, _) => {
                     let e = self.expr_to_lua(expr);
                     self.emit(&format!(
@@ -337,23 +330,6 @@ impl LuaGenerator {
                             vs,
                             step_var,
                             next
-                        ));
-                    }
-                }
-                Stmt::Expr(Expression::FuncCall { name, args }, _) => {
-                    if let Some(inline_def) = self.inlines.get(name.as_str()).cloned() {
-                        self.emit(&format!("    -- inline {} expansion (guard body)", name));
-                        let subs: Vec<(String, String)> = inline_def
-                            .parameters
-                            .iter()
-                            .zip(args.iter())
-                            .map(|(p, a)| (p.clone(), self.expr_to_lua(a)))
-                            .collect();
-                        self.emit_inline_body(&inline_def, &subs, step_var.as_str(), *step, next);
-                    } else {
-                        self.emit(&format!(
-                            "    effect = function(s) {} end,",
-                            tail.trim_start_matches("; ")
                         ));
                     }
                 }

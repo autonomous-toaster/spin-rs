@@ -103,9 +103,48 @@ spin-rs --strong-fairness model.pml
 # Bitstate hashing (Bloom filter, approximate)
 spin-rs --storage bitstate model.pml
 
-# Partial order reduction
-spin-rs --por model.pml
+# Partial order reduction is on by default; turn it off to explore everything
+spin-rs model.pml
+spin-rs --no-por model.pml
 ```
+
+### Partial Order Reduction
+
+Reduction is on by default. It emits per-transition read/write sets from the AST, then explores
+only an ample set at each state: if no enabled transition can affect the claim being checked, one
+transition that conflicts with nothing else is enough, because the others commute with it.
+
+Two consequences of doing this per claim, which the field documentation states as well:
+
+- **`states_explored` is a sum over per-claim traversals.** A model with two claims may report
+  twice the states of a single unreduced pass. It is the same quantity as summing pan's per-claim
+  runs, and it is not comparable with the pre-reduction value of the field.
+- **`max_states` bounds the whole run, not each traversal.** Claims are taken in declaration
+  order and each may use whatever budget remains, so an expensive early claim can starve later
+  ones. A starved claim appears in `unverified` with kind `state_budget` naming it.
+
+Liveness claims are checked by the nested DFS, which is never reduced: an accepting cycle can
+consist entirely of invisible transitions, so reducing it would hide the violation.
+
+#### Parity against pan
+
+States stored, per fixture. "pan POR" is the sum over pan's per-claim traversals, which is the
+only form comparable with our aggregated count.
+
+| fixture | ours (reduced) | pan POR | pan `-DNOREDUCE` | errors | pan errors |
+|---|---|---|---|---|---|
+| 5 independent proctypes, 3 steps each | 21 | 1370 | 3906 | 0 | 0 |
+| 4-task dependent chain, 2 claims | 18 | 26 | 26 | 0 | 0 |
+| concurrent two-phase barrier, 2 claims | 22 | 26 | 34 | 0 | 0 |
+| veriplan chain shape, 1 claim | 5 | 7 | 7 | 0 | 0 |
+| veriplan chain shape, 2 claims | 14 | 20 | 20 | 0 | 0 |
+| violation behind a dependent guard | 5 | 5 | 5 | 1 | 1 |
+| violated liveness claim over an internal cycle | 2 | 2 | 2 | 1 | 1 |
+
+Every row is within pan's reduced count, and error counts match per claim. The corpus is a test
+(`src/engine/checker/por_tests.rs`): it compares reduced against unreduced verdicts, and runs
+`spin` + `gcc` + `pan` when they are on the PATH. A reduction bug does not fail loudly - it
+reports a broken model as clean - so the gate is on verdicts, not on state counts.
 
 ### Library API
 
@@ -207,7 +246,7 @@ and now judge the property's negation.
 | Dead variable elimination (`-o2`) | ✅ |
 | Statement merging (`--opt3`) | ✅ |
 | Rendezvous optimization (`--opt4`) | ✅ |
-| Partial order reduction (stubborn sets) | ✅ |
+| Partial order reduction (ample sets) | ✅ |
 | Bitstate hashing (Bloom filter) | ✅ |
 | Collapse compression | ✅ |
 | Error trails (JSON + Spin format) | ✅ |

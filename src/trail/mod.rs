@@ -497,18 +497,9 @@ mod tests {
             }
             fn transitions(&self, state: &u8) -> Vec<Transition<u8>> {
                 match state {
-                    0 => vec![Transition {
-                        label: "P:x=1".into(),
-                        next: 1,
-                    }],
-                    1 => vec![Transition {
-                        label: "Q:y=1".into(),
-                        next: 2,
-                    }],
-                    2 => vec![Transition {
-                        label: "P:assert".into(),
-                        next: 3,
-                    }],
+                    0 => vec![Transition::new("P:x=1", 1)],
+                    1 => vec![Transition::new("Q:y=1", 2)],
+                    2 => vec![Transition::new("P:assert", 3)],
                     _ => vec![],
                 }
             }
@@ -570,14 +561,8 @@ mod tests {
             }
             fn transitions(&self, state: &u8) -> Vec<Transition<u8>> {
                 match state {
-                    0 => vec![Transition {
-                        label: "init→1".into(),
-                        next: 1,
-                    }],
-                    1 => vec![Transition {
-                        label: "1→2".into(),
-                        next: 2,
-                    }],
+                    0 => vec![Transition::new("init→1", 1)],
+                    1 => vec![Transition::new("1→2", 2)],
                     _ => vec![],
                 }
             }
@@ -617,14 +602,8 @@ mod tests {
             }
             fn transitions(&self, state: &u8) -> Vec<Transition<u8>> {
                 match state {
-                    10 => vec![Transition {
-                        label: "inc".into(),
-                        next: 20,
-                    }],
-                    20 => vec![Transition {
-                        label: "inc".into(),
-                        next: 30,
-                    }],
+                    10 => vec![Transition::new("inc", 20)],
+                    20 => vec![Transition::new("inc", 30)],
                     _ => vec![],
                 }
             }

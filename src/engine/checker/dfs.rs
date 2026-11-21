@@ -4,6 +4,21 @@ use crate::engine::storage::HashCompactStore;
 
 impl<M: Model> Checker<M> {
     pub fn check_dfs(&self) -> CheckResult {
+        self.check_dfs_inner(None, self.config.max_states, true)
+    }
+
+    /// One depth-first traversal.
+    ///
+    /// When scope is Some, the traversal is confined to that claim: only its safety check is
+    /// evaluated, reduction is applied against its visible fields, and budget shortfalls are
+    /// attributed to it by name. When scope is None the traversal behaves exactly as it did
+    /// before reduction existed - every claim, no reduction, the full budget.
+    pub(super) fn check_dfs_inner(
+        &self,
+        scope: Option<&ReductionScope>,
+        budget: usize,
+        model_checks: bool,
+    ) -> CheckResult {
         let start = std::time::Instant::now();
         let init_states = self.model.init_states();
 
@@ -11,8 +26,15 @@ impl<M: Model> Checker<M> {
             return self.empty_result(0.0);
         }
 
-        // Parse LTL formulas into safety checks ([]expr where expr is propositional)
-        let safety_checks = self.parse_safety_formulas();
+        // Parse LTL formulas into safety checks ([]expr where expr is propositional).
+        // A scoped traversal evaluates only the claim it was created for.
+        let safety_checks: Vec<SafetyCheck> = {
+            let all = self.parse_safety_formulas();
+            match scope {
+                Some(s) => all.into_iter().filter(|c| c.prop_name == s.name).collect(),
+                None => all,
+            }
+        };
 
         let mut storage = self.make_storage();
         let mut stack: Vec<(M::State, usize, usize)> = Vec::new(); // (state, depth, parent_index)
@@ -48,13 +70,15 @@ impl<M: Model> Checker<M> {
                 hit_depth_limit = true;
                 continue;
             }
-            if storage.len() >= self.config.max_states {
+            if storage.len() >= budget {
                 hit_state_limit = true;
                 break;
             }
 
-            // Check for violations (safety properties / assertions)
-            if self.config.check_assertions
+            // Check for violations (safety properties / assertions). Model-level checks run on
+            // one traversal only: repeating them per claim would report the same deadlock N times.
+            if model_checks
+                && self.config.check_assertions
                 && let Some(desc) = self.model.check_violation(&state)
             {
                 let state_trail = self.build_trail(&trail, state_idx);
@@ -110,16 +134,28 @@ impl<M: Model> Checker<M> {
                 }
             }
 
-            let trans = self.model.transitions(&state);
-            transitions_count += trans.len();
+            let enabled = self.model.transitions(&state);
+            transitions_count += enabled.len();
 
             // Record enabled transitions for fairness tracking
             if self.config.fairness_mode != FairnessMode::None {
-                let labels: Vec<String> = trans.iter().map(|t| t.label.clone()).collect();
+                let labels: Vec<String> = enabled.iter().map(|t| t.label.clone()).collect();
                 fairness.record_enabled(&labels);
             }
 
-            for t in trans {
+            // Reduction: explore only the ample set. It is computed against this claim's
+            // visible fields, so it is recomputed for every claim rather than once per state.
+            let keep: Vec<usize> = match scope {
+                Some(sc) if !sc.liveness => {
+                    let deps: Vec<TransitionDeps> =
+                        enabled.iter().map(|t| t.deps.clone()).collect();
+                    ample_set(&deps, &sc.visible)
+                }
+                _ => (0..enabled.len()).collect(),
+            };
+
+            for &i in &keep {
+                let t = &enabled[i];
                 // Record fired transition for fairness
                 if self.config.fairness_mode != FairnessMode::None {
                     fairness.record_fired(&t.label);
@@ -128,8 +164,8 @@ impl<M: Model> Checker<M> {
                 let h = self.model.hash(&t.next);
                 if storage.insert(h, &t.next) {
                     let idx = trail.len();
-                    trail.push((t.label, state_idx));
-                    stack.push((t.next, depth + 1, idx));
+                    trail.push((t.label.clone(), state_idx));
+                    stack.push((t.next.clone(), depth + 1, idx));
                 }
             }
 
@@ -165,7 +201,8 @@ impl<M: Model> Checker<M> {
         // A model that declares processes but yields no transitions was never explored.
         // Reporting success here is the null check that makes a whole verification
         // pipeline meaningless, so it is an error, not a pass.
-        if transitions_count == 0
+        if model_checks
+            && transitions_count == 0
             && self.model.process_count() > 0
             && !violations.iter().any(|v| v.property_name == "model")
         {
@@ -213,8 +250,13 @@ impl<M: Model> Checker<M> {
                 property_name: "model".to_string(),
                 kind: UnverifiedKind::StateBudget,
                 reason: format!(
-                    "search stopped at the state limit of {} before the state space closed",
-                    self.config.max_states
+                    "search stopped at the state limit of {} before the state space closed{}",
+                    budget,
+                    match scope {
+                        Some(s) =>
+                            format!(" (while checking '{}', which could not be decided)", s.name),
+                        None => String::new(),
+                    }
                 ),
             });
         }
@@ -222,14 +264,14 @@ impl<M: Model> Checker<M> {
         // Check remaining LTL properties (non-[]p formulas via nested DFS). Skipped when an
         // early stop already produced a refutation: the caller asked for the first one, and
         // exploring the rest would defeat that.
-        if !(self.config.stop_at_first_violation && result.errors > 0) {
+        if scope.is_none() && !(self.config.stop_at_first_violation && result.errors > 0) {
             self.check_ltl_properties(&mut result);
         }
 
         // With an early stop, every claim that did not produce a violation was left
         // unexplored. Report them individually so a caller cannot read "no violation
         // reported" as "satisfied" - the failure mode this whole contract exists to stop.
-        if hit_early_stop {
+        if hit_early_stop && scope.is_none() {
             let decided: std::collections::HashSet<&str> = result
                 .violations
                 .iter()
@@ -255,7 +297,7 @@ impl<M: Model> Checker<M> {
 
     /// Check LTL properties using PropertyChecker (nested DFS).
     /// Skips []expr formulas that were already checked as safety properties during DFS.
-    fn check_ltl_properties(&self, result: &mut CheckResult) {
+    pub(super) fn check_ltl_properties(&self, result: &mut CheckResult) {
         let formulas = self.model.ltl_formulas();
         if formulas.is_empty() {
             return;
@@ -711,7 +753,7 @@ fn evaluate_propositional(formula: &crate::property::LtlFormula, state_str: &str
 /// The search reaches the same property violation through many states and paths, so the
 /// raw list length is a count of states hit, not a count of findings. Real spin stops at
 /// the first error by default and downstream tooling reads a count as distinct findings.
-fn dedup_violations(violations: Vec<Violation>) -> Vec<Violation> {
+pub(super) fn dedup_violations(violations: Vec<Violation>) -> Vec<Violation> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for v in violations {
@@ -723,7 +765,7 @@ fn dedup_violations(violations: Vec<Violation>) -> Vec<Violation> {
 }
 
 /// Check if a formula string is a safety formula ([]expr where expr is propositional).
-fn is_safety_formula(formula_str: &str) -> bool {
+pub(crate) fn is_safety_formula(formula_str: &str) -> bool {
     if let Ok(crate::property::LtlFormula::Always(inner)) =
         crate::property::LtlFormula::parse(formula_str)
     {

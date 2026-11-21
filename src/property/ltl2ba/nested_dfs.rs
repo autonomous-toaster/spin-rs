@@ -267,19 +267,10 @@ mod tests {
         fn transitions(&self, state: &u64) -> Vec<crate::engine::checker::Transition<u64>> {
             match state {
                 0 => vec![
-                    crate::engine::checker::Transition {
-                        label: "a".into(),
-                        next: 1,
-                    },
-                    crate::engine::checker::Transition {
-                        label: "b".into(),
-                        next: 2,
-                    },
+                    crate::engine::checker::Transition::new("a", 1),
+                    crate::engine::checker::Transition::new("b", 2),
                 ],
-                1 => vec![crate::engine::checker::Transition {
-                    label: "c".into(),
-                    next: 3,
-                }],
+                1 => vec![crate::engine::checker::Transition::new("c", 3)],
                 _ => vec![],
             }
         }

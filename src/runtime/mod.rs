@@ -7,7 +7,17 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crate::codegen::{self, GeneratedLua};
-use crate::engine::checker::{CheckResult, CheckerBuilder, Model, Transition};
+use crate::engine::checker::{
+    CheckResult, CheckerBuilder, Model, ReductionScope, Transition, TransitionDeps,
+};
+
+/// One enabled transition, as the Lua model reports it.
+#[derive(Debug, Clone)]
+pub struct EnabledTransition {
+    pub label: String,
+    pub next_state: String,
+    pub deps: TransitionDeps,
+}
 
 mod channel;
 pub use channel::LuaChannel;
@@ -95,9 +105,13 @@ end
 
     /// Enumerate all transitions from a serialized state.
     ///
-    /// Calls `_spin_get_transitions(state)`, evaluates each (guard + effect),
-    /// returns (label, serialized_next_state) for enabled transitions.
-    pub fn enumerate_transitions(&self, state_blob: &str) -> anyhow::Result<Vec<(String, String)>> {
+    /// Calls _spin_get_transitions(state), evaluates each (guard + effect), and returns the
+    /// enabled ones with their declared dependencies. A transition that carries no metadata is
+    /// reported opaque, so an unannotated emitter can never be reduced.
+    pub fn enumerate_transitions(
+        &self,
+        state_blob: &str,
+    ) -> anyhow::Result<Vec<EnabledTransition>> {
         // Reconstruct Lua state table from serialized blob
         let state: mlua::Table = lua_ok(
             self.lua
@@ -117,6 +131,13 @@ end
         for pair_result in pair_iter {
             let (_idx, t) = lua_ok(pair_result)?;
             let label: String = t.get("label").unwrap_or_default();
+            let deps = crate::engine::checker::TransitionDeps {
+                reads: t.get("reads").unwrap_or_default(),
+                writes: t.get("writes").unwrap_or_default(),
+                internal: t.get("internal").unwrap_or(false),
+                // Absent metadata means unknown dependencies, never none.
+                opaque: t.get("opaque").unwrap_or(true),
+            };
             let guard_fn: mlua::Function = lua_ok(t.get("guard"))?;
             let effect_fn: mlua::Function = lua_ok(t.get("effect"))?;
 
@@ -147,7 +168,11 @@ end
 
             // Serialize new state
             let blob = lua_ok(serialize_table(&new_state))?;
-            results.push((label, blob));
+            results.push(EnabledTransition {
+                label,
+                next_state: blob,
+                deps,
+            });
         }
 
         Ok(results)
@@ -170,6 +195,10 @@ pub struct LuaModel {
     /// First Lua evaluation error seen during exploration.
     /// A failed guard or effect must not be mistaken for a disabled transition.
     eval_error: std::cell::RefCell<Option<String>>,
+    /// Names of the fields the state table actually carries, read once from the initial state.
+    /// Reduction asks which of these a claim can observe, so it needs the real field names
+    /// (p1_x, t1_done) rather than the Promela identifiers they came from.
+    state_fields: Vec<String>,
 }
 
 impl LuaModel {
@@ -220,12 +249,21 @@ impl LuaModel {
             })
             .sum();
 
+        // The field names come from the state table itself, not from the AST: the generator
+        // decides how a variable is spelled in the state (p1_x for a proctype local, x for a
+        // global), and asking the AST again would be a second, divergent source of truth.
+        let state_fields = match runtime.init_state() {
+            Ok(blob) => parse_state_keys(&blob),
+            Err(_) => Vec::new(),
+        };
+
         Ok(Self {
             runtime: std::cell::RefCell::new(runtime),
             ltl_formulas,
             source: model.source.clone(),
             process_count,
             eval_error: std::cell::RefCell::new(None),
+            state_fields,
         })
     }
 
@@ -255,10 +293,7 @@ impl Model for LuaModel {
         match runtime.enumerate_transitions(&state.0) {
             Ok(results) => results
                 .into_iter()
-                .map(|(label, blob)| Transition {
-                    label,
-                    next: StateBlob(blob),
-                })
+                .map(|t| Transition::new(t.label, StateBlob(t.next_state)).with_deps(t.deps))
                 .collect(),
             Err(e) => {
                 // Record the failure: an evaluation error is not an empty transition set.
@@ -323,6 +358,44 @@ impl Model for LuaModel {
         None
     }
 
+    fn reduction_scopes(&self) -> Vec<ReductionScope> {
+        // No fields means the initial state could not be read, so nothing is known about what
+        // any claim observes. Returning no scopes leaves the search unreduced, which is correct.
+        if self.state_fields.is_empty() {
+            return Vec::new();
+        }
+        let all: std::collections::BTreeSet<String> = self.state_fields.iter().cloned().collect();
+        // A model with no claim observes nothing: its only findings are deadlocks and assertion
+        // failures, and an assertion failure is encoded as a disabled transition, so both are
+        // deadlock findings. Persistent ample sets preserve those, and an empty visible set is
+        // then the correct - not merely the cheapest - answer.
+        if self.ltl_formulas.is_empty() {
+            return vec![ReductionScope {
+                name: "model".to_string(),
+                visible: Default::default(),
+                liveness: false,
+            }];
+        }
+        let mut out = Vec::new();
+        for f in &self.ltl_formulas {
+            // Liveness claims are checked by the nested-DFS path, which is never reduced: an
+            // accepting cycle can consist entirely of invisible internal transitions, so
+            // reducing it would hide the very violation the claim looks for.
+            if !crate::engine::checker::dfs::is_safety_formula(&f.formula) {
+                continue;
+            }
+            let name = f.name.clone().unwrap_or_else(|| "ltl".to_string());
+            let visible =
+                visible_fields(&f.formula, &self.state_fields).unwrap_or_else(|| all.clone());
+            out.push(ReductionScope {
+                name,
+                visible,
+                liveness: false,
+            });
+        }
+        out
+    }
+
     fn ltl_formulas(&self) -> &[crate::parser::ast::LtlFormula] {
         &self.ltl_formulas
     }
@@ -352,6 +425,93 @@ impl Model for LuaModel {
         }
         Some(props)
     }
+}
+
+// ─── Reduction scopes ───────────────────────────────────────────
+
+/// A formula token that names no model variable.
+const LTL_KEYWORDS: &[&str] = &[
+    "true",
+    "false",
+    "nil",
+    "U",
+    "V",
+    "W",
+    "X",
+    "skip",
+    "always",
+    "eventually",
+    "until",
+];
+
+/// Field names carried by a serialized state blob.
+fn parse_state_keys(blob: &str) -> Vec<String> {
+    let inner = blob.trim_start_matches('{').trim_end_matches('}');
+    let mut out = Vec::new();
+    for entry in inner.split(',') {
+        let entry = entry.trim();
+        if let Some(colon) = entry.find(':') {
+            let key = entry[..colon].trim().trim_matches('"');
+            if !key.is_empty() {
+                out.push(key.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Every identifier a formula mentions.
+fn formula_identifiers(formula: &str) -> Vec<String> {
+    let bytes = formula.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if c.is_ascii_alphabetic() || c == '_' {
+            let start = i;
+            while i < bytes.len() && {
+                let c = bytes[i] as char;
+                c.is_ascii_alphanumeric() || c == '_'
+            } {
+                i += 1;
+            }
+            out.push(formula[start..i].to_string());
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// The state fields whose change can alter a safety claim's truth value.
+///
+/// Returns None when an identifier cannot be resolved to any field the state carries, so the
+/// caller can fall back to treating everything as visible. Guessing in that situation - treating
+/// an unresolved atom as visible-not-relevant - is how a reduced search loses a violation.
+fn visible_fields(
+    formula: &str,
+    state_fields: &[String],
+) -> Option<std::collections::BTreeSet<String>> {
+    let mut out = std::collections::BTreeSet::new();
+    for ident in formula_identifiers(formula) {
+        if LTL_KEYWORDS.contains(&ident.as_str()) {
+            continue;
+        }
+        // A proctype local x is stored as p1_x, so a formula naming x observes every process's
+        // copy. Over-approximating here costs reduction; under-approximating would be unsound.
+        let suffix = format!("_{}", ident);
+        let mut matched = false;
+        for field in state_fields {
+            if *field == ident || field.ends_with(&suffix) {
+                out.insert(field.clone());
+                matched = true;
+            }
+        }
+        if !matched {
+            return None;
+        }
+    }
+    if out.is_empty() { None } else { Some(out) }
 }
 
 // ─── Parsing helpers ────────────────────────────────────────────

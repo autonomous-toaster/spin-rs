@@ -292,18 +292,9 @@ mod tests {
 
         fn transitions(&self, state: &u8) -> Vec<Transition<u8>> {
             match state {
-                0 => vec![Transition {
-                    label: "0→1".into(),
-                    next: 1,
-                }],
-                1 => vec![Transition {
-                    label: "1→2".into(),
-                    next: 2,
-                }],
-                _ => vec![Transition {
-                    label: "loop".into(),
-                    next: *state,
-                }],
+                0 => vec![Transition::new("0→1", 1)],
+                1 => vec![Transition::new("1→2", 2)],
+                _ => vec![Transition::new("loop", *state)],
             }
         }
 
@@ -353,15 +344,9 @@ mod tests {
             }
             fn transitions(&self, state: &u8) -> Vec<Transition<u8>> {
                 if *state < 10 {
-                    vec![Transition {
-                        label: "inc".into(),
-                        next: state + 1,
-                    }]
+                    vec![Transition::new("inc", state + 1)]
                 } else {
-                    vec![Transition {
-                        label: "loop".into(),
-                        next: *state,
-                    }]
+                    vec![Transition::new("loop", *state)]
                 }
             }
             fn hash(&self, state: &u8) -> u64 {

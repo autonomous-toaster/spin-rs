@@ -59,9 +59,13 @@ pub struct Cli {
     #[arg(long, default_value = "100000")]
     pub max_depth: usize,
 
-    /// Enable partial order reduction
+    /// Enable partial order reduction (on by default; kept for explicitness)
     #[arg(long)]
     pub por: bool,
+
+    /// Disable partial order reduction and explore the full state space
+    #[arg(long)]
+    pub no_por: bool,
 
     /// Disable assertion checking
     #[arg(long)]
@@ -413,13 +417,10 @@ fn handle_verify_mode(cli: &Cli, source: &str) -> Result<(), anyhow::Error> {
         .check_assertions(!cli.no_assertions);
 
     if cli.por {
-        // The flag used to set a config field that no search path read, so it silently did
-        // nothing. Reduction is not implemented yet; saying so is better than a flag that
-        // reports success while exploring everything.
-        anyhow::bail!(
-            "--por is not implemented: partial order reduction is under construction and this \
-             build explores the full state space regardless. Remove --por to verify normally."
-        );
+        builder = builder.por_enabled(true);
+    }
+    if cli.no_por {
+        builder = builder.por_enabled(false);
     }
 
     if cli.stop_at_first_violation {
@@ -432,8 +433,9 @@ fn handle_verify_mode(cli: &Cli, source: &str) -> Result<(), anyhow::Error> {
 
     let checker = builder.build();
 
-    // Run verification
-    let result = checker.check_dfs();
+    // Run verification. check() honours the configured search mode and the reduction switch;
+    // calling check_dfs() here ignored both, so --search bfs and --por did nothing.
+    let result = checker.check();
 
     // A guard or effect that failed to evaluate yields no transitions, which is
     // indistinguishable from a disabled guard. Never report a verdict in that case.

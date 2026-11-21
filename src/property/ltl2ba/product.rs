@@ -118,10 +118,9 @@ where
     // came back green.
     let stutter;
     let transitions: &[Transition<S>] = if model_transitions.is_empty() {
-        stutter = vec![Transition {
-            label: "stutter".to_string(),
-            next: state.clone(),
-        }];
+        // Opaque: a stutter step repeats the state, so it interferes with nothing, but it is
+        // also not a model transition and carrying no dependency claim is the safe default.
+        stutter = vec![Transition::new("stutter", state.clone())];
         &stutter
     } else {
         model_transitions

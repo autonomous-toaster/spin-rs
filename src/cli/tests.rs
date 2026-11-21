@@ -247,14 +247,12 @@ fn test_cli_with_por() {
         "--por".to_string(),
         file_path.to_string_lossy().to_string(),
     ];
-    let result = run(&args);
     // --por used to succeed while doing nothing at all, because no search path read the flag.
-    // Reduction is not implemented yet, so the flag must say so rather than explore everything
-    // under a name that promises otherwise.
-    let err = result.expect_err("--por must fail loudly until reduction exists");
+    // It now drives the reduced search, so the run must still succeed and still find the model.
+    let result = run(&args);
     assert!(
-        err.to_string().contains("not implemented"),
-        "the error must name the flag as unimplemented: {err}"
+        result.is_ok(),
+        "--por must drive a real reduction, not fail: {result:?}"
     );
     std::fs::remove_file(&file_path).ok();
 }

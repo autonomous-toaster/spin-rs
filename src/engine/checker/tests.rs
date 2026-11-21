@@ -12,18 +12,9 @@ impl Model for ChainModel {
 
     fn transitions(&self, state: &u8) -> Vec<Transition<u8>> {
         match state {
-            0 => vec![Transition {
-                label: "A→B".into(),
-                next: 1,
-            }],
-            1 => vec![Transition {
-                label: "B→C".into(),
-                next: 2,
-            }],
-            2 => vec![Transition {
-                label: "C→C".into(),
-                next: 2,
-            }],
+            0 => vec![Transition::new("A→B", 1)],
+            1 => vec![Transition::new("B→C", 2)],
+            2 => vec![Transition::new("C→C", 2)],
             _ => vec![],
         }
     }
@@ -81,18 +72,9 @@ impl Model for ViolationModel {
 
     fn transitions(&self, state: &i32) -> Vec<Transition<i32>> {
         match state {
-            0 => vec![Transition {
-                label: "0→1".into(),
-                next: 1,
-            }],
-            1 => vec![Transition {
-                label: "1→2".into(),
-                next: 2,
-            }],
-            _ => vec![Transition {
-                label: "loop".into(),
-                next: *state,
-            }],
+            0 => vec![Transition::new("0→1", 1)],
+            1 => vec![Transition::new("1→2", 2)],
+            _ => vec![Transition::new("loop", *state)],
         }
     }
 
@@ -142,19 +124,10 @@ impl Model for UnfairModel {
     fn transitions(&self, state: &u8) -> Vec<Transition<u8>> {
         match state {
             0 => vec![
-                Transition {
-                    label: "always_enabled".into(),
-                    next: 0,
-                }, // self-loop, always enabled
-                Transition {
-                    label: "rarely_taken".into(),
-                    next: 1,
-                }, // rarely taken
+                Transition::new("always_enabled", 0), // self-loop, always enabled
+                Transition::new("rarely_taken", 1),   // rarely taken
             ],
-            1 => vec![Transition {
-                label: "back".into(),
-                next: 0,
-            }],
+            1 => vec![Transition::new("back", 0)],
             _ => vec![],
         }
     }

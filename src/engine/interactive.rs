@@ -257,24 +257,9 @@ mod tests {
 
         fn transitions(&self, state: &u8) -> Vec<Transition<u8>> {
             match state {
-                0 => vec![
-                    Transition {
-                        label: "0→1".into(),
-                        next: 1,
-                    },
-                    Transition {
-                        label: "0→2".into(),
-                        next: 2,
-                    },
-                ],
-                1 => vec![Transition {
-                    label: "1→1".into(),
-                    next: 1,
-                }],
-                2 => vec![Transition {
-                    label: "2→2".into(),
-                    next: 2,
-                }],
+                0 => vec![Transition::new("0→1", 1), Transition::new("0→2", 2)],
+                1 => vec![Transition::new("1→1", 1)],
+                2 => vec![Transition::new("2→2", 2)],
                 _ => vec![],
             }
         }
