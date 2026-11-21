@@ -155,7 +155,12 @@ impl ErrorTrail {
         };
 
         let state_hashes: Vec<u64> = steps.iter().map(|s| s.state_hash).collect();
-        Ok(ErrorTrail::new(violation, state_hashes, states_explored, depth_reached))
+        Ok(ErrorTrail::new(
+            violation,
+            state_hashes,
+            states_explored,
+            depth_reached,
+        ))
     }
 
     /// Save trail in Spin-compatible text format.
@@ -279,7 +284,11 @@ impl<M: crate::engine::checker::Model> TrailReplayer<M> {
         let states = self.replay()?;
 
         println!("\n=== Trail Replay with State Inspection ===");
-        println!("Trail: {} ({} steps)", self.trail.property_name, self.trail.len());
+        println!(
+            "Trail: {} ({} steps)",
+            self.trail.property_name,
+            self.trail.len()
+        );
         println!("Description: {}", self.trail.description);
 
         for (i, (step, state)) in self.trail.steps.iter().zip(states.iter()).enumerate() {

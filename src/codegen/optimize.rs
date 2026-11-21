@@ -144,11 +144,12 @@ pub fn vars_written_by_stmt(stmt: &Stmt) -> HashSet<String> {
         Stmt::Assignment { target, .. } => {
             vars.insert(target.clone());
         }
-        Stmt::Recv { target, .. } => {
-            if let RecvTarget::VarList(vs) = target {
-                for v in vs {
-                    vars.insert(v.clone());
-                }
+        Stmt::Recv {
+            target: RecvTarget::VarList(vs),
+            ..
+        } => {
+            for v in vs {
+                vars.insert(v.clone());
             }
         }
         Stmt::Atomic(body, _) | Stmt::DStep(body, _) => {
@@ -231,7 +232,12 @@ pub fn vars_read_by_stmt(stmt: &Stmt) -> HashSet<String> {
                 vars.extend(vars_in_expr(a));
             }
         }
-        Stmt::For { condition, update, body, .. } => {
+        Stmt::For {
+            condition,
+            update,
+            body,
+            ..
+        } => {
             vars.extend(vars_in_expr(condition));
             vars.extend(vars_read_by_stmt(update));
             for s in body {
@@ -447,10 +453,7 @@ pub fn is_mergeable(a: &Stmt, b: &Stmt) -> bool {
 /// The merged effect is the sequence of both effects.
 pub fn merge_stmts(a: &Stmt, b: &Stmt) -> Stmt {
     // For simple assignments, create a combined atomic block
-    let mut body = Vec::new();
-    body.push(a.clone());
-    body.push(b.clone());
-    Stmt::Atomic(body, 0)
+    Stmt::Atomic(vec![a.clone(), b.clone()], 0)
 }
 
 /// Perform statement merging on a list of statements.
@@ -489,10 +492,13 @@ pub fn is_sync_channel(channel: &Expression, model: &PromelaModel) -> bool {
     match channel {
         Expression::Ident(name) => {
             for decl in &model.declarations {
-                if let TopLevel::ChanDecl { name: cn, capacity, .. } = decl
-                    && cn == name {
-                        return *capacity == 0;
-                    }
+                if let TopLevel::ChanDecl {
+                    name: cn, capacity, ..
+                } = decl
+                    && cn == name
+                {
+                    return *capacity == 0;
+                }
             }
             false
         }
@@ -511,12 +517,10 @@ pub fn is_sync_send(stmt: &Stmt, model: &PromelaModel) -> bool {
 /// Check if a statement is a receive on a specific channel.
 pub fn is_recv_on_channel(stmt: &Stmt, channel: &Expression) -> bool {
     match stmt {
-        Stmt::Recv { channel: c, .. } => {
-            match (channel, c.as_ref()) {
-                (Expression::Ident(n1), Expression::Ident(n2)) => n1 == n2,
-                _ => false,
-            }
-        }
+        Stmt::Recv { channel: c, .. } => match (channel, c.as_ref()) {
+            (Expression::Ident(n1), Expression::Ident(n2)) => n1 == n2,
+            _ => false,
+        },
         _ => false,
     }
 }
@@ -533,15 +537,15 @@ pub fn optimize_rendezvous(stmts: &[Stmt], model: &PromelaModel) -> Vec<Stmt> {
     while i < stmts.len() {
         if i + 1 < stmts.len()
             && let Stmt::Send { channel, .. } = &stmts[i]
-                && is_sync_channel(channel, model) && is_recv_on_channel(&stmts[i + 1], channel) {
-                    // Merge sync send/recv pair into atomic block
-                    let mut body = Vec::new();
-                    body.push(stmts[i].clone());
-                    body.push(stmts[i + 1].clone());
-                    result.push(Stmt::Atomic(body, 0));
-                    i += 2;
-                    continue;
-                }
+            && is_sync_channel(channel, model)
+            && is_recv_on_channel(&stmts[i + 1], channel)
+        {
+            // Merge sync send/recv pair into atomic block
+            let body = vec![stmts[i].clone(), stmts[i + 1].clone()];
+            result.push(Stmt::Atomic(body, 0));
+            i += 2;
+            continue;
+        }
         result.push(stmts[i].clone());
         i += 1;
     }
@@ -552,11 +556,7 @@ pub fn optimize_rendezvous(stmts: &[Stmt], model: &PromelaModel) -> Vec<Stmt> {
 // ─── Top-Level Optimization Pipeline ───────────────────────────
 
 /// Apply all enabled optimizations to a proctype's body.
-pub fn optimize_proctype(
-    stmts: &[Stmt],
-    model: &PromelaModel,
-    opt: &OptLevel,
-) -> Vec<Stmt> {
+pub fn optimize_proctype(stmts: &[Stmt], model: &PromelaModel, opt: &OptLevel) -> Vec<Stmt> {
     let mut result = stmts.to_vec();
 
     if opt.dataflow || opt.dead_var_elim {
@@ -726,20 +726,18 @@ mod tests {
 
     #[test]
     fn test_dataflow_loop() {
-        let stmts = vec![
-            Stmt::Do(vec![
-                Guard {
-                    condition: Some(Expression::BoolLit(true)),
-                    body: vec![make_assign("x", "x")],
-                    line: 0,
-                },
-                Guard {
-                    condition: Some(Expression::BoolLit(true)),
-                    body: vec![make_assign("y", "y")],
-                    line: 0,
-                },
-            ]),
-        ];
+        let stmts = vec![Stmt::Do(vec![
+            Guard {
+                condition: Some(Expression::BoolLit(true)),
+                body: vec![make_assign("x", "x")],
+                line: 0,
+            },
+            Guard {
+                condition: Some(Expression::BoolLit(true)),
+                body: vec![make_assign("y", "y")],
+                line: 0,
+            },
+        ])];
 
         let result = analyze_dataflow(&stmts);
         assert!(!result.transitions.is_empty());
@@ -801,10 +799,7 @@ mod tests {
             typedefs: HashMap::new(),
         };
 
-        let stmts = vec![
-            make_send("ch"),
-            make_recv("ch", "x"),
-        ];
+        let stmts = vec![make_send("ch"), make_recv("ch", "x")];
 
         let optimized = optimize_rendezvous(&stmts, &model);
         assert_eq!(optimized.len(), 1);
@@ -824,10 +819,7 @@ mod tests {
             typedefs: HashMap::new(),
         };
 
-        let stmts = vec![
-            make_send("ch"),
-            make_recv("ch", "x"),
-        ];
+        let stmts = vec![make_send("ch"), make_recv("ch", "x")];
 
         let optimized = optimize_rendezvous(&stmts, &model);
         assert_eq!(optimized.len(), 2);

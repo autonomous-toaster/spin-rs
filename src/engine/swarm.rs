@@ -95,7 +95,6 @@ struct SwarmShared {
     total_transitions: AtomicUsize,
     max_depth_reached: AtomicUsize,
     violation_found: AtomicBool,
-    start_time: Instant,
 }
 
 /// Run swarm verification using a model factory.
@@ -116,7 +115,6 @@ where
         total_transitions: AtomicUsize::new(0),
         max_depth_reached: AtomicUsize::new(0),
         violation_found: AtomicBool::new(false),
-        start_time: start,
     });
 
     let factory = Arc::new(model_factory);

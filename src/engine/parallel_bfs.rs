@@ -11,7 +11,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use crossbeam::channel::{bounded, Receiver, Sender};
+use crossbeam::channel::{Receiver, Sender, bounded};
+
+/// A work item on the parallel BFS frontier: a state and its depth.
+type FrontierSender<S> = Sender<(S, usize)>;
+type FrontierReceiver<S> = Receiver<(S, usize)>;
 
 use crate::engine::checker::{CheckResult, Model, Violation};
 
@@ -44,7 +48,6 @@ struct BfsShared<S> {
     violations: Mutex<Vec<Violation>>,
     violation_found: AtomicBool,
     config: ParallelBfsConfig,
-    start_time: Instant,
 }
 
 /// Run parallel BFS verification using a model factory.
@@ -86,11 +89,10 @@ where
         violations: Mutex::new(Vec::new()),
         violation_found: AtomicBool::new(false),
         config: config.clone(),
-        start_time: start,
     });
 
     // Create the BFS frontier channel
-    let (tx, rx): (Sender<(M::State, usize)>, Receiver<(M::State, usize)>) =
+    let (tx, rx): (FrontierSender<M::State>, FrontierReceiver<M::State>) =
         bounded(config.channel_capacity);
 
     // Seed initial states
@@ -171,16 +173,17 @@ fn bfs_worker<M>(
 
         // Check for violations
         if shared.config.check_assertions
-            && let Some(desc) = model.check_violation(&state) {
-                let mut violations = shared.violations.lock().unwrap();
-                violations.push(Violation {
-                    property_name: "assertion".to_string(),
-                    trail: vec![],
-                    description: desc,
-                });
-                shared.violation_found.store(true, Ordering::Relaxed);
-                break;
-            }
+            && let Some(desc) = model.check_violation(&state)
+        {
+            let mut violations = shared.violations.lock().unwrap();
+            violations.push(Violation {
+                property_name: "assertion".to_string(),
+                trail: vec![],
+                description: desc,
+            });
+            shared.violation_found.store(true, Ordering::Relaxed);
+            break;
+        }
 
         // Expand transitions
         let transitions = model.transitions(&state);
@@ -215,11 +218,23 @@ mod tests {
         fn transitions(&self, state: &u8) -> Vec<Transition<u8>> {
             match state {
                 0 => vec![
-                    Transition { label: "0→1".into(), next: 1 },
-                    Transition { label: "0→2".into(), next: 2 },
+                    Transition {
+                        label: "0→1".into(),
+                        next: 1,
+                    },
+                    Transition {
+                        label: "0→2".into(),
+                        next: 2,
+                    },
                 ],
-                1 => vec![Transition { label: "1→1".into(), next: 1 }],
-                2 => vec![Transition { label: "2→2".into(), next: 2 }],
+                1 => vec![Transition {
+                    label: "1→1".into(),
+                    next: 1,
+                }],
+                2 => vec![Transition {
+                    label: "2→2".into(),
+                    next: 2,
+                }],
                 _ => vec![],
             }
         }
@@ -266,9 +281,15 @@ mod tests {
         struct EmptyModel;
         impl Model for EmptyModel {
             type State = u8;
-            fn init_states(&self) -> Vec<u8> { vec![] }
-            fn transitions(&self, _: &u8) -> Vec<Transition<u8>> { vec![] }
-            fn hash(&self, _: &u8) -> u64 { 0 }
+            fn init_states(&self) -> Vec<u8> {
+                vec![]
+            }
+            fn transitions(&self, _: &u8) -> Vec<Transition<u8>> {
+                vec![]
+            }
+            fn hash(&self, _: &u8) -> u64 {
+                0
+            }
         }
 
         let config = ParallelBfsConfig::default();
@@ -282,17 +303,34 @@ mod tests {
         struct ViolationModel;
         impl Model for ViolationModel {
             type State = i32;
-            fn init_states(&self) -> Vec<i32> { vec![0] }
+            fn init_states(&self) -> Vec<i32> {
+                vec![0]
+            }
             fn transitions(&self, state: &i32) -> Vec<Transition<i32>> {
                 match state {
-                    0 => vec![Transition { label: "0→1".into(), next: 1 }],
-                    1 => vec![Transition { label: "1→2".into(), next: 2 }],
-                    _ => vec![Transition { label: "loop".into(), next: *state }],
+                    0 => vec![Transition {
+                        label: "0→1".into(),
+                        next: 1,
+                    }],
+                    1 => vec![Transition {
+                        label: "1→2".into(),
+                        next: 2,
+                    }],
+                    _ => vec![Transition {
+                        label: "loop".into(),
+                        next: *state,
+                    }],
                 }
             }
-            fn hash(&self, state: &i32) -> u64 { *state as u64 }
+            fn hash(&self, state: &i32) -> u64 {
+                *state as u64
+            }
             fn check_violation(&self, state: &i32) -> Option<String> {
-                if *state == 2 { Some("forbidden".into()) } else { None }
+                if *state == 2 {
+                    Some("forbidden".into())
+                } else {
+                    None
+                }
             }
         }
 

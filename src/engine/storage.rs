@@ -210,13 +210,16 @@ impl<S: Clone + Hash + Eq + Send> StateStore<S> for HashCompactStore<S> {
             }
 
             if let Some(found) = self.check_cache(hash, state)
-                && found {
-                    return false;
-                }
+                && found
+            {
+                return false;
+            }
 
             // Hash collision detected: same hash, different state
             self.hash_table.insert(hash, (*count, true));
-            let cached_states: Vec<S> = self.lru_cache.iter()
+            let cached_states: Vec<S> = self
+                .lru_cache
+                .iter()
                 .filter(|(h, _)| *h == hash)
                 .map(|(_, s)| s.clone())
                 .collect();
@@ -298,13 +301,19 @@ mod tests {
         let states = vec!["a", "b", "c", "d", "e"];
         for (i, s) in states.iter().enumerate() {
             let hash = i as u64;
-            assert_eq!(exact.insert(hash, &s.to_string()), hc.insert(hash, &s.to_string()));
+            assert_eq!(
+                exact.insert(hash, &s.to_string()),
+                hc.insert(hash, &s.to_string())
+            );
         }
 
         // Re-insert all (should be duplicates)
         for (i, s) in states.iter().enumerate() {
             let hash = i as u64;
-            assert_eq!(exact.insert(hash, &s.to_string()), hc.insert(hash, &s.to_string()));
+            assert_eq!(
+                exact.insert(hash, &s.to_string()),
+                hc.insert(hash, &s.to_string())
+            );
         }
 
         assert_eq!(exact.len(), hc.len());
