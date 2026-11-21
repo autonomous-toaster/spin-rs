@@ -145,6 +145,7 @@ where
         depth_reached,
         errors: violations.len(),
         violations,
+        unverified: vec![],
         elapsed_secs: elapsed,
     }
 }

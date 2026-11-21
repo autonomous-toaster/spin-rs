@@ -182,3 +182,35 @@ fn test_ltl_liveness_verdict_is_not_inverted() {
     assert!(v.is_some(), "<>(p) never holds here, so it must be refuted");
     assert!(s.is_none(), "<>(p) holds here, so it must not be refuted");
 }
+
+#[test]
+fn test_top_level_eventually_over_finite_run_is_refutable() {
+    // A terminating model has no cycle, so a product search that only reports cycles it
+    // finds can never refute []!p. Promela lets the never claim stutter at a terminal
+    // state, and without that stutter every violated <> over a finite run came back green.
+    let violated = "bool p = 0;\nactive proctype P() { do :: (1) -> skip; break od }";
+    let satisfied = "bool p = 0;\nactive proctype P() { do :: (1) -> p = 1; break od }";
+    assert!(
+        verify_ltl(violated, "<>(p)", "l0").unwrap().is_some(),
+        "<>(p) never holds in a terminating run, so it must be refuted"
+    );
+    assert!(
+        verify_ltl(satisfied, "<>(p)", "l0").unwrap().is_none(),
+        "<>(p) holds here, so it must not be refuted"
+    );
+}
+
+#[test]
+fn test_satisfied_conditional_is_not_an_error() {
+    // [] (a -> <>b) is the shape veriplan emits for every conditional constraint. When a
+    // never fires the property HOLDS, so reporting an error here flagged a satisfied
+    // property as invalid.
+    let source = "bool a = 0;\nbool b = 0;\nactive proctype P() { do :: (1) -> skip; break od }\nltl p0 { [] (a -> <> (b)) }";
+    let result = crate::runtime::verify(source).unwrap();
+    assert_eq!(result.errors, 0, "a never fires, so the conditional holds");
+    assert!(
+        result.unverified.is_empty(),
+        "the shape must be decided, not skipped: {:?}",
+        result.unverified
+    );
+}

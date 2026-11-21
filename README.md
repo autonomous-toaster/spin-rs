@@ -135,12 +135,60 @@ let result = checker.check();
 ```rust
 use spin_rs::property::verify_ltl;
 
-let result = verify_ltl(promela, "[]<>(x == 0)", "liveness")?;
+// Supported shapes: p, !p, []p, <>p, Xp and [] (a -> <> b).
+let result = verify_ltl(promela, "[] (x == 0 -> <> (done))", "liveness")?;
 match result {
     Some(v) => println!("❌ Violation: {}", v.description),
     None    => println!("✅ Property holds"),
 }
 ```
+
+A shape the automaton builder cannot complement returns `Err`, never a green verdict.
+See **Verification results** below.
+
+### Verification results
+
+A result is only trustworthy when it says so. Three outcomes are distinct:
+
+| Outcome | How it is reported | Meaning |
+|---|---|---|
+| No violation | `Ok(result)` with `errors == 0` and `unverified.is_empty()` | the state space closed and every property was decided |
+| Violation | `Ok(result)` with `errors > 0` | definite refutation, with a trail |
+| Unverified | `Err(...)`, or `Ok(result)` with `unverified` non-empty | no verdict was produced |
+
+`verify` returns `Err` when the model could not be explored or evaluated:
+
+- no process is enabled in the initial state, so nothing was explored;
+- an atomic proposition does not name a variable in the model;
+- a generated guard or effect failed to evaluate.
+
+All three mean *I could not check this*, not *this is invalid*. Mapping `Err` to a failure
+verdict invents a violation.
+
+`CheckResult::unverified` carries the same idea for individual properties: a property the
+checker cannot decide (an unsupported LTL shape, or an unparsable formula) is listed there
+rather than counted as an error. A model declaring proctypes but exploring zero transitions
+is an error, never a pass.
+
+`verify` has no wall-clock deadline. It runs until the state space closes or `max_states`
+is reached; use `verify_with_config` to set the budget. A search that stops at the limit
+adds a `model` entry to `unverified` saying so, so a truncated run can no longer be
+confused with a completed one.
+
+Properties are evaluated per named claim. A caller that checks only the first claim of a
+multi-property model will under-report violations; `pan` has the same behaviour and needs
+`-N <claim>` per property.
+
+### Why 0.2.0 changed old verdicts
+
+Upgrading from 0.1.0 matters because some earlier verdicts were wrong, not merely different.
+Four defects produced them: the state-blob reader returned the *next* variable's value, so
+implication-shaped safety properties were judged against the wrong atom; `&&` never matched
+across a space, collapsing every conjunction into one unresolvable atom that silently read
+as false; mlua maps numeric `0` to `true`, so guards that evaluated to zero were treated as
+enabled; and `evaluate_atomic_props` reinterpreted the state pointer as a different type
+through `unsafe`, which is undefined behaviour. Liveness verdicts were additionally inverted
+and now judge the property's negation.
 
 ## Features
 
@@ -178,7 +226,7 @@ match result {
 **Channels**: buffered/unbuffered, `!` (send), `?` (receive), poll, sorted, rendezvous  
 **Expressions**: arithmetic, comparison, boolean, bitwise, `len`, `enabled`, `full`, `empty`, remote refs  
 **Properties**: `assert`, LTL inline, named LTL formulas, never claims, `np_` (non-progress)  
-**LTL operators**: `[]` (always), `<>` (eventually), `X` (next), `U` (until), `V`/`R` (release)  
+**LTL operators**: `[]`, `<>`, `X` on atomic or negated-atomic operands, plus `[] (a -> <> b)`. `U`, `V`/`R` and nested temporal operators are rejected as unsupported rather than mis-verdicts.  
 **Other**: `printf`, inline expansion, `c_code` passthrough, `run`, `provided`, `priority`
 
 ## Architecture

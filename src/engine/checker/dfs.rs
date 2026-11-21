@@ -19,6 +19,7 @@ impl<M: Model> Checker<M> {
         let mut trail: Vec<(String, usize)> = Vec::new(); // (transition_label, parent_index)
         let mut transitions_count = 0;
         let mut violations = Vec::new();
+        let mut hit_state_limit = false;
 
         // Fairness tracking
         let mut fairness = FairnessTracker::new(self.config.fairness_mode);
@@ -38,6 +39,7 @@ impl<M: Model> Checker<M> {
                 continue;
             }
             if storage.len() >= self.config.max_states {
+                hit_state_limit = true;
                 break;
             }
 
@@ -179,8 +181,21 @@ impl<M: Model> Checker<M> {
                 .min(stack.iter().map(|(_, d, _)| *d).max().unwrap_or(0)),
             errors: violations.len(),
             violations,
+            unverified: Vec::new(),
             elapsed_secs: elapsed,
         };
+
+        // A search that stopped at the state limit did not finish. Without this the caller
+        // cannot tell "closed, no violations" from "gave up at the cap".
+        if hit_state_limit {
+            result.unverified.push(Unverified {
+                property_name: "model".to_string(),
+                reason: format!(
+                    "search stopped at the state limit of {} before the state space closed",
+                    self.config.max_states
+                ),
+            });
+        }
 
         // Check remaining LTL properties (non-[]p formulas via nested DFS)
         self.check_ltl_properties(&mut result);
@@ -216,26 +231,23 @@ impl<M: Model> Checker<M> {
                         }
                         Ok(None) => {}
                         Err(e) => {
-                            // A property that could not be checked is not a property that
-                            // holds. Logging and continuing reported success for models
-                            // whose properties were never evaluated.
+                            // A property that could not be checked is neither violated nor
+                            // satisfied. Counting it as an error made a SATISFIED property
+                            // read as invalid; treating it as clean made a false property
+                            // read as verified. Report it as unverified.
                             log::warn!("LTL check error for '{}': {}", prop_name, e);
-                            result.errors += 1;
-                            result.violations.push(Violation {
+                            result.unverified.push(Unverified {
                                 property_name: prop_name.to_string(),
-                                trail: vec![],
-                                description: format!("property could not be checked: {}", e),
+                                reason: format!("{}", e),
                             });
                         }
                     }
                 }
                 Err(e) => {
                     log::warn!("Failed to parse LTL formula '{}': {}", prop_name, e);
-                    result.errors += 1;
-                    result.violations.push(Violation {
+                    result.unverified.push(Unverified {
                         property_name: prop_name.to_string(),
-                        trail: vec![],
-                        description: format!("LTL formula could not be parsed: {}", e),
+                        reason: format!("LTL formula could not be parsed: {}", e),
                     });
                 }
             }
@@ -414,6 +426,7 @@ impl<M: Model> Checker<M> {
             depth_reached: max_depth,
             errors: violations.len(),
             violations,
+            unverified: Vec::new(),
             elapsed_secs: elapsed,
         };
 
@@ -464,6 +477,7 @@ impl<M: Model> Checker<M> {
             depth_reached: 0,
             errors: 0,
             violations: vec![],
+            unverified: Vec::new(),
             elapsed_secs,
         }
     }

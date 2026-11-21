@@ -111,9 +111,23 @@ where
 {
     let mut product_transitions = Vec::new();
 
-    let _ = state;
+    // A terminated system is not the end of the run: Promela lets the never claim stutter,
+    // repeating the final state forever. Without this stutter step a terminating model has
+    // no cycle at all, so a violated `<>p` -- whose violation is the ABSENCE of an
+    // accepting cycle over a finite run -- could never be refuted and every such property
+    // came back green.
+    let stutter;
+    let transitions: &[Transition<S>] = if model_transitions.is_empty() {
+        stutter = vec![Transition {
+            label: "stutter".to_string(),
+            next: state.clone(),
+        }];
+        &stutter
+    } else {
+        model_transitions
+    };
 
-    for model_trans in model_transitions {
+    for model_trans in transitions {
         let next_state = model_trans.next.clone();
         let next_hash = model.hash(&next_state);
 

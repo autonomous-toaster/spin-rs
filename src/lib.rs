@@ -116,7 +116,7 @@ pub mod trail;
 // Re-export core types
 pub use engine::checker::CheckerBuilder;
 pub use engine::checker::{
-    CheckResult, Checker, CheckerConfig, Model, SearchMode, StorageMode, Transition,
+    CheckResult, Checker, CheckerConfig, Model, SearchMode, StorageMode, Transition, Unverified,
 };
 pub use parser::ast::PromelaModel;
 
@@ -176,7 +176,12 @@ pub fn verify_with_config(source: &str, config: &CheckerConfig) -> anyhow::Resul
         .check_assertions(config.check_assertions);
 
     let checker = builder.build();
-    Ok(checker.check())
+    let result = checker.check();
+    // Same contract as verify(): a failed evaluation means nothing was checked.
+    if let Some(err) = checker.model().take_error() {
+        anyhow::bail!("{}", err);
+    }
+    Ok(result)
 }
 
 /// Parse Promela source into an AST.

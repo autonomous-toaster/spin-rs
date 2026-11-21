@@ -445,8 +445,13 @@ pub fn to_buchi_not(formula: &LtlFormula) -> Result<BuchiAutomaton, LtlError> {
             )),
         },
 
-        // ![]p  is  <>!p
+        // ![](a -> <>b)  is  <>(a && []!b): the obligation is broken when a finally
+        // happens and b never does afterwards. This is the shape every veriplan
+        // conditional constraint has, so it is worth supporting explicitly.
         LtlFormula::Always(inner) => {
+            if let Some(not_buchi) = complement_implies_eventually(inner) {
+                return Ok(not_buchi);
+            }
             let (name, must_be_true) = atom_with_polarity(inner, "always")?;
             Ok(eventually_holds(name, !must_be_true))
         }
@@ -583,5 +588,70 @@ fn next_holds(name: String, value: bool) -> BuchiAutomaton {
                 conditions: vec![],
             }],
         ],
+    }
+}
+
+/// Complement of `[] (lhs -> <> rhs)`, i.e. `<> (lhs && [] !rhs)`.
+///
+/// The converted formula arrives as `Or(Not(lhs), Eventually(rhs))` because implies is
+/// rewritten to a disjunction. Returns `None` for any other shape so the caller can report
+/// it as unsupported rather than guess.
+///
+/// States: S0 waits for the antecedent, S1 holds after it fired and until the consequent
+/// obliges again. Staying in S1 forever means the antecedent happened and the consequent
+/// never did, which is exactly the violation, so S1 is accepting.
+fn complement_implies_eventually(inner: &LtlFormula) -> Option<BuchiAutomaton> {
+    let LtlFormula::Or(left, right) = inner else {
+        return None;
+    };
+    let LtlFormula::Not(lhs) = left.as_ref() else {
+        return None;
+    };
+    let LtlFormula::Eventually(rhs) = right.as_ref() else {
+        return None;
+    };
+    let (lhs_name, lhs_val) = atom_polarity(lhs)?;
+    let (rhs_name, rhs_val) = atom_polarity(rhs)?;
+
+    Some(BuchiAutomaton {
+        num_states: 2,
+        initial: 0,
+        accepting: vec![1].into_iter().collect(),
+        transitions: vec![
+            // S0: antecedent not yet satisfied.
+            vec![
+                BuchiTransition {
+                    to: 1,
+                    conditions: vec![(lhs_name.clone(), lhs_val)],
+                },
+                BuchiTransition {
+                    to: 0,
+                    conditions: vec![(lhs_name, !lhs_val)],
+                },
+            ],
+            // S1: antecedent fired; the consequent must arrive to clear the obligation.
+            vec![
+                BuchiTransition {
+                    to: 0,
+                    conditions: vec![(rhs_name.clone(), rhs_val)],
+                },
+                BuchiTransition {
+                    to: 1,
+                    conditions: vec![(rhs_name, !rhs_val)],
+                },
+            ],
+        ],
+    })
+}
+
+/// Name and required polarity of a bare atom (optionally negated).
+fn atom_polarity(f: &LtlFormula) -> Option<(String, bool)> {
+    match f {
+        LtlFormula::Atom(name) => Some((name.clone(), true)),
+        LtlFormula::Not(inner) => match inner.as_ref() {
+            LtlFormula::Atom(name) => Some((name.clone(), false)),
+            _ => None,
+        },
+        _ => None,
     }
 }

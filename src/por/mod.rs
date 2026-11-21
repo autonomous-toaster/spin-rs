@@ -308,6 +308,7 @@ pub fn check_dfs_por_with_c3<M: Model>(
             depth_reached: 0,
             errors: 0,
             violations: vec![],
+            unverified: vec![],
             elapsed_secs: 0.0,
         };
     }
@@ -376,6 +377,7 @@ pub fn check_dfs_por_with_c3<M: Model>(
         depth_reached: max_depth_reached,
         errors: 0,
         violations: vec![],
+        unverified: vec![],
         elapsed_secs: elapsed,
     }
 }

@@ -471,8 +471,22 @@ fn print_result(result: &CheckResult) {
         if result.violations.len() > 5 {
             println!("\n... and {} more errors", result.violations.len() - 5);
         }
-    } else {
+    } else if result.unverified.is_empty() {
         println!("\n✅ Verification successful - no errors found");
+    } else {
+        // The state space closed without a violation, but at least one property produced no
+        // verdict. Claiming success here is what let a false property read as verified.
+        println!(
+            "\n⚠️  Inconclusive: {} propert(y/ies) were not checked",
+            result.unverified.len()
+        );
+        for u in result.unverified.iter().take(5) {
+            println!("  Property: {}", u.property_name);
+            println!("  Reason:   {}", u.reason);
+        }
+        if result.unverified.len() > 5 {
+            println!("  ... and {} more", result.unverified.len() - 5);
+        }
     }
 }
 

@@ -122,6 +122,20 @@ pub struct Violation {
     pub description: String,
 }
 
+/// A property that was not decided, and why.
+///
+/// This is distinct from a violation: a violation is a definite refutation, while an
+/// unverified property means the checker could not produce a verdict at all. Callers must
+/// not map it to "invalid". It also covers a search that stopped at `max_states` before the
+/// state space closed.
+#[derive(Debug, Clone)]
+pub struct Unverified {
+    /// Name of the property, or "model" for a whole-model limitation.
+    pub property_name: String,
+    /// Why no verdict was produced.
+    pub reason: String,
+}
+
 /// Verification result.
 #[derive(Debug, Clone)]
 pub struct CheckResult {
@@ -131,6 +145,9 @@ pub struct CheckResult {
     pub depth_reached: usize,
     pub errors: usize,
     pub violations: Vec<Violation>,
+    /// Properties that produced no verdict. Non-empty means the run was incomplete, so
+    /// `errors == 0` does not license a success claim.
+    pub unverified: Vec<Unverified>,
     pub elapsed_secs: f64,
 }
 

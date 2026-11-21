@@ -151,6 +151,7 @@ where
                 depth_reached: 0,
                 errors: 0,
                 violations: vec![],
+                unverified: vec![],
                 elapsed_secs: 0.0,
             };
         }
@@ -187,6 +188,7 @@ where
             depth_reached: 0,
             errors: violations.len(),
             violations,
+            unverified: vec![],
             elapsed_secs: elapsed,
         }
     }

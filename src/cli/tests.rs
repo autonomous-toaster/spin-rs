@@ -279,6 +279,7 @@ fn test_print_result_error() {
         depth_reached: 10,
         errors: 1,
         elapsed_secs: 0.5,
+        unverified: vec![],
         violations: vec![crate::engine::checker::Violation {
             property_name: "safety".to_string(),
             description: "assertion failed".to_string(),
@@ -297,6 +298,7 @@ fn test_print_result_success() {
         depth_reached: 3,
         errors: 0,
         elapsed_secs: 0.1,
+        unverified: vec![],
         violations: vec![],
     };
     print_result(&result);
@@ -319,6 +321,7 @@ fn test_print_result_many_errors() {
         depth_reached: 10,
         errors: 10,
         elapsed_secs: 0.5,
+        unverified: vec![],
         violations,
     };
     print_result(&result);
