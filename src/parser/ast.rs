@@ -33,7 +33,7 @@ pub enum TopLevel {
     CState(Vec<VarDecl>, usize),
     /// Inline macro definition (expansion deferred)
     Inline(InlineDef),
-    /// Channel array declaration: chan name[N];
+    /// Channel array declaration: `chan name[N];`
     ChannelArray {
         name: String,
         size: i64,
