@@ -203,6 +203,15 @@ active proctype task_t2_1() { do :: (t1_1 && t1_2) -> t2_1 = 1; break od }
 ltl p0 { [] (t2_1 -> t1_1) }
 "#;
 
+// NOTE for anyone reading the 1M-cap numbers below: plan_20tasks_10ltls reaching the state
+// limit was NOT primarily the per-proctype step counters. The consumer's translator emitted
+// `active = 1; done = 1; active = 0`, which let a successor task start while its predecessor
+// was still marked active; that interleaving window made the state space the product of the
+// windows at every task boundary. Moving `done = 1` to the end of the body took a 20-task plan
+// from 5,242,876 pan states to 101. The models in this corpus still carry the old shape, so
+// treat their state counts as a modelling artifact rather than as evidence about the checker.
+// Errors are what the corpus compares; the state columns are for scale only.
+
 pub const ALL_MODELS: &[ModelDef] = &[
     ModelDef {
         name: "nest_no_if",
