@@ -20,6 +20,7 @@ impl<M: Model> Checker<M> {
         let mut transitions_count = 0;
         let mut violations = Vec::new();
         let mut hit_state_limit = false;
+        let mut hit_depth_limit = false;
 
         // Fairness tracking
         let mut fairness = FairnessTracker::new(self.config.fairness_mode);
@@ -36,6 +37,8 @@ impl<M: Model> Checker<M> {
 
         while let Some((state, depth, state_idx)) = stack.pop() {
             if depth >= self.config.max_depth {
+                // Pruning here leaves successors unexplored, so the search did not close.
+                hit_depth_limit = true;
                 continue;
             }
             if storage.len() >= self.config.max_states {
@@ -188,6 +191,16 @@ impl<M: Model> Checker<M> {
 
         // A search that stopped at the state limit did not finish. Without this the caller
         // cannot tell "closed, no violations" from "gave up at the cap".
+        if hit_depth_limit {
+            result.unverified.push(Unverified {
+                property_name: "model".to_string(),
+                kind: UnverifiedKind::DepthBudget,
+                reason: format!(
+                    "search pruned states at the depth limit of {} before the state space closed",
+                    self.config.max_depth
+                ),
+            });
+        }
         if hit_state_limit {
             result.unverified.push(Unverified {
                 property_name: "model".to_string(),
@@ -275,6 +288,8 @@ impl<M: Model> Checker<M> {
         let mut trail: Vec<(String, usize)> = Vec::new();
         let mut transitions_count = 0;
         let mut violations = Vec::new();
+        let mut hit_depth_limit = false;
+        let mut hit_state_limit = false;
         let mut max_depth = 0;
 
         // Fairness tracking
@@ -294,9 +309,11 @@ impl<M: Model> Checker<M> {
             max_depth = max_depth.max(depth);
 
             if depth >= self.config.max_depth {
+                hit_depth_limit = true;
                 continue;
             }
             if storage.len() >= self.config.max_states {
+                hit_state_limit = true;
                 break;
             }
 
@@ -434,6 +451,27 @@ impl<M: Model> Checker<M> {
             unverified: Vec::new(),
             elapsed_secs: elapsed,
         };
+
+        if hit_depth_limit {
+            result.unverified.push(Unverified {
+                property_name: "model".to_string(),
+                kind: UnverifiedKind::DepthBudget,
+                reason: format!(
+                    "search pruned states at the depth limit of {} before the state space closed",
+                    self.config.max_depth
+                ),
+            });
+        }
+        if hit_state_limit {
+            result.unverified.push(Unverified {
+                property_name: "model".to_string(),
+                kind: UnverifiedKind::StateBudget,
+                reason: format!(
+                    "search stopped at the state limit of {} before the state space closed",
+                    self.config.max_states
+                ),
+            });
+        }
 
         // BFS previously returned before this call, so every non-propositional LTL
         // property was silently unchecked under --search bfs while still reported as a

@@ -343,3 +343,23 @@ fn test_state_budget_is_a_typed_kind() {
         result.unverified
     );
 }
+
+#[test]
+fn test_depth_pruning_is_reported() {
+    // Pruning at max_depth leaves successors unexplored, so the search did not close and the
+    // run must not look like a completed one.
+    let source = "byte n = 0;\nactive proctype P() { do :: (n < 10) -> n = n + 1 od }";
+    let config = crate::engine::checker::CheckerConfig {
+        max_depth: 3,
+        ..Default::default()
+    };
+    let result = crate::verify_with_config(source, &config).unwrap();
+    assert!(
+        result
+            .unverified
+            .iter()
+            .any(|u| u.kind == crate::engine::checker::UnverifiedKind::DepthBudget),
+        "depth pruning must be reported: {:?}",
+        result.unverified
+    );
+}
