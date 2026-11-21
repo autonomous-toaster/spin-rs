@@ -138,13 +138,13 @@ fn test_collect_atoms_temporal() {
 
 #[test]
 fn test_verify_ltl_safety() {
-    // Note: expression evaluation in Büchi conditions is not yet implemented.
-    // This test uses [](true) which should always hold.
-    let source = "active proctype P() { byte x; x = 1; }";
-    let result = verify_ltl(source, "[](true)", "safety").unwrap();
-    // TODO: Fix expression evaluation in evaluate_atomic_props to handle x == 1
-    // For now, this test is a placeholder
-    assert!(result.is_none() || result.is_some());
+    // [](true) holds in every state, so a full verification must report no error.
+    // This assertion is a real outcome, not a placeholder. Whitespace inside the
+    // parentheses previously produced an atom with surrounding spaces that evaluated
+    // as false, reporting a spurious violation of a tautology.
+    let source = "active proctype P() { byte x; x = 1; }\nltl p0 { [] ( true ) }";
+    let result = crate::runtime::verify(source).unwrap();
+    assert_eq!(result.errors, 0, "[] ( true ) must never be violated");
 }
 
 #[test]

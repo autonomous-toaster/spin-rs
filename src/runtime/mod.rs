@@ -120,8 +120,22 @@ end
             let guard_fn: mlua::Function = lua_ok(t.get("guard"))?;
             let effect_fn: mlua::Function = lua_ok(t.get("effect"))?;
 
-            // Evaluate guard
-            let enabled: bool = lua_ok(guard_fn.call(state.clone()))?;
+            // Evaluate guard.
+            //
+            // Promela expressions are numeric: a guard is enabled when it is non-zero.
+            // Reading the result as a Rust bool is wrong because mlua maps every
+            // non-nil, non-boolean value to true, so a guard that evaluates to 0
+            // (disabled) was treated as enabled. That made guarded assignments fire
+            // unconditionally, e.g. a transition guarded by (a && b) taking while both
+            // were zero.
+            let guard_val: mlua::Value = lua_ok(guard_fn.call(state.clone()))?;
+            let enabled = match guard_val {
+                mlua::Value::Boolean(b) => b,
+                mlua::Value::Integer(i) => i != 0,
+                mlua::Value::Number(n) => n != 0.0,
+                mlua::Value::Nil => false,
+                _ => true,
+            };
             if !enabled {
                 continue;
             }
@@ -151,6 +165,11 @@ pub struct LuaModel {
     runtime: std::cell::RefCell<LuaRuntime>,
     ltl_formulas: Vec<crate::parser::ast::LtlFormula>,
     source: Option<String>,
+    /// Number of process instances declared by the model.
+    process_count: usize,
+    /// First Lua evaluation error seen during exploration.
+    /// A failed guard or effect must not be mistaken for a disabled transition.
+    eval_error: std::cell::RefCell<Option<String>>,
 }
 
 impl LuaModel {
@@ -189,10 +208,24 @@ impl LuaModel {
 
         runtime.load_source(&generated)?;
 
+        let process_count = model
+            .declarations
+            .iter()
+            .map(|d| match d {
+                crate::parser::ast::TopLevel::Proctype(p) if p.active => {
+                    p.pid.map(|n| n as usize).unwrap_or(1)
+                }
+                crate::parser::ast::TopLevel::Init(_) => 1,
+                _ => 0,
+            })
+            .sum();
+
         Ok(Self {
             runtime: std::cell::RefCell::new(runtime),
             ltl_formulas,
             source: model.source.clone(),
+            process_count,
+            eval_error: std::cell::RefCell::new(None),
         })
     }
 
@@ -228,7 +261,12 @@ impl Model for LuaModel {
                 })
                 .collect(),
             Err(e) => {
+                // Record the failure: an evaluation error is not an empty transition set.
                 log::error!("Failed to enumerate transitions: {}", e);
+                let mut slot = self.eval_error.borrow_mut();
+                if slot.is_none() {
+                    *slot = Some(format!("transition evaluation failed: {}", e));
+                }
                 vec![]
             }
         }
@@ -242,6 +280,13 @@ impl Model for LuaModel {
     }
 
     fn check_violation(&self, state: &StateBlob) -> Option<String> {
+        // With an LTL property present, real spin disables invalid-end-state checking
+        // ("invalid end states - (disabled by never claim)") because the claim decides
+        // termination. Reporting a deadlock here would disagree with spin on any model
+        // whose processes legitimately block awaiting a guard that never fires.
+        if !self.ltl_formulas.is_empty() {
+            return None;
+        }
         // Deadlock detection: no transitions but active processes remain
         let trans = self.transitions(state);
         if !trans.is_empty() {
@@ -285,6 +330,28 @@ impl Model for LuaModel {
     fn state_to_string(&self, state: &Self::State) -> Option<String> {
         Some(state.0.clone())
     }
+
+    fn process_count(&self) -> usize {
+        self.process_count
+    }
+
+    fn atomic_props(&self, state: &Self::State) -> Option<std::collections::HashMap<String, bool>> {
+        // Parse the serialized state blob. Format: {"_done_P":false,"x":0,"flag":1,...}
+        let mut props = std::collections::HashMap::new();
+        let inner = state.0.trim_start_matches('{').trim_end_matches('}');
+        for entry in inner.split(',') {
+            let entry = entry.trim();
+            if let Some(colon_pos) = entry.find(':') {
+                let key = entry[..colon_pos].trim().trim_matches('"');
+                let value = entry[colon_pos + 1..].trim();
+                // Numeric variables: 0 is false, non-zero is true.
+                // Boolean variables arrive as true/false/nil.
+                let bool_val = value != "0" && value != "false" && value != "nil";
+                props.insert(key.to_string(), bool_val);
+            }
+        }
+        Some(props)
+    }
 }
 
 // ─── Parsing helpers ────────────────────────────────────────────
@@ -327,7 +394,11 @@ fn parse_done_flags(blob: &str) -> (usize, usize) {
 pub fn verify(source: &str) -> anyhow::Result<CheckResult> {
     let model = LuaModel::from_source(source)?;
     let checker = CheckerBuilder::new().model(model).build();
-    Ok(checker.check_dfs())
+    let result = checker.check_dfs();
+    if let Some(err) = checker.model().take_error() {
+        anyhow::bail!("{}", err);
+    }
+    Ok(result)
 }
 
 impl LuaModel {
@@ -337,6 +408,15 @@ impl LuaModel {
     }
 
     /// Recreate model from stored source (for property checking).
+    /// Take the first evaluation error seen during exploration, if any.
+    ///
+    /// A guard or effect that failed to evaluate produces an empty transition list, which
+    /// is indistinguishable from a disabled transition. Callers must treat a recorded
+    /// error as a verification failure rather than as "no transitions were enabled".
+    pub fn take_error(&self) -> Option<String> {
+        self.eval_error.borrow_mut().take()
+    }
+
     pub fn recreate(&self) -> anyhow::Result<Self> {
         if let Some(ref source) = self.source {
             Self::from_source(source)

@@ -45,11 +45,72 @@ pub(crate) fn run_spin(source: &str, bfs: bool, por: bool) -> Option<SpinOutput>
         g.arg("-DS_BFS");
     }
     g.output().ok().filter(|o| o.status.success())?;
+    // pan checks only one never claim per run, and defaults to the first. A model with
+    // several ltl properties therefore reports only the first one's errors unless each
+    // claim is selected explicitly. Comparing spin-rs (which checks every property)
+    // against a default pan run silently compares different things.
+    let claims = ltl_claims(source);
+    if claims.is_empty() {
+        return run_pan(&tmp, None);
+    }
+
+    let mut combined: Option<SpinOutput> = None;
+    let mut errors = 0usize;
+    for claim in &claims {
+        if let Some(out) = run_pan(&tmp, Some(claim)) {
+            errors += out.errors;
+            combined = Some(match combined {
+                // The reachable state space is a property of the model, not the claim,
+                // so take the widest run instead of summing duplicated states.
+                Some(prev) => SpinOutput {
+                    states: prev.states.max(out.states),
+                    transitions: prev.transitions.max(out.transitions),
+                    depth: prev.depth.max(out.depth),
+                    errors: 0,
+                },
+                None => SpinOutput { errors: 0, ..out },
+            });
+        }
+    }
+    combined.map(|mut c| {
+        c.errors = errors;
+        c
+    })
+}
+
+/// Extract the names of named ltl claims from Promela source.
+fn ltl_claims(source: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for line in source.lines() {
+        let line = line.trim_start();
+        let Some(rest) = line.strip_prefix("ltl") else {
+            continue;
+        };
+        if !rest.starts_with(char::is_whitespace) {
+            continue;
+        }
+        let name: String = rest
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if !name.is_empty() {
+            names.push(name);
+        }
+    }
+    names
+}
+
+/// Run the compiled pan binary, optionally against a specific claim.
+fn run_pan(dir: &std::path::Path, claim: Option<&str>) -> Option<SpinOutput> {
     let mut p = Command::new("./pan");
-    p.current_dir(&tmp)
+    p.current_dir(dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     p.arg("-n"); // -n for no listing of unreached states
+    if let Some(name) = claim {
+        p.arg("-N").arg(name);
+    }
     let o = p.output().ok()?;
     parse_spin(&String::from_utf8_lossy(&o.stdout))
 }

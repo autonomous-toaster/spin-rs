@@ -140,11 +140,102 @@ pub struct ModelDef {
     pub expected_errors: usize,
 }
 
+// ─── Checker soundness regression corpus ─────────────────────────────
+// These shapes are the smallest cases that exposed the soundness defects:
+// an if/fi nested in a do/od, and implication-shaped properties over guarded
+// assignment. Real spin reports 0 errors for all of them; a checker that reports
+// otherwise is wrong.
+
+/// No nested control flow. Baseline: real spin 15 states, 0 errors.
+pub const NEST_NO_IF: &str = r#"
+bool a1, a2;
+active proctype P() { do :: (1) -> a1 = 1; a1 = 0; break od }
+active proctype Q() { do :: (1) -> a2 = 1; a2 = 0; break od }
+ltl p0 { [] ( true ) }
+"#;
+
+/// if/fi nested in do/od with two processes. Real spin 19 states, 0 errors.
+/// Previously reported 1 state / 0 transitions and "verification successful".
+pub const NEST_IF_TWO_PROC: &str = r#"
+bool a1, a2;
+active proctype P() { do :: (1) -> a1 = 1; if :: a2 = 0; :: skip; fi; a1 = 0; break od }
+active proctype Q() { do :: (1) -> a2 = 1; a2 = 0; break od }
+ltl p0 { [] ( true ) }
+"#;
+
+/// if/fi nested in do/od, single process. Real spin 5 states, 0 errors.
+pub const NEST_IF_ONE_PROC: &str = r#"
+bool a1;
+active proctype P() { do :: (1) -> a1 = 1; if :: a1 = 0; :: skip; fi; break od }
+ltl p0 { [] ( true ) }
+"#;
+
+/// The shape veriplan generates for every task. Real spin 7 states, 0 errors.
+pub const VERIPLAN_BLOCK: &str = r#"
+bit active_t1_1 = 0;
+bit done_t1_1 = 0;
+bit failed_t1_1 = 0;
+bit done_t0_9 = 1;
+active proctype task_1_1() {
+	do
+	:: done_t0_9 == 1 ->
+		active_t1_1 = 1;
+		done_t1_1 = 1;
+		active_t1_1 = 0;
+		if
+		:: failed_t1_1 = 1;
+		:: skip;
+		fi;
+		break
+	od
+}
+ltl p0 { [] (active_t1_1 -> done_t0_9) }
+"#;
+
+/// Guarded assignment with an implication property. Real spin 11 states, 0 errors.
+/// Previously reported 61 errors for one property, including a state where the
+/// guard's operands were both false but the guarded assignment had fired.
+pub const GUARDED_IMPLICATION: &str = r#"
+bool t1_1, t1_2, t2_1;
+active proctype task_t1_1() { do :: (1) -> t1_1 = 1; break od }
+active proctype task_t1_2() { do :: (1) -> t1_2 = 1; break od }
+active proctype task_t2_1() { do :: (t1_1 && t1_2) -> t2_1 = 1; break od }
+ltl p0 { [] (t2_1 -> t1_1) }
+"#;
+
 pub const ALL_MODELS: &[ModelDef] = &[
+    ModelDef {
+        name: "nest_no_if",
+        source: NEST_NO_IF,
+        expected_errors: 0,
+    },
+    ModelDef {
+        name: "nest_if_two_proc",
+        source: NEST_IF_TWO_PROC,
+        expected_errors: 0,
+    },
+    ModelDef {
+        name: "nest_if_one_proc",
+        source: NEST_IF_ONE_PROC,
+        expected_errors: 0,
+    },
+    ModelDef {
+        name: "veriplan_block",
+        source: VERIPLAN_BLOCK,
+        expected_errors: 0,
+    },
+    ModelDef {
+        name: "guarded_implication",
+        source: GUARDED_IMPLICATION,
+        expected_errors: 0,
+    },
     ModelDef {
         name: "plan_5tasks_3ltls",
         source: PLAN_5TASKS_3LTLS,
-        expected_errors: 0,
+        // p2 ([] !(t1_1 && t1_2 && t1_3 && !t2_1 && !t2_2)) is genuinely violated while
+        // only the t1 tasks have completed. Real spin agrees, but only when the claim is
+        // selected explicitly: pan checks the first claim only unless given -N p2.
+        expected_errors: 1,
     },
     ModelDef {
         name: "plan_20tasks_10ltls",

@@ -165,9 +165,28 @@ fn guard_body(input: Input) -> IResult<Input, Guard> {
         ));
     }
 
+    // A guard body led by a statement keyword is a statement, never a condition.
+    // Without this, a guard body of just "skip" parses as the condition `skip`,
+    // which reaches Lua as an undefined global and raises at runtime.
+    let starts_with_stmt_keyword = {
+        let trimmed = input.trim_start();
+        const STMT_KEYWORDS: &[&str] = &[
+            "skip", "break", "goto", "assert", "printf", "run", "atomic", "d_step", "if", "do",
+            "for", "unless", "bool", "bit", "byte", "short", "int", "mtype", "chan", "unsigned",
+            "hidden", "typedef",
+        ];
+        STMT_KEYWORDS.iter().any(|kw| {
+            trimmed.starts_with(kw)
+                && !trimmed[kw.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        })
+    };
+
     // Check if this looks like a statement (assignment, send, recv) before trying condition
     // Pattern: ident followed by =, !, ?, or [=!?, or ident(
-    let is_stmt_start = {
+    let is_stmt_start = !starts_with_stmt_keyword && {
         let trimmed = input.trim_start();
         let mut chars = trimmed.chars().peekable();
         let mut has_ident = false;
@@ -213,7 +232,17 @@ fn guard_body(input: Input) -> IResult<Input, Guard> {
                     break;
                 }
             }
-            matches!(chars.peek(), Some('=') | Some('!') | Some('?'))
+            // A single '=' starts an assignment; '==' is a comparison, so the text
+            // is a guard condition. Likewise '!=' compares while '!' sends. Treating
+            // '==' as '=' swallows the arrow of ":: done_t0_9 == 1 -> ...", making
+            // every veriplan-generated proctype unparsable.
+            let mut probe = chars.clone();
+            match probe.next() {
+                Some('=') => probe.next() != Some('='),
+                Some('!') => probe.next() != Some('='),
+                Some('?') => true,
+                _ => false,
+            }
         } else {
             false
         }
@@ -280,12 +309,16 @@ fn if_stmt(input: Input) -> IResult<Input, Stmt> {
     let (input, _) = keyword("if")(input)?;
     let (input, guards) = many1(guard_body)(input)?;
     let (input, _) = keyword("fi")(input)?;
+    // Promela permits a trailing semicolon after fi: `if :: a = 1 fi;`
+    let (input, _) = opt(symbol(";"))(input)?;
     Ok((input, Stmt::If(guards)))
 }
 fn do_stmt(input: Input) -> IResult<Input, Stmt> {
     let (input, _) = keyword("do")(input)?;
     let (input, guards) = many1(guard_body)(input)?;
     let (input, _) = keyword("od")(input)?;
+    // Promela permits a trailing semicolon after od: `do :: a = 1 od;`
+    let (input, _) = opt(symbol(";"))(input)?;
     Ok((input, Stmt::Do(guards)))
 }
 fn goto_stmt(input: Input) -> IResult<Input, Stmt> {
@@ -485,9 +518,26 @@ fn for_c_style(input: Input) -> IResult<Input, Stmt> {
     ))
 }
 pub fn parse(source: &str) -> anyhow::Result<PromelaModel> {
-    let (_, declarations) =
+    let (rest, declarations) =
         many0(top_level)(source).map_err(|e| anyhow::anyhow!("parse error: {:?}", e))?;
     let declarations: Vec<TopLevel> = declarations.into_iter().flatten().collect();
+
+    // A partially parsed model must never be verified: leftover input means the
+    // grammar did not understand part of the source, so any verdict derived from
+    // the truncated model would be unsound.
+    // Strip trailing whitespace and comments: a file may legitimately end with them.
+    let leftover = match skip_ws(rest) {
+        Ok((r, _)) => r.trim(),
+        Err(_) => rest.trim(),
+    };
+    if !leftover.is_empty() {
+        let snippet: String = leftover.chars().take(120).collect();
+        return Err(anyhow::anyhow!(
+            "parse error: {} character(s) left unconsumed at top level near '{}'",
+            leftover.len(),
+            snippet
+        ));
+    }
 
     // Collect mtype names and assign sequential IDs
     let mut mtype_names = std::collections::HashMap::new();

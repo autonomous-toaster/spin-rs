@@ -55,14 +55,18 @@ impl LtlFormula {
                 '(' => paren_depth += 1,
                 ')' => paren_depth = paren_depth.saturating_sub(1),
                 ' ' if paren_depth == 0 && i + 2 < bytes.len() => {
-                    let triple = &s[i..i + 3];
-                    if triple == "&&" {
-                        last_and = Some(i);
-                    } else if triple == "||" {
-                        last_or = Some(i);
-                    } else if triple == " U " {
+                    // "&&" and "||" are two characters following the space, so the
+                    // slice must start at i + 1. Slicing from i compared " &&" with
+                    // "&&" and never matched, leaving "a && b" to be parsed as a
+                    // single atom named "a && b". That atom then never resolved and
+                    // made every conjunction-shaped property vacuously true.
+                    if &s[i + 1..i + 3] == "&&" {
+                        last_and = Some(i + 1);
+                    } else if &s[i + 1..i + 3] == "||" {
+                        last_or = Some(i + 1);
+                    } else if &s[i..i + 3] == " U " {
                         last_u = Some(i);
-                    } else if triple == " V " {
+                    } else if &s[i..i + 3] == " V " {
                         last_v = Some(i);
                     }
                 }
@@ -157,6 +161,10 @@ impl LtlFormula {
     }
 
     fn parse_manual(s: &str) -> anyhow::Result<Self> {
+        // Recursive calls arrive with surrounding whitespace (e.g. the inner of
+        // "[]( true )" is " true "), which would otherwise defeat the literal
+        // checks below and yield Atom(" true ") instead of True.
+        let s = s.trim();
         if s.is_empty() {
             return Err(anyhow::anyhow!("empty LTL formula"));
         }
@@ -301,6 +309,35 @@ impl<'a, M: Model> PropertyChecker<'a, M> {
                 return self.check_liveness_simple();
             }
         };
+
+        // Every atom in the automaton must resolve against a real variable before the
+        // product search runs. The product code reads an absent atom as false, which
+        // makes an implication-shaped property vacuously true and reports success for a
+        // model it never actually judged. Fail with a diagnostic instead.
+        let init_states = self.model.init_states();
+        if let Some(init) = init_states.first()
+            && let Some(blob) = self.model.state_to_string(init)
+        {
+            for state_trans in &buchi.transitions {
+                for trans in state_trans {
+                    for (prop, _) in &trans.conditions {
+                        if prop == "true" || prop == "false" {
+                            continue;
+                        }
+                        if crate::engine::checker::dfs::extract_var_from_state(&blob, prop)
+                            .is_none()
+                        {
+                            anyhow::bail!(
+                                "unknown atomic proposition '{}' in property '{}': it is not a \
+                                 variable in the initial state",
+                                prop,
+                                self.property_name
+                            );
+                        }
+                    }
+                }
+            }
+        }
 
         // Run nested DFS on product space (model × Büchi)
         let mut violations = Vec::new();

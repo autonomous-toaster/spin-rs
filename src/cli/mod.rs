@@ -388,6 +388,12 @@ fn handle_verify_mode(cli: &Cli, source: &str) -> Result<(), anyhow::Error> {
     // Run verification
     let result = checker.check_dfs();
 
+    // A guard or effect that failed to evaluate yields no transitions, which is
+    // indistinguishable from a disabled guard. Never report a verdict in that case.
+    if let Some(err) = checker.model().take_error() {
+        return Err(anyhow::anyhow!("{}", err));
+    }
+
     // Print results
     print_result(&result);
 

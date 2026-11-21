@@ -62,18 +62,36 @@ impl<M: Model> Checker<M> {
                 && let Some(state_str) = self.model.state_to_string(&state)
             {
                 for check in &safety_checks {
-                    if !evaluate_propositional(&check.formula, &state_str) {
-                        let state_trail = self.build_trail(&trail, state_idx);
-                        violations.push(Violation {
-                            property_name: check.prop_name.clone(),
-                            trail: state_trail,
-                            description: format!(
-                                "Safety violation: '{}' is false in state {}",
-                                check.prop_name, state_str
-                            ),
-                        });
-                        if violations.len() >= 100 {
-                            break;
+                    match evaluate_propositional(&check.formula, &state_str) {
+                        Some(true) => {}
+                        Some(false) => {
+                            let state_trail = self.build_trail(&trail, state_idx);
+                            violations.push(Violation {
+                                property_name: check.prop_name.clone(),
+                                trail: state_trail,
+                                description: format!(
+                                    "Safety violation: '{}' is false in state {}",
+                                    check.prop_name, state_str
+                                ),
+                            });
+                            if violations.len() >= 100 {
+                                break;
+                            }
+                        }
+                        None => {
+                            // An atom that does not resolve must never be read as false.
+                            let state_trail = self.build_trail(&trail, state_idx);
+                            violations.push(Violation {
+                                property_name: check.prop_name.clone(),
+                                trail: state_trail,
+                                description: format!(
+                                    "Unresolved atomic proposition in '{}': '{}' is not a variable in state {}",
+                                    check.prop_name, check.formula, state_str
+                                ),
+                            });
+                            if violations.len() >= 100 {
+                                break;
+                            }
                         }
                     }
                 }
@@ -131,6 +149,26 @@ impl<M: Model> Checker<M> {
 
         let elapsed = start.elapsed().as_secs_f64();
 
+        // A model that declares processes but yields no transitions was never explored.
+        // Reporting success here is the null check that makes a whole verification
+        // pipeline meaningless, so it is an error, not a pass.
+        if transitions_count == 0
+            && self.model.process_count() > 0
+            && !violations.iter().any(|v| v.property_name == "model")
+        {
+            violations.push(Violation {
+                property_name: "model".to_string(),
+                trail: vec![],
+                description: format!(
+                    "no transitions explored: the model declares {} process(es) but none are enabled in the initial state, so nothing was verified",
+                    self.model.process_count()
+                ),
+            });
+        }
+
+        // Collapse to one violation per property before reporting.
+        let violations = dedup_violations(violations);
+
         let mut result = CheckResult {
             states_explored: storage.len(),
             states_stored: storage.len(),
@@ -178,12 +216,27 @@ impl<M: Model> Checker<M> {
                         }
                         Ok(None) => {}
                         Err(e) => {
+                            // A property that could not be checked is not a property that
+                            // holds. Logging and continuing reported success for models
+                            // whose properties were never evaluated.
                             log::warn!("LTL check error for '{}': {}", prop_name, e);
+                            result.errors += 1;
+                            result.violations.push(Violation {
+                                property_name: prop_name.to_string(),
+                                trail: vec![],
+                                description: format!("property could not be checked: {}", e),
+                            });
                         }
                     }
                 }
                 Err(e) => {
                     log::warn!("Failed to parse LTL formula '{}': {}", prop_name, e);
+                    result.errors += 1;
+                    result.violations.push(Violation {
+                        property_name: prop_name.to_string(),
+                        trail: vec![],
+                        description: format!("LTL formula could not be parsed: {}", e),
+                    });
                 }
             }
         }
@@ -251,18 +304,36 @@ impl<M: Model> Checker<M> {
                 && let Some(state_str) = self.model.state_to_string(&state)
             {
                 for check in &safety_checks {
-                    if !evaluate_propositional(&check.formula, &state_str) {
-                        let state_trail = self.build_trail(&trail, state_idx);
-                        violations.push(Violation {
-                            property_name: check.prop_name.clone(),
-                            trail: state_trail,
-                            description: format!(
-                                "Safety violation: '{}' is false in state {}",
-                                check.prop_name, state_str
-                            ),
-                        });
-                        if violations.len() >= 100 {
-                            break;
+                    match evaluate_propositional(&check.formula, &state_str) {
+                        Some(true) => {}
+                        Some(false) => {
+                            let state_trail = self.build_trail(&trail, state_idx);
+                            violations.push(Violation {
+                                property_name: check.prop_name.clone(),
+                                trail: state_trail,
+                                description: format!(
+                                    "Safety violation: '{}' is false in state {}",
+                                    check.prop_name, state_str
+                                ),
+                            });
+                            if violations.len() >= 100 {
+                                break;
+                            }
+                        }
+                        None => {
+                            // An atom that does not resolve must never be read as false.
+                            let state_trail = self.build_trail(&trail, state_idx);
+                            violations.push(Violation {
+                                property_name: check.prop_name.clone(),
+                                trail: state_trail,
+                                description: format!(
+                                    "Unresolved atomic proposition in '{}': '{}' is not a variable in state {}",
+                                    check.prop_name, check.formula, state_str
+                                ),
+                            });
+                            if violations.len() >= 100 {
+                                break;
+                            }
                         }
                     }
                 }
@@ -320,6 +391,22 @@ impl<M: Model> Checker<M> {
 
         let elapsed = start.elapsed().as_secs_f64();
 
+        if transitions_count == 0
+            && self.model.process_count() > 0
+            && !violations.iter().any(|v| v.property_name == "model")
+        {
+            violations.push(Violation {
+                property_name: "model".to_string(),
+                trail: vec![],
+                description: format!(
+                    "no transitions explored: the model declares {} process(es) but none are enabled in the initial state, so nothing was verified",
+                    self.model.process_count()
+                ),
+            });
+        }
+
+        let violations = dedup_violations(violations);
+
         CheckResult {
             states_explored: storage.len(),
             states_stored: storage.len(),
@@ -358,9 +445,7 @@ impl<M: Model> Checker<M> {
                 Box::new(BitstateStore::new((self.config.max_states / 8).max(1024)))
             }
             StorageMode::Collapse => Box::new(CollapseStore::<M::State>::new(4)),
-            StorageMode::HashCompact => {
-                Box::new(HashCompactStore::<M::State>::new(1024))
-            }
+            StorageMode::HashCompact => Box::new(HashCompactStore::<M::State>::new(1024)),
         }
     }
 
@@ -395,15 +480,14 @@ impl<M: Model> Checker<M> {
             let prop_name = ltl_ast.name.as_deref().unwrap_or("ltl").to_string();
 
             // Parse the formula and check if it's []expr where expr is propositional
-            if let Ok(formula) = crate::property::LtlFormula::parse(formula_str) {
-                if let crate::property::LtlFormula::Always(inner) = &formula {
-                    if is_propositional(inner) {
-                        checks.push(SafetyCheck {
-                            prop_name,
-                            formula: *inner.clone(),
-                        });
-                    }
-                }
+            if let Ok(crate::property::LtlFormula::Always(inner)) =
+                crate::property::LtlFormula::parse(formula_str)
+                && is_propositional(&inner)
+            {
+                checks.push(SafetyCheck {
+                    prop_name,
+                    formula: *inner.clone(),
+                });
             }
         }
 
@@ -427,9 +511,7 @@ fn is_propositional(formula: &crate::property::LtlFormula) -> bool {
         crate::property::LtlFormula::Not(inner) => is_propositional(inner),
         crate::property::LtlFormula::And(l, r)
         | crate::property::LtlFormula::Or(l, r)
-        | crate::property::LtlFormula::Implies(l, r) => {
-            is_propositional(l) && is_propositional(r)
-        }
+        | crate::property::LtlFormula::Implies(l, r) => is_propositional(l) && is_propositional(r),
         // Temporal operators
         crate::property::LtlFormula::Always(_)
         | crate::property::LtlFormula::Eventually(_)
@@ -440,70 +522,116 @@ fn is_propositional(formula: &crate::property::LtlFormula) -> bool {
 }
 
 /// Evaluate a propositional LTL formula against a state string.
-/// Returns true if the formula holds in the state.
-fn evaluate_propositional(formula: &crate::property::LtlFormula, state_str: &str) -> bool {
+///
+/// Returns `None` when an atom does not resolve to a variable in the state.
+/// An unresolved atom must never be silently read as `false`: with a property of
+/// the shape `[](a -> b)` that makes the whole property vacuous and reports success
+/// for a model the checker never actually judged.
+fn evaluate_propositional(formula: &crate::property::LtlFormula, state_str: &str) -> Option<bool> {
     match formula {
-        crate::property::LtlFormula::True => true,
-        crate::property::LtlFormula::False => false,
+        crate::property::LtlFormula::True => Some(true),
+        crate::property::LtlFormula::False => Some(false),
         crate::property::LtlFormula::Atom(name) => {
-            let val = extract_var_from_state(state_str, name);
-            val != 0
+            extract_var_from_state(state_str, name).map(|val| val != 0)
         }
-        crate::property::LtlFormula::Not(inner) => !evaluate_propositional(inner, state_str),
-        crate::property::LtlFormula::And(l, r) => {
-            evaluate_propositional(l, state_str) && evaluate_propositional(r, state_str)
+        crate::property::LtlFormula::Not(inner) => {
+            evaluate_propositional(inner, state_str).map(|b| !b)
         }
-        crate::property::LtlFormula::Or(l, r) => {
-            evaluate_propositional(l, state_str) || evaluate_propositional(r, state_str)
-        }
-        crate::property::LtlFormula::Implies(l, r) => {
-            !evaluate_propositional(l, state_str) || evaluate_propositional(r, state_str)
-        }
+        crate::property::LtlFormula::And(l, r) => match (
+            evaluate_propositional(l, state_str),
+            evaluate_propositional(r, state_str),
+        ) {
+            (Some(a), Some(b)) => Some(a && b),
+            _ => None,
+        },
+        crate::property::LtlFormula::Or(l, r) => match (
+            evaluate_propositional(l, state_str),
+            evaluate_propositional(r, state_str),
+        ) {
+            (Some(a), Some(b)) => Some(a || b),
+            _ => None,
+        },
+        crate::property::LtlFormula::Implies(l, r) => match (
+            evaluate_propositional(l, state_str),
+            evaluate_propositional(r, state_str),
+        ) {
+            (Some(a), Some(b)) => Some(!a || b),
+            _ => None,
+        },
         // Temporal operators inside []expr shouldn't reach here (filtered by is_propositional)
-        _ => true,
+        _ => Some(true),
     }
+}
+
+/// Collapse violations to one per property, keeping the first trail.
+///
+/// The search reaches the same property violation through many states and paths, so the
+/// raw list length is a count of states hit, not a count of findings. Real spin stops at
+/// the first error by default and downstream tooling reads a count as distinct findings.
+fn dedup_violations(violations: Vec<Violation>) -> Vec<Violation> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for v in violations {
+        if seen.insert(v.property_name.clone()) {
+            out.push(v);
+        }
+    }
+    out
 }
 
 /// Check if a formula string is a safety formula ([]expr where expr is propositional).
 fn is_safety_formula(formula_str: &str) -> bool {
-    if let Ok(formula) = crate::property::LtlFormula::parse(formula_str) {
-        if let crate::property::LtlFormula::Always(inner) = &formula {
-            return is_propositional(inner);
-        }
+    if let Ok(crate::property::LtlFormula::Always(inner)) =
+        crate::property::LtlFormula::parse(formula_str)
+    {
+        return is_propositional(&inner);
     }
     false
 }
 
-/// Extract a variable's integer value from a state blob string.
+/// Extract a variable's value from a state blob string.
 /// State blob format: {key:val,key:val,...} or {"key":val,"key":val,...}
-fn extract_var_from_state(state_str: &str, var_name: &str) -> i64 {
+///
+/// Returns `None` if the variable is absent, so callers can distinguish an
+/// unresolved atom from a variable that is genuinely zero.
+pub(crate) fn extract_var_from_state(state_str: &str, var_name: &str) -> Option<i64> {
     let inner = state_str
         .trim_start_matches('{')
         .trim_end_matches('}')
         .trim();
 
-    // Search for the variable name followed by ':'
-    let search_key = format!("\"{}\":", var_name);
-    let search_key2 = format!("{}:", var_name);
-
-    let pos = inner.find(&search_key).or_else(|| inner.find(&search_key2));
-
-    if let Some(p) = pos {
-        let after_key = &inner[p + search_key.len().min(inner.len() - p)..];
-        // Skip past the key (handle both quoted and unquoted)
-        let after_colon = if let Some(colon_pos) = after_key.find(':') {
-            &after_key[colon_pos + 1..]
-        } else {
-            after_key
+    // Try the quoted form first, then the unquoted form.
+    for key in [format!("\"{}\":", var_name), format!("{}:", var_name)] {
+        let Some(p) = inner.find(&key) else {
+            continue;
         };
-        let after_colon = after_colon.trim();
-        // Parse the value (stop at comma, brace, or whitespace)
-        let num_str: String = after_colon
+        // Require a key boundary so that searching for "a" cannot match the tail
+        // of a longer key such as "done_a".
+        let at_boundary = p == 0 || matches!(inner.as_bytes()[p - 1], b'{' | b',' | b' ');
+        if !at_boundary {
+            continue;
+        }
+        // The value starts immediately after the key's own colon. Searching for
+        // another ':' here reads the next key's value instead, which made every
+        // []-safety property evaluate against the wrong variable.
+        let rest = inner[p + key.len()..].trim_start();
+        if rest.starts_with("true") {
+            return Some(1);
+        }
+        if rest.starts_with("false") {
+            return Some(0);
+        }
+        if rest.starts_with("nil") {
+            return Some(0);
+        }
+        let num: String = rest
             .chars()
             .take_while(|c| c.is_ascii_digit() || *c == '-')
             .collect();
-        num_str.parse::<i64>().unwrap_or(0)
-    } else {
-        0
+        if num.is_empty() || num == "-" {
+            return None;
+        }
+        return num.parse::<i64>().ok();
     }
+    None
 }

@@ -2,6 +2,9 @@
 
 pub mod dfs;
 
+#[cfg(test)]
+mod tests;
+
 use crate::engine::fairness::FairnessMode;
 use crate::engine::storage::{BitstateStore, CollapseStore, ExactStore, StateStore};
 use std::collections::VecDeque;
@@ -35,6 +38,26 @@ pub trait Model {
     /// Serialize a state to a string for invariant checking (None if not supported).
     fn state_to_string(&self, _state: &Self::State) -> Option<String> {
         None
+    }
+
+    /// Resolve a state to its atomic proposition values.
+    ///
+    /// Returns `None` when the model cannot expose variable values. Callers must not
+    /// invent defaults in that case: an unresolved proposition previously became
+    /// `false`, which made implication-shaped properties vacuously true.
+    fn atomic_props(
+        &self,
+        _state: &Self::State,
+    ) -> Option<std::collections::HashMap<String, bool>> {
+        None
+    }
+
+    /// Number of process instances the model declares, or 0 if unknown.
+    ///
+    /// Used to reject a search that explored nothing. A model with processes but no
+    /// transitions is a checker or parser failure, never a successful verification.
+    fn process_count(&self) -> usize {
+        0
     }
 }
 

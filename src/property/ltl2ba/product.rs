@@ -76,40 +76,14 @@ pub struct ProductTransition<S> {
 ///
 /// **Note**: This is a simplified implementation that parses the JSON-like
 /// state blob format used by LuaModel.
-pub fn evaluate_atomic_props<S, M>(_model: &M, state: &S) -> HashMap<String, bool>
+pub fn evaluate_atomic_props<S, M>(model: &M, state: &S) -> HashMap<String, bool>
 where
     M: Model<State = S>,
 {
-    let mut props = HashMap::new();
-
-    // Try to downcast to LuaModel's StateBlob
-    use crate::runtime::StateBlob;
-    // SAFETY: We know that S is StateBlob when called from PropertyChecker with LuaModel
-    let blob_opt = unsafe {
-        let ptr = state as *const S as *const StateBlob;
-        ptr.as_ref()
-    };
-    if let Some(blob) = blob_opt {
-        // Parse the JSON-like state blob to extract variable values
-        // Format: {"_done_P":false,"_nr_pr":2,"x":0,"flag":1,...}
-        let state_str = &blob.0;
-
-        // Simple parser for key:value pairs
-        let inner = state_str.trim_start_matches('{').trim_end_matches('}');
-        for entry in inner.split(',') {
-            let entry = entry.trim();
-            if let Some(colon_pos) = entry.find(':') {
-                let key = entry[..colon_pos].trim().trim_matches('"');
-                let value = entry[colon_pos + 1..].trim();
-
-                // Store the value - we'll use it to evaluate atomic props
-                // For boolean vars: 0=false, non-zero=true
-                // For comparisons: we need to check the actual value
-                let bool_val = value != "0" && value != "false" && value != "nil";
-                props.insert(key.to_string(), bool_val);
-            }
-        }
-    }
+    // Resolve through the Model trait. This used to reinterpret the state pointer as a
+    // StateBlob, which is undefined behaviour for every other state type (for example a
+    // u64 in the unit tests) and crashed once the caller evaluated a successor state.
+    let mut props = model.atomic_props(state).unwrap_or_default();
 
     // Always add "true" as true and "false" as false for Büchi conditions
     props.insert("true".to_string(), true);
@@ -137,21 +111,34 @@ where
 {
     let mut product_transitions = Vec::new();
 
-    // Evaluate atomic propositions in the current state
-    let props = evaluate_atomic_props(model, state);
+    let _ = state;
 
     for model_trans in model_transitions {
         let next_state = model_trans.next.clone();
         let next_hash = model.hash(&next_state);
 
+        // Evaluate atomic propositions in the SUCCESSOR state. Reading them from the
+        // source state made each [] obligation behave like X: the automaton advanced on
+        // the current state's values while stepping to the next model state.
+        let props = evaluate_atomic_props(model, &next_state);
+
         // Get enabled Büchi transitions
         let buchi_transitions = buchi.transitions_from(buchi_state);
 
         for buchi_trans in buchi_transitions {
-            // Check if all conditions are satisfied
+            // Check if all conditions are satisfied.
+            //
+            // An absent atom is deliberately treated as unsatisfied rather than as
+            // "false": callers validate every atom against the initial state before the
+            // search (see PropertyChecker::check_liveness), so reaching a missing atom
+            // here means the state space diverged from that validation and the safe
+            // action is to leave the Büchi transition disabled rather than to assert a
+            // value we did not observe.
             let all_conditions_met = buchi_trans.conditions.iter().all(|(prop, must_be_true)| {
-                let prop_val = props.get(prop.as_str()).copied().unwrap_or(false);
-                prop_val == *must_be_true
+                match props.get(prop.as_str()) {
+                    Some(prop_val) => prop_val == must_be_true,
+                    None => false,
+                }
             });
 
             if !all_conditions_met {
