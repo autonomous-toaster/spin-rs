@@ -98,6 +98,14 @@ pub struct CheckerConfig {
     pub por_enabled: bool,
     pub check_assertions: bool,
     pub fairness_mode: FairnessMode,
+    /// Stop the search as soon as one violation is found.
+    ///
+    /// Off by default: the exhaustive search reports every violated property, which is what a
+    /// caller needs to attribute findings per claim. Turning it on matches `pan`'s default and
+    /// costs the prefix up to the first refutation instead of the whole reachable space, but
+    /// any property not reported was then not fully explored - treat the remainder as
+    /// unverified, not as satisfied.
+    pub stop_at_first_violation: bool,
 }
 
 impl Default for CheckerConfig {
@@ -110,6 +118,7 @@ impl Default for CheckerConfig {
             por_enabled: false,
             check_assertions: true,
             fairness_mode: FairnessMode::None,
+            stop_at_first_violation: false,
         }
     }
 }
@@ -273,6 +282,11 @@ impl<M: Model> CheckerBuilder<M> {
 
     pub fn fairness_mode(mut self, mode: FairnessMode) -> Self {
         self.config.fairness_mode = mode;
+        self
+    }
+
+    pub fn stop_at_first_violation(mut self, enabled: bool) -> Self {
+        self.config.stop_at_first_violation = enabled;
         self
     }
 

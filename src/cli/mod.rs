@@ -103,6 +103,13 @@ pub struct Cli {
     #[arg(long)]
     pub strong_fairness: bool,
 
+    /// Stop at the first violation instead of exploring the whole reachable space.
+    ///
+    /// Matches pan's default. Any property not reported was then not fully explored, so treat
+    /// the remainder as unverified rather than as satisfied.
+    #[arg(long)]
+    pub stop_at_first_violation: bool,
+
     /// Optimization level 2: dead variable elimination
     #[arg(short = 'o', long = "opt2")]
     pub opt2: bool,
@@ -407,6 +414,10 @@ fn handle_verify_mode(cli: &Cli, source: &str) -> Result<(), anyhow::Error> {
 
     if cli.por {
         builder = builder.por_enabled(true);
+    }
+
+    if cli.stop_at_first_violation {
+        builder = builder.stop_at_first_violation(true);
     }
 
     if cli.strong_fairness {

@@ -174,7 +174,8 @@ pub fn verify_with_config(source: &str, config: &CheckerConfig) -> anyhow::Resul
         .storage_mode(config.storage_mode)
         .search_mode(config.search_mode)
         .por_enabled(config.por_enabled)
-        .check_assertions(config.check_assertions);
+        .check_assertions(config.check_assertions)
+        .stop_at_first_violation(config.stop_at_first_violation);
 
     let checker = builder.build();
     let result = checker.check();
@@ -284,6 +285,7 @@ mod tests {
             por_enabled: false,
             check_assertions: true,
             fairness_mode: crate::engine::fairness::FairnessMode::None,
+            stop_at_first_violation: false,
         };
         let result = verify_with_config(promela, &config).unwrap();
         assert!(result.states_explored > 0);

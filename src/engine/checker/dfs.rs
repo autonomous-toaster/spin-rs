@@ -36,6 +36,11 @@ impl<M: Model> Checker<M> {
         }
 
         while let Some((state, depth, state_idx)) = stack.pop() {
+            // Opt-in early stop: one refutation is enough to call the model violated, and the
+            // remaining reachable space would be discarded anyway.
+            if self.config.stop_at_first_violation && !violations.is_empty() {
+                break;
+            }
             if depth >= self.config.max_depth {
                 // Pruning here leaves successors unexplored, so the search did not close.
                 hit_depth_limit = true;
@@ -212,8 +217,12 @@ impl<M: Model> Checker<M> {
             });
         }
 
-        // Check remaining LTL properties (non-[]p formulas via nested DFS)
-        self.check_ltl_properties(&mut result);
+        // Check remaining LTL properties (non-[]p formulas via nested DFS). Skipped when an
+        // early stop already produced a refutation: the caller asked for the first one, and
+        // exploring the rest would defeat that.
+        if !(self.config.stop_at_first_violation && result.errors > 0) {
+            self.check_ltl_properties(&mut result);
+        }
 
         result
     }
@@ -306,6 +315,9 @@ impl<M: Model> Checker<M> {
         }
 
         while let Some((state, depth, state_idx)) = queue.pop_front() {
+            if self.config.stop_at_first_violation && !violations.is_empty() {
+                break;
+            }
             max_depth = max_depth.max(depth);
 
             if depth >= self.config.max_depth {

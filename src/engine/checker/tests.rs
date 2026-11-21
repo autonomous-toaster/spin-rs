@@ -321,3 +321,43 @@ fn test_multi_statement_nested_if_is_not_a_false_green() {
         "an unexpressible nested branch must not produce a clean verdict"
     );
 }
+
+/// Opt-in early stop: one refutation is enough to call the model violated, so the search must
+/// not pay for the rest of the reachable space. Default stays exhaustive so a caller can still
+/// attribute every violated property.
+#[test]
+fn test_stop_at_first_violation_is_cheaper_and_opt_in() {
+    let source = "bit a1, a2, a3;\n\
+                  active proctype t1() { do :: (1) -> a1 = 1; break od }\n\
+                  active proctype t2() { do :: (1) -> a2 = 1; break od }\n\
+                  active proctype t3() { do :: (1) -> a3 = 1; break od }\n\
+                  ltl p0 { [] ( !(a1 && a2) ) }\n\
+                  ltl p1 { [] ( !(a1 && a3) ) }\n\
+                  ltl p2 { [] ( !(a2 && a3) ) }";
+
+    let exhaustive = CheckerBuilder::new()
+        .model(crate::runtime::LuaModel::from_source(source).unwrap())
+        .build()
+        .check_dfs();
+
+    let early = CheckerBuilder::new()
+        .model(crate::runtime::LuaModel::from_source(source).unwrap())
+        .stop_at_first_violation(true)
+        .build()
+        .check_dfs();
+
+    assert!(
+        exhaustive.errors >= 2,
+        "the default must report every violated property"
+    );
+    assert!(
+        early.errors >= 1,
+        "the early stop must still report a violation"
+    );
+    assert!(
+        early.states_explored < exhaustive.states_explored,
+        "the early stop must explore less: {} vs {}",
+        early.states_explored,
+        exhaustive.states_explored
+    );
+}
