@@ -157,10 +157,34 @@ impl LuaGenerator {
             self.emit("    })");
         }
 
+        // A trailing `break` is just "this proctype is done". Emitting it as its own
+        // transition makes it independent of everything else, so it can be deferred past the
+        // next proctype's start: every such choice doubles the reachable state space, which
+        // made a linear chain of tasks 2^N states instead of ~5 per task. Fold it into the
+        // preceding step, which is what spin does by folding termination into the last
+        // statement. A body that is only `break` keeps its own step: there is nothing to fold
+        // into, and it is degenerate enough not to matter.
+        let mut trailing_break = false;
+        if body_steps.len() > 1 && matches!(body_steps.last(), Some((_, Stmt::Break(_)))) {
+            body_steps.pop();
+            trailing_break = true;
+        }
+
         // Steps 1..N: emit one transition per body statement
         let total = body_steps.len();
         for (idx, (step, s)) in body_steps.iter().enumerate() {
-            let next = if idx + 1 >= total { 0 } else { step + 1 };
+            let is_last = idx + 1 >= total;
+            let next = if is_last { 0 } else { step + 1 };
+            // Tail appended to this step's effect: either advance the step counter, or mark
+            // the proctype done when it is the folded trailing break.
+            let tail = if is_last && trailing_break {
+                match self.current_proctype {
+                    Some(ref pname) => format!("; s._done_{} = true", pname),
+                    None => String::new(),
+                }
+            } else {
+                format!("; s.{} = {}", step_var, next)
+            };
 
             // Inline calls: emit_inline_body produces the full transition
             if let Stmt::Expr(e, _) = s
@@ -236,8 +260,8 @@ impl LuaGenerator {
                         format!("s.{}", target_name)
                     };
                     self.emit(&format!(
-                        "    effect = function(s) {} = {}; s.{} = {} end,",
-                        target_expr, v, step_var, next
+                        "    effect = function(s) {} = {}{} end,",
+                        target_expr, v, tail
                     ));
                 }
                 Stmt::Break(_) => {
@@ -253,8 +277,8 @@ impl LuaGenerator {
                 }
                 Stmt::Goto(_, _) => {
                     self.emit(&format!(
-                        "    effect = function(s) s.{} = {} end,",
-                        step_var, next
+                        "    effect = function(s) {} end,",
+                        tail.trim_start_matches("; ")
                     ));
                 }
                 Stmt::Assert(expr, _) => {
@@ -264,8 +288,8 @@ impl LuaGenerator {
                         step_var, step, e
                     ));
                     self.emit(&format!(
-                        "    effect = function(s) s.{} = {} end,",
-                        step_var, next
+                        "    effect = function(s) {} end,",
+                        tail.trim_start_matches("; ")
                     ));
                 }
                 Stmt::Send {
@@ -310,15 +334,15 @@ impl LuaGenerator {
                         self.emit_inline_body(&inline_def, &subs, step_var.as_str(), *step, next);
                     } else {
                         self.emit(&format!(
-                            "    effect = function(s) s.{} = {} end,",
-                            step_var, next
+                            "    effect = function(s) {} end,",
+                            tail.trim_start_matches("; ")
                         ));
                     }
                 }
                 _ => {
                     self.emit(&format!(
-                        "    effect = function(s) s.{} = {} end,",
-                        step_var, next
+                        "    effect = function(s) {} end,",
+                        tail.trim_start_matches("; ")
                     ));
                 }
             }

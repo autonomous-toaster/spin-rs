@@ -203,21 +203,29 @@ active proctype task_t2_1() { do :: (t1_1 && t1_2) -> t2_1 = 1; break od }
 ltl p0 { [] (t2_1 -> t1_1) }
 "#;
 
-// NOTE ON THE STATE COUNTS BELOW - dated, and they will change again.
+// NOTE ON THE STATE COUNTS BELOW - corrected twice, so here is the settled account.
 //
-// plan_20tasks_10ltls reaching the 1M state limit was NOT the per-proctype step counters. The
-// consumer's translator emitted `active = 1; done = 1; active = 0`, letting a successor task
-// start while its predecessor was still marked active. That interleaving window made the state
-// space the product of the windows at every task boundary; moving `done = 1` to the end of the
-// body took a 20-task plan from 5,242,876 pan states to 101.
+// plan_20tasks_10ltls used to hit the 1,000,000 state limit. That was ENGINE-side, and it was
+// not primarily the per-proctype step counters: a trailing `break` was emitted as its own
+// transition, independent of everything else, so it could be deferred past the next proctype's
+// start. Every such choice doubled the reachable space, making a linear chain of N tasks cost
+// 2^N states. Folding the break into the preceding step fixed it:
 //
-// As of this commit the corpus still carries the PRE-FIX shape, so these state columns are not
-// comparable across that translator change, nor with any build made after it. Errors are the
-// only quantity this corpus compares between engines. State columns are for scale only.
+//   chain 4/6/8 tasks      76 / 316 / 1276  ->  17 / 25 / 33
+//   plan_20tasks_10ltls    1,000,000 cap    ->  1913   (pan: 715)
 //
-// There is one legitimate exception: when a test's subject IS scale - e.g. asserting that a
-// 20-task plan stays under 1000 states to catch a future change reopening the window - then the
-// number is the thing under test, not evidence of correctness. Do not confuse the two.
+// A separate defect on the consumer's side also inflated these models: its translator emitted
+// `active = 1; done = 1; active = 0`, letting a successor start while its predecessor was still
+// marked active. That was real and theirs, and fixing it took their own 20-task chain from
+// 5,242,876 pan states to 101. It was a different cause from the one above, and an earlier
+// version of this note wrongly attributed the 1M cap to it.
+//
+// State counts here are therefore comparable only as scale, and only across builds after the
+// break-fold. Errors are the only quantity this corpus compares between engines.
+//
+// One legitimate exception: when a test's subject IS scale - e.g. asserting that a 20-task plan
+// stays under a few thousand states, to catch a change reopening the window - then the number is
+// the thing under test, not evidence of correctness. Do not confuse the two.
 
 pub const ALL_MODELS: &[ModelDef] = &[
     ModelDef {

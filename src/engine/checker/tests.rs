@@ -404,3 +404,53 @@ fn test_early_stop_lists_the_claims_it_did_not_explore() {
         );
     }
 }
+
+/// A trailing `break` used to be its own transition, independent of everything else, so it could
+/// be deferred past the next proctype's start. Every such choice doubled the reachable space: a
+/// linear chain of N tasks cost 2^N states (`76 -> 316 -> 1276` for 4/6/8) where pan needs about
+/// five per task. The break is now folded into the preceding step, so the growth is linear.
+#[test]
+fn test_chained_proctypes_scale_linearly_not_exponentially() {
+    fn chain(n: usize) -> String {
+        let mut src = String::new();
+        for i in 1..=n {
+            src.push_str(&format!(
+                "bit active_t{i} = 0;\nbit deact_t{i} = 0;\nbit done_t{i} = 0;\n"
+            ));
+        }
+        src.push('\n');
+        for i in 1..=n {
+            let guard = if i == 1 {
+                "(1)".to_string()
+            } else {
+                format!("done_t{} == 1", i - 1)
+            };
+            src.push_str(&format!(
+                "active proctype task_t{i}() {{\n\tdo\n\t:: {guard} ->\n\t\tactive_t{i} = 1;\n\t\tdeact_t{i} = 0;\n\t\tdone_t{i} = 1;\n\t\tbreak\n\tod\n}}\n"
+            ));
+        }
+        src.push_str(&format!("\nltl p0 {{ [] ( !(done_t{n}) || done_t1 ) }}\n"));
+        src
+    }
+
+    fn states_for(n: usize) -> usize {
+        let source = chain(n);
+        let model = crate::runtime::LuaModel::from_source(&source).unwrap();
+        CheckerBuilder::new()
+            .model(model)
+            .build()
+            .check_dfs()
+            .states_explored
+    }
+
+    let four = states_for(4);
+    let eight = states_for(8);
+    // Doubling the tasks must roughly double the states, not square them. 2^N would give
+    // 16x for these two; linear gives about 2x.
+    assert!(
+        eight < four * 4,
+        "chained tasks must scale linearly: 4->{} states, 8->{} states (2^N would be >= 16x)",
+        four,
+        eight
+    );
+}
