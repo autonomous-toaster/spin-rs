@@ -303,3 +303,21 @@ fn test_nested_if_branch_is_reachable() {
         "and the violation must be attributed to its claim"
     );
 }
+
+/// A nested if whose branch has several statements must not be folded into one step.
+/// Folding runs them atomically, so "f = 1; f = 0" leaves f permanently 0 and `[]!(f)`
+/// comes back clean while pan refutes it. Such a model must report that it could not be
+/// checked, never that it passed.
+#[test]
+fn test_multi_statement_nested_if_is_not_a_false_green() {
+    let source = "bool f = 0;\n\
+                  active proctype P() { do :: (1) -> if :: f = 1; f = 0; :: skip; fi; break od }\n\
+                  ltl p0 { [] ( !(f) ) }";
+
+    // verify() surfaces the evaluation failure as an error rather than a verdict.
+    let result = crate::runtime::verify(source);
+    assert!(
+        result.is_err(),
+        "an unexpressible nested branch must not produce a clean verdict"
+    );
+}

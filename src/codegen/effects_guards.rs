@@ -342,6 +342,39 @@ impl LuaGenerator {
         step: usize,
         next: usize,
     ) {
+        // A branch may only be folded into this step when it has at most one effectful
+        // statement. Folding several would run them atomically, removing the intermediate
+        // states between them and hiding a violation: a branch "f = 1; f = 0" would leave
+        // f permanently 0, so []!(f) came back clean while pan refutes it. Report such a
+        // branch instead of quietly under-approximating.
+        let effectful = |g: &Guard| {
+            g.body
+                .iter()
+                .filter(|s| match s {
+                    Stmt::Skip(_) => false,
+                    Stmt::Expr(e, _) => match e {
+                        Expression::FuncCall { name, .. } => {
+                            self.inlines.contains_key(name.as_str())
+                        }
+                        _ => false,
+                    },
+                    _ => true,
+                })
+                .count()
+        };
+        if guards.iter().any(|g| effectful(g) > 1) {
+            self.emit("    -- nested if with a multi-statement branch: refusing to fold it into");
+            self.emit("    -- one step, which would run the statements atomically and hide the");
+            self.emit("    -- states between them");
+            self.emit("    table.insert(transitions, {");
+            self.emit(
+                "        guard = function(s) error('multi-statement branch in a nested if inside a guard body is not supported') end,",
+            );
+            self.emit("        effect = function(s) end,");
+            self.emit("    })");
+            return;
+        }
+
         let cond_strs: Vec<String> = guards
             .iter()
             .map(|g| match &g.condition {
