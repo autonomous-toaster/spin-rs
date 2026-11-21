@@ -88,13 +88,16 @@ pub fn ample_set(deps: &[TransitionDeps], visible: &BTreeSet<String>) -> Vec<usi
     if n <= 1 {
         return (0..n).collect();
     }
-    // C1: one visible transition and the whole set must be explored, because a visible
-    // transition can change what the claim observes and no reordering is unobservable.
-    if deps.iter().any(|d| d.is_visible(visible)) {
-        return (0..n).collect();
-    }
-    // C2: a singleton that conflicts with nothing else is persistent. C1 has already
-    // established that every enabled transition is invisible, so any one of them may be taken.
+    // C1: every transition in the ample set must be invisible to the claim. A singleton only
+    // has to satisfy that for itself - an enabled VISIBLE transition does not force exploring
+    // everything, as long as it is independent of the transition we pick. It stays enabled at
+    // the successor and is taken from there.
+    //
+    // Bailing out whenever any visible transition was enabled used to cost most of the
+    // reduction: on five independent processes with a claim over two of them, every state has a
+    // visible transition enabled, so nothing was ever reduced.
+    //
+    // C2: a singleton that conflicts with nothing else is persistent.
     for i in 0..n {
         if (deps[i].internal || !deps[i].is_visible(visible))
             && (0..n).all(|j| j == i || !deps[i].conflicts_with(&deps[j]))
@@ -125,10 +128,22 @@ mod tests {
     }
 
     #[test]
-    fn visible_transition_forces_the_whole_set() {
+    fn a_visible_but_independent_transition_does_not_force_the_whole_set() {
+        // The second transition writes x, which the claim observes, but it touches nothing the
+        // first one touches: taking the first still leaves it enabled.
         let d = [
             TransitionDeps::new(&[], &["_step_P"], true),
             TransitionDeps::new(&[], &["x"], false),
+        ];
+        assert_eq!(ample_set(&d, &vis(&["x"])), vec![0]);
+    }
+
+    #[test]
+    fn a_visible_transition_that_conflicts_keeps_the_whole_set() {
+        // Both write x: the visible one cannot be postponed past the other.
+        let d = [
+            TransitionDeps::new(&[], &["x"], false),
+            TransitionDeps::new(&["x"], &["y"], false),
         ];
         assert_eq!(ample_set(&d, &vis(&["x"])), vec![0, 1]);
     }

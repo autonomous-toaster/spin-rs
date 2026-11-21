@@ -97,6 +97,33 @@ active proctype T2() { do :: (done1) -> bad = 1; break od }
 ltl p0 { [] ( !bad ) }
  ";
 
+/// Five independent processes with a claim over two of them. This is the case where the ample
+/// set has to reduce even though a visible transition is enabled somewhere in the state - the
+/// shape that exposed an over-strict C1 (2510 states before the relaxation, 20 after).
+const INDEPENDENT_WITH_CLAIM: &str = "
+bool b1, b2, b3, b4, b5;
+active proctype P1() { do :: (1) -> b2 = 1; b1 = 1; break od }
+active proctype P2() { do :: (1) -> b3 = 1; b3 = 0; b3 = 1; break od }
+active proctype P3() { do :: (1) -> b4 = 1; b4 = 0; b4 = 1; break od }
+active proctype P4() { do :: (1) -> b5 = 1; b5 = 0; b5 = 1; break od }
+active proctype P5() { do :: (1) -> b5 = 0; b5 = 1; b5 = 0; break od }
+ltl p0 { [] ( b1 -> b2 ) }
+ ";
+
+/// A process looping invisibly next to a violation that is two invisible steps away.
+///
+/// This is the shape that broke the first version of the reduction: the ample set was persistent
+/// at every state, so each state kept only its own process's transition, the DFS never returned
+/// to the state where the other process was dropped, and the violation was never reached. It
+/// reported two states and zero errors against the unreduced search's one. The cycle proviso
+/// exists to stop exactly this, and this fixture is why it is not optional.
+const CYCLE_HIDDEN_VIOLATION: &str = "
+byte tmp; bool bad;
+active proctype A() { do :: (1) -> skip od }
+active proctype B() { do :: (1) -> tmp = 1; bad = 1; break od }
+ltl p { [] ( !bad ) }
+ ";
+
 /// A violated liveness claim whose only cycle consists of internal transitions.
 const LIVENESS: &str = "
 bool flag;
@@ -109,11 +136,13 @@ ltl l0 { <> ( flag ) }
 /// report twice the states of one unreduced pass.
 const CORPUS: &[(&str, &str, usize)] = &[
     ("independent", INDEPENDENT, 1),
+    ("independent_with_claim", INDEPENDENT_WITH_CLAIM, 1),
     ("chain", CHAIN, 2),
     ("concurrent_phase", CONCURRENT_PHASE, 2),
     ("veriplan_one", VERIPLAN_ONE, 1),
     ("veriplan_two", VERIPLAN_TWO, 2),
     ("dependent_guard", DEPENDENT_GUARD, 1),
+    ("cycle_hidden_violation", CYCLE_HIDDEN_VIOLATION, 1),
     ("liveness", LIVENESS, 1),
 ];
 
@@ -168,6 +197,22 @@ fn a_dependent_guard_is_not_reduced_away() {
         "the violation behind the dependent guard must survive: {:?}",
         reduced.violations
     );
+}
+
+#[test]
+fn an_invisible_loop_does_not_hide_a_violation_behind_it() {
+    let full = run(CYCLE_HIDDEN_VIOLATION, false, 1_000_000);
+    let reduced = run(CYCLE_HIDDEN_VIOLATION, true, 1_000_000);
+    assert!(
+        !full.violations.is_empty(),
+        "the fixture must violate its claim without reduction"
+    );
+    assert_eq!(
+        verdicts(&full),
+        verdicts(&reduced),
+        "a process looping invisibly must not hide the other process's violation"
+    );
+    assert!(reduced.violations.iter().any(|v| v.property_name == "p"));
 }
 
 #[test]

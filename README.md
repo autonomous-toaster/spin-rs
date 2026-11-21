@@ -128,155 +128,48 @@ consist entirely of invisible transitions, so reducing it would hide the violati
 
 #### Parity against pan
 
-States stored, per fixture. "pan POR" is the sum over pan's per-claim traversals, which is the
-only form comparable with our aggregated count.
+States stored. "pan POR" is the sum over pan's per-claim traversals; that is the only form
+comparable with our aggregated count. Every fixture here declares at least one claim.
 
-| fixture | ours (reduced) | pan POR | pan `-DNOREDUCE` | errors | pan errors |
-|---|---|---|---|---|---|
-| 5 independent proctypes, 3 steps each | 21 | 1370 | 3906 | 0 | 0 |
-| 4-task dependent chain, 2 claims | 18 | 26 | 26 | 0 | 0 |
-| concurrent two-phase barrier, 2 claims | 22 | 26 | 34 | 0 | 0 |
-| veriplan chain shape, 1 claim | 5 | 7 | 7 | 0 | 0 |
-| veriplan chain shape, 2 claims | 14 | 20 | 20 | 0 | 0 |
-| violation behind a dependent guard | 5 | 5 | 5 | 1 | 1 |
-| violated liveness claim over an internal cycle | 2 | 2 | 2 | 1 | 1 |
+| fixture | claims | ours (reduced) | pan POR | pan `-DNOREDUCE` | errors | pan errors |
+|---|---|---|---|---|---|---|
+| 5 independent proctypes, claim over two of them | 1 | 20 | 1029 | 3125 | 0 | 0 |
+| 4-task dependent chain | 2 | 18 | 26 | 26 | 0 | 0 |
+| concurrent two-phase barrier | 2 | 20 | 26 | 34 | 0 | 0 |
+| veriplan chain shape | 1 | 5 | 7 | 7 | 0 | 0 |
+| veriplan chain shape | 2 | 14 | 20 | 20 | 0 | 0 |
+| violation behind a dependent guard | 1 | 5 | 5 | 5 | 1 | 1 |
+| violated liveness claim over an internal cycle | 1 | 2 | 2 | 2 | 1 | 1 |
 
-Every row is within pan's reduced count, and error counts match per claim. The corpus is a test
-(`src/engine/checker/por_tests.rs`): it compares reduced against unreduced verdicts, and runs
-`spin` + `gcc` + `pan` when they are on the PATH. A reduction bug does not fail loudly - it
-reports a broken model as clean - so the gate is on verdicts, not on state counts.
+Deliberately not in that table: the same five independent proctypes with **no claim**, where we
+explore 21 states and pan 1370. With no property, both engines are only measuring how small a
+deadlock-preserving reduction they can get away with, and ours commutes far more aggressively
+than pan's conditional-safety classes. Quoting that beside a claim-bearing row invites a
+factor-of-65 comparison that means nothing. (Raised by the consumer; they were right.)
 
-### Library API
+#### The cycle proviso, and the false green that shipped without it
 
-```rust
-use spin_rs::verify;
+v0.4.0 was unsound. This model reported 2 states and 0 errors; the unreduced search and pan
+both report 1 error:
 
-let promela = r#"
-    active proctype P() { byte x = 0; x = 1; assert(x == 1); }
-"#;
-let result = verify(promela)?;
-println!("{} states explored", result.states_explored);
+```promela
+byte tmp; bool bad;
+active proctype A() { do :: (1) -> skip od }
+active proctype B() { do :: (1) -> tmp = 1; bad = 1; break od }
+ltl p { [] ( !bad ) }
 ```
 
-```rust
-use spin_rs::{CheckerBuilder, StorageMode, SearchMode};
+The ample set was persistent at every state - dropping `B`'s transition was locally justified
+because it commutes with `A`'s - but `A` loops, so every state kept only its own transition and
+the DFS never returned to the state where `B` had been dropped. `bad` was never set.
 
-let model = spin_rs::create_model(promela)?;
-let checker = CheckerBuilder::new()
-    .model(model)
-    .max_states(1_000_000)
-    .search_mode(SearchMode::BreadthFirst)
-    .storage_mode(StorageMode::Bitstate)
-    .build();
-let result = checker.check();
-```
+Every cycle in the reduced graph must be broken by exploring everything: a state whose successor
+is already on the search path explores its whole enabled set, which makes the reduced graph
+acyclic and lets the persistence argument terminate instead of going round. Two fixtures now
+pin this (`cycle_hidden_violation`, plus a loop beside a dependent guard).
 
-```rust
-use spin_rs::property::verify_ltl;
-
-// Supported shapes: p, !p, []p, <>p, Xp and [] (a -> <> b).
-let result = verify_ltl(promela, "[] (x == 0 -> <> (done))", "liveness")?;
-match result {
-    Some(v) => println!("❌ Violation: {}", v.description),
-    None    => println!("✅ Property holds"),
-}
-```
-
-A shape the automaton builder cannot complement returns `Err`, never a green verdict.
-See **Verification results** below.
-
-### Verification results
-
-A result is only trustworthy when it says so. Three outcomes are distinct:
-
-| Outcome | How it is reported | Meaning |
-|---|---|---|
-| No violation | `Ok(result)` with `errors == 0` and `unverified.is_empty()` | the state space closed and every property was decided |
-| Violation | `Ok(result)` with `errors > 0` | definite refutation, with a trail |
-| Unverified | `Err(...)`, or `Ok(result)` with `unverified` non-empty | no verdict was produced |
-
-`verify` returns `Err` when the model could not be explored or evaluated:
-
-- no process is enabled in the initial state, so nothing was explored;
-- an atomic proposition does not name a variable in the model;
-- a generated guard or effect failed to evaluate.
-
-All three mean *I could not check this*, not *this is invalid*. Mapping `Err` to a failure
-verdict invents a violation.
-
-`CheckResult::unverified` carries the same idea for individual properties: a property the
-checker cannot decide (an unsupported LTL shape, or an unparsable formula) is listed there
-rather than counted as an error. A model declaring proctypes but exploring zero transitions
-is an error, never a pass.
-
-`verify` has no wall-clock deadline. It runs until the state space closes or `max_states`
-is reached; use `verify_with_config` to set the budget. A search that stops at the limit
-adds a `model` entry to `unverified` saying so, so a truncated run can no longer be
-confused with a completed one.
-
-Properties are evaluated per named claim. A caller that checks only the first claim of a
-multi-property model will under-report violations; `pan` has the same behaviour and needs
-`-N <claim>` per property.
-
-### Why 0.2.0 changed old verdicts
-
-Upgrading from 0.1.0 matters because some earlier verdicts were wrong, not merely different.
-Four defects produced them: the state-blob reader returned the *next* variable's value, so
-implication-shaped safety properties were judged against the wrong atom; `&&` never matched
-across a space, collapsing every conjunction into one unresolvable atom that silently read
-as false; mlua maps numeric `0` to `true`, so guards that evaluated to zero were treated as
-enabled; and `evaluate_atomic_props` reinterpreted the state pointer as a different type
-through `unsafe`, which is undefined behaviour. Liveness verdicts were additionally inverted
-and now judge the property's negation.
-
-## Features
-
-| Feature | Status |
-|---------|--------|
-| Promela parser (variables, channels, processes, control flow) | ✅ |
-| LTL formula parser + Büchi automaton | ✅ |
-| DFS / BFS state exploration | ✅ |
-| Interactive simulation (`-i`) | ✅ |
-| Trail replay with state inspection (`-t -k --inspect`) | ✅ |
-| Spin-compatible trail format (read/write) | ✅ |
-| Swarm verification (`--swarm N,M`) | ✅ |
-| Parallel BFS (`--bfspar N`) | ✅ |
-| Hash-compact storage (`--hc`) | ✅ |
-| Strong fairness constraints (`--strong-fairness`) | ✅ |
-| Dead variable elimination (`-o2`) | ✅ |
-| Statement merging (`--opt3`) | ✅ |
-| Rendezvous optimization (`--opt4`) | ✅ |
-| Partial order reduction (ample sets) | ✅ |
-| Bitstate hashing (Bloom filter) | ✅ |
-| Collapse compression | ✅ |
-| Error trails (JSON + Spin format) | ✅ |
-| LTL verification (product + nested DFS) | ✅ |
-| Atomic sequences + `d_step` | ✅ |
-| Dynamic process creation (`run`) | ✅ |
-| Never claims | ✅ |
-| Parallel verification (rayon) | ✅ |
-| Fairness constraints (weak + strong) | ✅ |
-
-## Promela Support
-
-**Data types**: `bit`, `bool`, `byte`, `short`, `int`, `chan`, arrays, mtype, typedef  
-**Channel arrays**: `chan name[N];` with indexed access  
-**Control flow**: `if`/`fi`, `do`/`od`, `goto`, `break`, `skip`, `atomic`, `d_step`, `unless`  
-**Channels**: buffered/unbuffered, `!` (send), `?` (receive), poll, sorted, rendezvous  
-**Expressions**: arithmetic, comparison, boolean, bitwise, `len`, `enabled`, `full`, `empty`, remote refs  
-**Properties**: `assert`, LTL inline, named LTL formulas, never claims, `np_` (non-progress)  
-**LTL operators**: `[]`, `<>`, `X` on atomic or negated-atomic operands, plus `[] (a -> <> b)`. `U`, `V`/`R` and nested temporal operators are rejected as unsupported rather than mis-verdicts.  
-**Other**: `printf`, inline expansion, `c_code` passthrough, `run`, `provided`, `priority`
-
-## Architecture
-
-```
-Promela source → Parser (nom) → AST → Code Generator → Lua → mlua Runtime → Checker Engine → Result
-```
-
-The pipeline is fully in-process: parse Promela, generate Lua transition functions,
-execute them via embedded Lua, and explore the state space with the verification engine.
-
-## License
-
-WTFPL — see [LICENSE](LICENSE).
+The same review found the opposite error: a *visible* but **independent** enabled transition was
+forcing the whole set to be explored. That is stricter than the ample-set condition, which only
+requires the picked transition to be invisible and independent of everything else - a visible one
+that is independent stays enabled and is taken later. Relaxing it took the claim-bearing
+five-process fixture from 2501 states to 30.

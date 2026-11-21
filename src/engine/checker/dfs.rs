@@ -39,11 +39,17 @@ impl<M: Model> Checker<M> {
         let mut storage = self.make_storage();
         let mut stack: Vec<(M::State, usize, usize)> = Vec::new(); // (state, depth, parent_index)
         let mut trail: Vec<(String, usize)> = Vec::new(); // (transition_label, parent_index)
+        // Hash of the state each trail entry was created from, so the current search path can be
+        // reconstructed by walking parents. Needed by the cycle proviso below.
+        let mut path_hashes: Vec<u64> = Vec::new();
         let mut transitions_count = 0;
         let mut violations = Vec::new();
         let mut hit_state_limit = false;
         let mut hit_depth_limit = false;
         let mut hit_early_stop = false;
+        // Claims whose formula the checker could not evaluate. Kept per claim, reported once.
+        let mut unresolved: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::new();
 
         // Fairness tracking
         let mut fairness = FairnessTracker::new(self.config.fairness_mode);
@@ -53,7 +59,8 @@ impl<M: Model> Checker<M> {
             let h = self.model.hash(&s);
             if storage.insert(h, &s) {
                 let idx = trail.len();
-                trail.push((String::new(), 0));
+                trail.push((String::new(), idx));
+                path_hashes.push(h);
                 stack.push((s, 0, idx));
             }
         }
@@ -116,19 +123,18 @@ impl<M: Model> Checker<M> {
                             }
                         }
                         None => {
-                            // An atom that does not resolve must never be read as false.
-                            let state_trail = self.build_trail(&trail, state_idx);
-                            violations.push(Violation {
-                                property_name: check.prop_name.clone(),
-                                trail: state_trail,
-                                description: format!(
-                                    "Unresolved atomic proposition in '{}': '{}' is not a variable in state {}",
-                                    check.prop_name, check.formula, state_str
-                                ),
+                            // An atom that does not resolve is not a refutation. Counting it as
+                            // one turned a SATISFIED property into a violation: a claim of the
+                            // form  [] ( a <= 3 )  came back INVALID because the LTL layer keeps
+                            // a comparison as a single opaque atom while the evaluator only
+                            // resolves bare names - and pan accepts that model. The claim is
+                            // reported as undecided instead.
+                            unresolved.entry(check.prop_name.clone()).or_insert_with(|| {
+                                format!(
+                                    "cannot decide '{}': the formula contains an atom that does not resolve to a state variable (was: '{}')",
+                                    check.prop_name, check.formula
+                                )
                             });
-                            if violations.len() >= 100 {
-                                break;
-                            }
                         }
                     }
                 }
@@ -143,13 +149,41 @@ impl<M: Model> Checker<M> {
                 fairness.record_enabled(&labels);
             }
 
-            // Reduction: explore only the ample set. It is computed against this claim's
-            // visible fields, so it is recomputed for every claim rather than once per state.
+            // Reduction: explore only the ample set, unless this state lies on a cycle.
+            //
+            // The cycle proviso is not optional. An ample set can be persistent at every state
+            // and still lose a transition forever: a process looping invisibly makes each state
+            // pick its own transition, the DFS never returns to the state where the other
+            // process was dropped, and a violation behind it is never reached. Measured on
+            //   active proctype A() { do :: (1) -> skip od }
+            //   active proctype B() { do :: (1) -> bad = 1; break od }
+            // where the reduced search reported zero errors and the unreduced one found one.
+            //
+            // A state whose successor is already on the search path closes a cycle, so it
+            // explores everything; every reduced graph is then acyclic, which is what makes the
+            // persistence argument terminate instead of going round.
             let keep: Vec<usize> = match scope {
                 Some(sc) if !sc.liveness => {
-                    let deps: Vec<TransitionDeps> =
-                        enabled.iter().map(|t| t.deps.clone()).collect();
-                    ample_set(&deps, &sc.visible)
+                    let mut ancestors = std::collections::HashSet::new();
+                    let mut i = state_idx;
+                    loop {
+                        ancestors.insert(path_hashes[i]);
+                        let parent = trail[i].1;
+                        if parent == i {
+                            break;
+                        }
+                        i = parent;
+                    }
+                    let on_cycle = enabled
+                        .iter()
+                        .any(|t| ancestors.contains(&self.model.hash(&t.next)));
+                    if on_cycle {
+                        (0..enabled.len()).collect()
+                    } else {
+                        let deps: Vec<TransitionDeps> =
+                            enabled.iter().map(|t| t.deps.clone()).collect();
+                        ample_set(&deps, &sc.visible)
+                    }
                 }
                 _ => (0..enabled.len()).collect(),
             };
@@ -165,6 +199,7 @@ impl<M: Model> Checker<M> {
                 if storage.insert(h, &t.next) {
                     let idx = trail.len();
                     trail.push((t.label.clone(), state_idx));
+                    path_hashes.push(h);
                     stack.push((t.next.clone(), depth + 1, idx));
                 }
             }
@@ -219,6 +254,15 @@ impl<M: Model> Checker<M> {
         // Collapse to one violation per property before reporting.
         let violations = dedup_violations(violations);
 
+        let unresolved: Vec<Unverified> = unresolved
+            .into_iter()
+            .map(|(property_name, reason)| Unverified {
+                property_name,
+                kind: UnverifiedKind::UnsupportedProperty,
+                reason,
+            })
+            .collect();
+
         let mut result = CheckResult {
             states_explored: storage.len(),
             states_stored: storage.len(),
@@ -229,7 +273,7 @@ impl<M: Model> Checker<M> {
                 .min(stack.iter().map(|(_, d, _)| *d).max().unwrap_or(0)),
             errors: violations.len(),
             violations,
-            unverified: Vec::new(),
+            unverified: unresolved,
             elapsed_secs: elapsed,
         };
 
