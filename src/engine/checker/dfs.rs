@@ -21,6 +21,7 @@ impl<M: Model> Checker<M> {
         let mut violations = Vec::new();
         let mut hit_state_limit = false;
         let mut hit_depth_limit = false;
+        let mut hit_early_stop = false;
 
         // Fairness tracking
         let mut fairness = FairnessTracker::new(self.config.fairness_mode);
@@ -39,6 +40,7 @@ impl<M: Model> Checker<M> {
             // Opt-in early stop: one refutation is enough to call the model violated, and the
             // remaining reachable space would be discarded anyway.
             if self.config.stop_at_first_violation && !violations.is_empty() {
+                hit_early_stop = true;
                 break;
             }
             if depth >= self.config.max_depth {
@@ -224,6 +226,30 @@ impl<M: Model> Checker<M> {
             self.check_ltl_properties(&mut result);
         }
 
+        // With an early stop, every claim that did not produce a violation was left
+        // unexplored. Report them individually so a caller cannot read "no violation
+        // reported" as "satisfied" - the failure mode this whole contract exists to stop.
+        if hit_early_stop {
+            let decided: std::collections::HashSet<&str> = result
+                .violations
+                .iter()
+                .map(|v| v.property_name.as_str())
+                .collect();
+            let undecided: Vec<Unverified> = self
+                .model
+                .ltl_formulas()
+                .iter()
+                .map(|f| f.name.as_deref().unwrap_or("ltl"))
+                .filter(|n| !decided.contains(*n))
+                .map(|n| Unverified {
+                    property_name: n.to_string(),
+                    kind: UnverifiedKind::EarlyStop,
+                    reason: "search stopped at the first violation, so this claim was not fully explored".to_string(),
+                })
+                .collect();
+            result.unverified.extend(undecided);
+        }
+
         result
     }
 
@@ -299,6 +325,7 @@ impl<M: Model> Checker<M> {
         let mut violations = Vec::new();
         let mut hit_depth_limit = false;
         let mut hit_state_limit = false;
+        let mut hit_early_stop = false;
         let mut max_depth = 0;
 
         // Fairness tracking
@@ -316,6 +343,7 @@ impl<M: Model> Checker<M> {
 
         while let Some((state, depth, state_idx)) = queue.pop_front() {
             if self.config.stop_at_first_violation && !violations.is_empty() {
+                hit_early_stop = true;
                 break;
             }
             max_depth = max_depth.max(depth);
@@ -489,6 +517,30 @@ impl<M: Model> Checker<M> {
         // property was silently unchecked under --search bfs while still reported as a
         // clean verification.
         self.check_ltl_properties(&mut result);
+
+        // With an early stop, every claim that did not produce a violation was left
+        // unexplored. Report them individually so a caller cannot read "no violation
+        // reported" as "satisfied" - the failure mode this whole contract exists to stop.
+        if hit_early_stop {
+            let decided: std::collections::HashSet<&str> = result
+                .violations
+                .iter()
+                .map(|v| v.property_name.as_str())
+                .collect();
+            let undecided: Vec<Unverified> = self
+                .model
+                .ltl_formulas()
+                .iter()
+                .map(|f| f.name.as_deref().unwrap_or("ltl"))
+                .filter(|n| !decided.contains(*n))
+                .map(|n| Unverified {
+                    property_name: n.to_string(),
+                    kind: UnverifiedKind::EarlyStop,
+                    reason: "search stopped at the first violation, so this claim was not fully explored".to_string(),
+                })
+                .collect();
+            result.unverified.extend(undecided);
+        }
 
         result
     }

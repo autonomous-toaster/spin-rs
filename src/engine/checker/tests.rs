@@ -361,3 +361,46 @@ fn test_stop_at_first_violation_is_cheaper_and_opt_in() {
         exhaustive.states_explored
     );
 }
+
+/// With an early stop, every claim that produced no violation was left unexplored. They must be
+/// listed individually, otherwise a caller reads "no violation reported" as "satisfied" - which
+/// is the exact fail-open this contract exists to prevent.
+#[test]
+fn test_early_stop_lists_the_claims_it_did_not_explore() {
+    let source = "bit a1, a2, a3;\n\
+                  active proctype t1() { do :: (1) -> a1 = 1; break od }\n\
+                  active proctype t2() { do :: (1) -> a2 = 1; break od }\n\
+                  active proctype t3() { do :: (1) -> a3 = 1; break od }\n\
+                  ltl p0 { [] ( !(a1 && a2) ) }\n\
+                  ltl p1 { [] ( !(a1 && a3) ) }\n\
+                  ltl p2 { [] ( !(a2 && a3) ) }";
+
+    let early = CheckerBuilder::new()
+        .model(crate::runtime::LuaModel::from_source(source).unwrap())
+        .stop_at_first_violation(true)
+        .build()
+        .check_dfs();
+
+    assert_eq!(early.errors, 1, "one refutation is enough to stop");
+    let undecided: Vec<&str> = early
+        .unverified
+        .iter()
+        .filter(|u| u.kind == UnverifiedKind::EarlyStop)
+        .map(|u| u.property_name.as_str())
+        .collect();
+    assert_eq!(
+        undecided.len(),
+        2,
+        "the two claims that were not explored must be listed: {:?}",
+        early.unverified
+    );
+    for name in ["p0", "p1", "p2"] {
+        let reported = early.violations.iter().any(|v| v.property_name == name);
+        let listed = undecided.contains(&name);
+        assert!(
+            reported || listed,
+            "claim {} must be either refuted or listed as unexplored",
+            name
+        );
+    }
+}

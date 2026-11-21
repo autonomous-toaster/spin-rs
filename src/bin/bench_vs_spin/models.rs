@@ -203,14 +203,21 @@ active proctype task_t2_1() { do :: (t1_1 && t1_2) -> t2_1 = 1; break od }
 ltl p0 { [] (t2_1 -> t1_1) }
 "#;
 
-// NOTE for anyone reading the 1M-cap numbers below: plan_20tasks_10ltls reaching the state
-// limit was NOT primarily the per-proctype step counters. The consumer's translator emitted
-// `active = 1; done = 1; active = 0`, which let a successor task start while its predecessor
-// was still marked active; that interleaving window made the state space the product of the
-// windows at every task boundary. Moving `done = 1` to the end of the body took a 20-task plan
-// from 5,242,876 pan states to 101. The models in this corpus still carry the old shape, so
-// treat their state counts as a modelling artifact rather than as evidence about the checker.
-// Errors are what the corpus compares; the state columns are for scale only.
+// NOTE ON THE STATE COUNTS BELOW - dated, and they will change again.
+//
+// plan_20tasks_10ltls reaching the 1M state limit was NOT the per-proctype step counters. The
+// consumer's translator emitted `active = 1; done = 1; active = 0`, letting a successor task
+// start while its predecessor was still marked active. That interleaving window made the state
+// space the product of the windows at every task boundary; moving `done = 1` to the end of the
+// body took a 20-task plan from 5,242,876 pan states to 101.
+//
+// As of this commit the corpus still carries the PRE-FIX shape, so these state columns are not
+// comparable across that translator change, nor with any build made after it. Errors are the
+// only quantity this corpus compares between engines. State columns are for scale only.
+//
+// There is one legitimate exception: when a test's subject IS scale - e.g. asserting that a
+// 20-task plan stays under 1000 states to catch a future change reopening the window - then the
+// number is the thing under test, not evidence of correctness. Do not confuse the two.
 
 pub const ALL_MODELS: &[ModelDef] = &[
     ModelDef {

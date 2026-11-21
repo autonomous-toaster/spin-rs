@@ -148,6 +148,8 @@ pub enum UnverifiedKind {
     StateBudget,
     /// The search stopped at `max_depth`.
     DepthBudget,
+    /// The search stopped at the first violation, so this claim was never fully explored.
+    EarlyStop,
 }
 
 impl UnverifiedKind {
@@ -158,6 +160,7 @@ impl UnverifiedKind {
             UnverifiedKind::UnparsableFormula => "unparsable_formula",
             UnverifiedKind::StateBudget => "state_budget",
             UnverifiedKind::DepthBudget => "depth_budget",
+            UnverifiedKind::EarlyStop => "early_stop",
         }
     }
 }
