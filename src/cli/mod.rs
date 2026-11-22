@@ -110,9 +110,9 @@ pub struct Cli {
     /// Stop each claim's traversal at its first violation instead of exploring its whole
     /// reachable space.
     ///
-    /// The liveness pass is skipped as well, and every liveness claim it would have examined is
-    /// reported as `early_stop` rather than left out: a claim that is absent from both lists would
-    /// read as satisfied. Turn the flag off if you need liveness verdicts.
+    /// Every claim still gets a verdict: the flag makes a refutation cheap, it does not end the
+    /// run or skip the liveness pass. It used to do both, and that cost a consumer the verdict on
+    /// a liveness claim pan refutes while saving two percent of their run.
     #[arg(long)]
     pub stop_at_first_violation: bool,
 

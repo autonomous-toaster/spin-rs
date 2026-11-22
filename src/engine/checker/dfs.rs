@@ -365,18 +365,15 @@ impl<M: Model> Checker<M> {
             });
         }
 
-        // Check remaining LTL properties (non-[]p formulas via nested DFS). Skipped when an
-        // early stop already produced a refutation: the caller asked for the first one, and
-        // exploring the rest would defeat that.
+        // Check remaining LTL properties (non-[]p formulas via nested DFS).
+        //
+        // This used to be skipped once an early stop had produced a refutation, on the theory that
+        // the caller asked for one and the rest was wasted. A consumer measured what that costs: a
+        // `[] ( failed -> <> active )` claim refuted by pan came back as satisfied, and turning the
+        // flag on saved 9 seconds out of 415 while losing that verdict. The flag stops each
+        // traversal, which is where the saving is; it does not get to cost a claim its verdict.
         if scope.is_none() {
-            if self.config.stop_at_first_violation && result.errors > 0 {
-                // The liveness pass is skipped to keep a stopped run cheap, but a claim that was
-                // never examined is not a claim that holds. Leaving it absent from the result made
-                // a refuted liveness claim read as satisfied to any caller counting entries.
-                self.report_skipped_liveness(&mut result);
-            } else {
-                self.check_ltl_properties(&mut result);
-            }
+            self.check_ltl_properties(&mut result);
         }
 
         // With an early stop, every claim that did not produce a violation was left
@@ -410,38 +407,6 @@ impl<M: Model> Checker<M> {
 
     /// Check LTL properties using PropertyChecker (nested DFS).
     /// Skips []expr formulas that were already checked as safety properties during DFS.
-    /// Name every claim the skipped liveness pass never examined.
-    ///
-    /// A claim that is absent from both `violations` and `unverified` reads as satisfied, which is
-    /// the one thing this type exists to prevent.
-    pub(super) fn report_skipped_liveness(&self, result: &mut CheckResult) {
-        let decided: std::collections::HashSet<&str> = result
-            .violations
-            .iter()
-            .map(|v| v.property_name.as_str())
-            .collect();
-        let named: std::collections::HashSet<&str> = result
-            .unverified
-            .iter()
-            .map(|u| u.property_name.as_str())
-            .collect();
-        let skipped: Vec<String> = self
-            .model
-            .ltl_formulas()
-            .iter()
-            .filter(|f| !is_safety_formula(&f.formula))
-            .map(|f| f.name.as_deref().unwrap_or("ltl").to_string())
-            .filter(|n| !decided.contains(n.as_str()) && !named.contains(n.as_str()))
-            .collect();
-        for name in skipped {
-            result.unverified.push(Unverified::new(
-                name,
-                UnverifiedKind::EarlyStop,
-                "the run stopped at the first violation, so the liveness pass was skipped and this claim was never examined - it is not satisfied",
-            ));
-        }
-    }
-
     pub(super) fn check_ltl_properties(&self, result: &mut CheckResult) {
         let formulas = self.model.ltl_formulas();
         if formulas.is_empty() {

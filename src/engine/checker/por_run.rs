@@ -162,12 +162,10 @@ impl<M: Model> Checker<M> {
         result.elapsed_secs = start.elapsed().as_secs_f64();
 
         // Liveness claims live outside the per-claim safety loop. The nested DFS is never
-        // reduced, because an accepting cycle can consist of invisible transitions.
-        if self.config.stop_at_first_violation && result.errors > 0 {
-            self.report_skipped_liveness(&mut result);
-        } else {
-            self.check_ltl_properties(&mut result);
-        }
+        // reduced, because an accepting cycle can consist of invisible transitions. It runs
+        // whether or not an early stop produced a refutation: skipping it cost a consumer the
+        // verdict on a liveness claim pan refutes, and saved 2% of the run.
+        self.check_ltl_properties(&mut result);
         result
     }
 }

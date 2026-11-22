@@ -488,10 +488,12 @@ fn a_never_claim_is_reported_rather_than_ignored() {
 }
 
 #[test]
-fn a_skipped_liveness_pass_is_reported_not_satisfied() {
-    // With `stop_at_first_violation` the liveness pass is skipped. The claims it would have
-    // examined used to be absent from the result, which reads as satisfied: a consumer measured
-    // `[] ( failed -> <> active )` - refuted by pan - coming back as a pass.
+fn an_early_stop_still_gives_liveness_claims_a_verdict() {
+    // With `stop_at_first_violation` the liveness pass used to be skipped, and the claims it would
+    // have examined were absent from the result - which reads as satisfied. A consumer measured
+    // `[] ( failed -> <> active )`, refuted by pan, coming back as a pass; naming them as skipped
+    // stopped the lie but still cost the verdict, and the flag saved 2% of their run. The pass
+    // runs now, so the refutation is the refutation pan reports.
     let src = "
 bit a = 0, b = 0, bad = 0;
 active proctype P() { a = 1; bad = 1 }
@@ -509,16 +511,16 @@ ltl p18 { [] ( a -> <> b ) }
         "the safety claim is refuted: {:?}",
         r.violations
     );
-    let entry = r
-        .unverified
-        .iter()
-        .find(|u| u.property_name == "p18")
-        .expect("the skipped liveness claim must be named, not absent");
-    assert_eq!(entry.kind.as_str(), "early_stop", "{entry:?}");
     assert!(
-        entry.reason.contains("never examined"),
-        "the reason must say it was not examined: {}",
-        entry.reason
+        r.violations.iter().any(|v| v.property_name == "p18"),
+        "the liveness claim must be decided, and refuted as pan refutes it: {:?} / {:?}",
+        r.violations,
+        r.unverified
+    );
+    assert!(
+        !r.unverified.iter().any(|u| u.property_name == "p18"),
+        "a decided claim carries no unverified entry: {:?}",
+        r.unverified
     );
 }
 

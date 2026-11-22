@@ -626,6 +626,14 @@ pub fn parse(source: &str) -> anyhow::Result<PromelaModel> {
     let expanded =
         preprocess::preprocess(source).map_err(|e| anyhow::anyhow!("preprocessor: {}", e))?;
     let source: &str = &expanded;
+    // A construct the parser does not have produces "N characters left unconsumed", which a caller
+    // cannot tell apart from a model of their own that is malformed. The two below are named
+    // instead, so the answer says which side the gap is on.
+    if preprocess::contains_keyword(source, "unless") {
+        anyhow::bail!(
+            "unless is not implemented: the handler interleaves with the body, which needs a              transition over both, so a model using it gets no verdict"
+        );
+    }
     let (rest, declarations) =
         many0(top_level)(source).map_err(|e| anyhow::anyhow!("parse error: {:?}", e))?;
     let declarations: Vec<TopLevel> = declarations.into_iter().flatten().collect();

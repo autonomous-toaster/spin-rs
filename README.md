@@ -155,7 +155,9 @@ These are hard errors. No verdict is produced, so nothing about the model is cla
 |---|---|
 | rendezvous channel (`chan c = [0] of { t }`) | the send and its receive are one transition over two processes; this engine moves one process per transition |
 | `run P(...)` | a spawned process needs dynamic instances; the transition table is emitted per static instance |
-| `unless`, and the bare `{ ... }` block it is written with | neither parses: a bare block is not a statement the parser has, and `unless` needs one. The refusal is a parse error naming the offset, not a refusal naming the construct |
+| `unless` | the handler interleaves with the body, which needs a transition over both. Refused by name |
+| bare `{ ... }` block | not a statement the parser has, so the model fails to parse |
+
 
 | `priority N` | pan runs only the highest-priority enabled process; ignoring it refuted a model pan accepts, so it is refused instead |
 | typedef records (`r.f`) | structured fields are not in the state |
@@ -206,10 +208,10 @@ Two consequences of doing this per claim, which the field documentation states a
   twice the states of a single unreduced pass. It is the same quantity as summing pan's per-claim
   runs, and it is not comparable with the pre-reduction value of the field.
 - **`--stop-at-first-violation` stops each claim's traversal**, not the run: a refutation is cheap,
-  every other claim still gets its turn, and the share a decided claim frees goes to the claims
-  behind it. The liveness pass is skipped in that mode, and every claim it would have examined is
-  reported as `early_stop` with a reason saying it was never examined - it is not reported as
-  satisfied, which is what an absent claim would otherwise mean.
+  every claim still gets a verdict, and the share a decided claim frees goes to the claims behind
+  it. The liveness pass runs too. It used to be skipped once a safety claim was refuted, and a
+  consumer measured what that cost: a `[] ( failed -> <> active )` claim refuted by pan came back
+  as satisfied, for a saving of nine seconds out of four hundred.
 - **`max_states` is shared out between the claims.** Each claim gets `max_states / claims`, at
   least one state, and whatever a *decided* claim does not use is handed to the claims behind it -
   an undecided claim keeps nothing, so an expensive early claim cannot take the pool. A starved
