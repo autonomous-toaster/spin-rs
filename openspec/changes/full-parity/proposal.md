@@ -68,6 +68,30 @@ Three defect classes the hand corpus never reached, each hand-confirmed against 
 So the hand corpus was not merely unrepresentative of structure; it was off by a factor of seven on
 the number of wrong verdicts, and it had missed three defect classes entirely.
 
+## What Phase 2 has done so far
+
+The full CFG is not in. What landed is the part that removes the lies: a body of more than one
+statement is routed through the step machine, which is the one place in the generator that
+sequences correctly, with a trailing `break` so the last step terminates the process. Constructs
+the step machine cannot flatten - a nested `do`, a `for`, a `goto`, an `atomic` region - are now
+**refused** rather than reordered or silently advanced past.
+
+| outcome | before Phase 1 | after Phase 2 so far |
+|---|---|---|
+| agree | 31 | 31 |
+| false refutation | 25 | **4** |
+| false clean | 5 | **2** |
+| refusal | 4 | 28 |
+
+Wrong verdicts: **30 to 6**. Refusals rose because a refusal is what an unsequenced construct now
+does instead of being quietly reordered; those 28 are the CFG work (2.10-2.13), not regressions.
+
+Three silent defects were found and fixed on the way, all of the same shape - a mechanism that is
+declared and participates in nothing: the step machine dropped `atomic`/`unless`/`for` statements
+with no effect, `goto` advanced past its target, `verify()` never called the `take_error()` that
+`verify_with_config()` had always called, and a channel send inside a sequence emitted a vararg
+call that could not load.
+
 ## The instrument is part of the problem
 
 The previous measurement reported 74 of 75 models agreeing with pan. It was wrong in two ways.

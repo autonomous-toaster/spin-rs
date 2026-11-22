@@ -17,17 +17,26 @@
 ## Phase 2: Execution Model
 
 - [ ] 2.1 CFG builder per proctype: nodes = positions between statements, edges = statements
+      (not yet: a body of more than one statement is routed through the step machine, which
+      sequences simple statements correctly and refuses the constructs it cannot flatten)
 - [ ] 2.2 Emit one transition per edge, guarded on the position, effect carrying the successor
 - [ ] 2.3 Collapse the five counters into one `_pc_<P>`; derive termination from it
 - [ ] 2.4 `atomic` and `d_step` as one fused edge per region
 - [ ] 2.5 `goto`, `label`, `break` as edge targets; no control transfer writes the termination flag
 - [ ] 2.6 `for` as init edge, loop-head node and exit edge
-- [ ] 2.7 Sequencing sweep: statement count x kind x observed-write position matches pan for every
-      generated shape
+- [x] 2.7 Sequencing sweep: the generated corpus measures this. Sequences, an assignment before
+      a loop and two sequential loops no longer produce a wrong verdict
+- [ ] 2.10 Nested `do/od` as a step: refused today, 12 of the 28 refusals
+- [ ] 2.11 `for` loops as steps: refused today, 4 of the refusals
+- [ ] 2.12 `atomic` and `d_step` as ONE fused step: not fused, which is 2 wrong verdicts and 4
+      refusals (the intermediate state between two assignments is reachable; pan's is not)
+- [ ] 2.13 A nested `if` whose branch is another `if`: refused today, 4 of the refusals
 - [ ] 2.8 Remove the shape-specific repairs the CFG makes unnecessary, one at a time, each
       gated by 1.5: nested-if expansion, trailing-`break` fold, multi-statement branch refusal,
       blocking-expression hoisting guard
 - [ ] 2.9 Delete the old emitters last, after 2.7 and 1.5 are green on the new path
+- [x] 2.14 Stop the step machine from swallowing a statement it cannot express, and stop
+      `verify()` from ignoring an evaluation failure: both were silent wrongs, not refusals
 
 ## Phase 3: Statement Semantics
 
