@@ -160,11 +160,17 @@ fn test_generate_goto_label() {
     let source = "active proctype P() {\n    goto target;\n    x = 1;\n    target: x = 2;\n}";
     let model = parser::parse(source).unwrap();
     let lua = generate(&model);
-    // Should emit goto transition with _pc set
-    assert!(lua.source.contains("goto:target"));
-    // Should emit label transition with _pc check
-    assert!(lua.source.contains("label:target"));
-    // Should have _pc_P variable
+    // A goto inside a body of more than one statement is refused, not emitted: the previous
+    // encoding set _done_P = true in order to jump, which killed the process and left the label
+    // unreachable. Emitting that was a silent wrong, so the step machine refuses until goto has an
+    // edge target (full-parity 2.5).
+    assert!(
+        lua.source
+            .contains("goto is not supported as a step inside a sequence"),
+        "goto should be refused inside a sequence: {}",
+        lua.source
+    );
+    // The program counter the refusal will use still exists.
     assert!(lua.source.contains("_pc_P"));
 }
 
@@ -191,15 +197,18 @@ fn test_generate_standalone_break() {
 }
 
 #[test]
-fn test_generate_label_reachable() {
-    // Label as goto target is reachable
+fn test_generate_label_reachable_but_refused() {
+    // A label as a goto target is refused inside a sequence rather than emitted with the old
+    // encoding, which jumped by marking the process done (see full-parity 2.5).
     let source = "active proctype P() {\n    goto start;\n    start: x = 1;\n}";
     let model = parser::parse(source).unwrap();
     let lua = generate(&model);
-    // Should have label transition
-    assert!(lua.source.contains("label:start"));
-    // Should have goto transition
-    assert!(lua.source.contains("goto:start"));
+    assert!(
+        lua.source
+            .contains("is not supported as a step inside a sequence"),
+        "a label in a sequence should be refused: {}",
+        lua.source
+    );
 }
 
 // ─── T1.3: dependency metadata must cover everything a transition touches ───────

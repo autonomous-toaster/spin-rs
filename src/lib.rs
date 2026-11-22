@@ -147,7 +147,17 @@ pub use trail::{ErrorTrail, TrailReplayer, TrailStats, TrailStep};
 pub fn verify(source: &str) -> anyhow::Result<CheckResult> {
     let model = LuaModel::from_source(source)?;
     let checker = CheckerBuilder::new().model(model).build();
-    Ok(checker.check())
+    let result = checker.check();
+    // A guard or effect that failed to evaluate produces an empty transition list, which is
+    // indistinguishable from a disabled transition. Without this the run reports a deadlock, or a
+    // clean verdict, on a model it never managed to explore - and the caller has no way to tell.
+    // verify_with_config has always done this; verify did not.
+    if let Some(detail) = checker.model().take_error() {
+        return Err(anyhow::Error::new(
+            crate::engine::checker::VerifyError::EvalFailed { detail },
+        ));
+    }
+    Ok(result)
 }
 
 /// Verify with custom configuration.

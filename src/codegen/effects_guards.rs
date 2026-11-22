@@ -2,6 +2,35 @@ use super::LuaGenerator;
 use crate::parser::ast::*;
 
 impl LuaGenerator {
+    /// Emit a proctype body as an ordered sequence of steps.
+    ///
+    /// A body of N statements used to emit N transitions that were all enabled at once, so the
+    /// statements ran in any order: `b = 1; a = 1` could set `a` first and refute a model pan proves
+    /// valid. A body longer than one statement now goes through the step machine, which is the one
+    /// place in this generator that sequences correctly, and a trailing `break` makes the last
+    /// step terminate the process instead of leaving it re-enabled forever.
+    pub(crate) fn emit_body_sequenced(&mut self, body: &[Stmt], depth: usize) {
+        let mut exec: Vec<Stmt> = body
+            .iter()
+            .filter(|s| !matches!(s, Stmt::VarDecl(_) | Stmt::VarDecls(_)))
+            .cloned()
+            .collect();
+        if exec.len() <= 1 {
+            self.emit_stmts(body, depth);
+            return;
+        }
+        exec.push(Stmt::Break(0));
+        self.emit_guards(
+            "body",
+            &[Guard {
+                condition: None,
+                body: exec,
+                line: 0,
+            }],
+            depth,
+        );
+    }
+
     pub(crate) fn emit_guards(&mut self, kind: &str, guards: &[Guard], _depth: usize) {
         // Detect multi-statement guard bodies — need step-counter for interleaving.
         // Single-statement guards can use the simple flat approach.
@@ -274,10 +303,13 @@ impl LuaGenerator {
                     ));
                 }
                 Stmt::Goto(_, _) => {
-                    self.emit(&format!(
-                        "    effect = function(s) {} end,",
-                        tail.trim_start_matches("; ")
-                    ));
+                    // Advancing past a goto would run the statements it jumps over and skip the
+                    // ones it jumps to, silently. Refuse until the jump has a real edge target.
+                    self.emit(
+                        "    guard = function(s) error('goto is not supported as a step inside a \
+                         sequence: it has no edge target yet') end,",
+                    );
+                    self.emit("    effect = function(s) end,");
                 }
                 Stmt::Expr(e, _) => {
                     // A blocking wait: enabled only while the condition holds, and it changes
@@ -334,10 +366,16 @@ impl LuaGenerator {
                     }
                 }
                 _ => {
+                    // Anything else would be advanced past with no effect, which silently drops
+                    // the statement: an atomic block, a for loop or an unless handler would all
+                    // vanish, and a model whose only write sat inside one would come back clean.
+                    // Refuse the step instead, so the run reports "could not be checked".
                     self.emit(&format!(
-                        "    effect = function(s) {} end,",
-                        tail.trim_start_matches("; ")
+                        "    guard = function(s) error('{} is not supported as a step inside a \
+                         sequence') end,",
+                        Self::stmt_kind_name(s)
                     ));
+                    self.emit("    effect = function(s) end,");
                 }
             }
             // The step counter is always moved; the done flag is written only on break, and
@@ -351,6 +389,24 @@ impl LuaGenerator {
             self.emit(&format!("    label = \"{}:step{}\",", kind, step));
             self.indent -= 1;
             self.emit("    })");
+        }
+    }
+
+    /// The name of a statement kind, for a diagnostic that names what it refused.
+    fn stmt_kind_name(s: &Stmt) -> &'static str {
+        match s {
+            Stmt::Atomic(_, _) => "atomic",
+            Stmt::DStep(_, _) => "d_step",
+            Stmt::Unless { .. } => "unless",
+            Stmt::For { .. } => "for",
+            Stmt::If(_) => "if",
+            Stmt::Do(_) => "do",
+            Stmt::Label(_, _) => "label",
+            Stmt::Printf(_, _, _) => "printf",
+            Stmt::Run(_, _, _) => "run",
+            Stmt::Recv { .. } => "recv",
+            Stmt::VarDecl(_) | Stmt::VarDecls(_) => "declaration",
+            _ => "statement",
         }
     }
 

@@ -299,7 +299,7 @@ impl LuaGenerator {
                     self.indent += 1;
                     self.emit("    if state._done_init then return {} end");
                     self.emit("    local transitions = {}");
-                    self.emit_stmts(&i.body, 0);
+                    self.emit_body_sequenced(&i.body, 0);
                     self.emit("    -- Mark init as done after first execution");
                     self.emit("    table.insert(transitions, {");
                     self.indent += 1;
@@ -386,7 +386,7 @@ impl LuaGenerator {
         self.emit("");
 
         // Emit transition table based on control flow
-        self.emit_stmts(&p.body, 0);
+        self.emit_body_sequenced(&p.body, 0);
 
         self.emit("    return transitions");
         self.indent -= 1;
