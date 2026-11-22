@@ -191,6 +191,35 @@ impl LuaGenerator {
         self.owner_name()
     }
 
+    /// The effect fragment that records a failed assertion.
+    ///
+    /// A failed assert used to disable its own transition, which made it indistinguishable from a
+    /// guard that is simply not satisfied. That is only observable when the whole model stops, so
+    /// a failed assertion in a process that blocks while another keeps running was invisible:
+    ///
+    /// ```text
+    /// active proctype A() { do :: (1) -> skip od }
+    /// active proctype B() { do :: (1) -> assert(false); break od }
+    /// ```
+    ///
+    /// reported zero errors where pan reports one. The condition is now evaluated and recorded in
+    /// the state, which the checker reads as a violation - which is only sound now that a body is
+    /// sequenced, so an assert cannot run before the writes that precede it.
+    ///
+    /// Promela truthiness is "not zero", which Lua does not share - 0 is truthy there - so the test
+    /// is written out rather than left to an if-not.
+    pub(crate) fn assert_failure_effect(&self, cond_lua: &str, label: &str) -> String {
+        // Keep the label out of the generated Lua string literal's way.
+        let safe: String = label
+            .chars()
+            .filter(|c| *c != '\u{27}' && !c.is_control())
+            .collect();
+        format!(
+            "local _av = ({}); if _av == false or _av == nil or _av == 0 then s._failed_assert = '{}' end",
+            cond_lua, safe
+        )
+    }
+
     fn owner_name(&self) -> String {
         self.current_proctype
             .clone()

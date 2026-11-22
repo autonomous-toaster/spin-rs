@@ -51,12 +51,14 @@ impl LuaGenerator {
         self.emit(&format!("    -- assert({})", e));
         self.emit("    table.insert(transitions, {");
         self.indent += 1;
-        // Assert condition is the guard: if condition is true, assertion passes (enabled);
-        // if false, the transition is not enabled, causing deadlock -> violation detected.
-        self.emit(&format!("    guard = function(s) return {} end,", e));
-        self.emit("    effect = function(s) end,");
+        // The condition is evaluated and recorded in the state rather than used as the guard:
+        // a guard that is false merely blocks, and a blocked process is not a violation while
+        // another process is still enabled.
+        let check = self.assert_failure_effect(&e, &format!("assert({})", e));
+        self.emit("    guard = function(s) return true end,");
+        self.emit(&format!("    effect = function(s) {} end,", check));
         {
-            let deps = self.deps_of(Some(expr), &[], &[]);
+            let deps = self.deps_of(Some(expr), &[], &["_failed_assert"]);
             self.emit_deps(&deps);
         }
         self.indent -= 1;

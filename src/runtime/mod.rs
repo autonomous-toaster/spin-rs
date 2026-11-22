@@ -195,6 +195,9 @@ pub struct LuaModel {
     /// First Lua evaluation error seen during exploration.
     /// A failed guard or effect must not be mistaken for a disabled transition.
     eval_error: std::cell::RefCell<Option<String>>,
+    /// True when any process contains an assert, so the failure marker is observable and no
+    /// claim may reduce away the transition that writes it.
+    has_asserts: bool,
     /// Names of the fields the state table actually carries, read once from the initial state.
     /// Reduction asks which of these a claim can observe, so it needs the real field names
     /// (p1_x, t1_done) rather than the Promela identifiers they came from.
@@ -252,6 +255,12 @@ impl LuaModel {
         // The field names come from the state table itself, not from the AST: the generator
         // decides how a variable is spelled in the state (p1_x for a proctype local, x for a
         // global), and asking the AST again would be a second, divergent source of truth.
+        let has_asserts = model.declarations.iter().any(|d| match d {
+            crate::parser::ast::TopLevel::Proctype(p) => stmts_have_assert(&p.body),
+            crate::parser::ast::TopLevel::Init(i) => stmts_have_assert(&i.body),
+            _ => false,
+        });
+
         let state_fields = match runtime.init_state() {
             Ok(blob) => parse_state_keys(&blob),
             Err(_) => Vec::new(),
@@ -263,6 +272,7 @@ impl LuaModel {
             source: model.source.clone(),
             process_count,
             eval_error: std::cell::RefCell::new(None),
+            has_asserts,
             state_fields,
         })
     }
@@ -315,6 +325,12 @@ impl Model for LuaModel {
     }
 
     fn check_violation(&self, state: &StateBlob) -> Option<String> {
+        // A failed assertion is recorded in the state by the generated effect. Checked before
+        // the claim gate below, because a claim disables deadlock detection (pan does the same)
+        // but must not disable assertion detection.
+        if let Some(what) = parse_assert_failure(&state.0) {
+            return Some(format!("assertion violated: {}", what));
+        }
         // With an LTL property present, real spin disables invalid-end-state checking
         // ("invalid end states - (disabled by never claim)") because the claim decides
         // termination. Reporting a deadlock here would disagree with spin on any model
@@ -370,9 +386,16 @@ impl Model for LuaModel {
         // deadlock findings. Persistent ample sets preserve those, and an empty visible set is
         // then the correct - not merely the cheapest - answer.
         if self.ltl_formulas.is_empty() {
+            // A model with no claim observes nothing except its own assertions, which are
+            // findings like any other. Leaving the marker out would let the reduction prune the
+            // transition that records a failure.
+            let mut visible = std::collections::BTreeSet::new();
+            if self.has_asserts {
+                visible.insert("_failed_assert".to_string());
+            }
             return vec![ReductionScope {
                 name: "model".to_string(),
-                visible: Default::default(),
+                visible,
                 liveness: false,
             }];
         }
@@ -593,3 +616,37 @@ impl LuaModel {
 
 #[cfg(test)]
 mod tests;
+
+/// The assertion recorded in a state, if the state carries one.
+///
+/// The generated effect writes `_failed_assert` only when the condition is false, so the key
+/// being present at all is the failure.
+fn parse_assert_failure(blob: &str) -> Option<String> {
+    let pos = blob.find("_failed_assert")?;
+    // The key itself is quoted in the blob: "_failed_assert":"assert(x)". Splitting on the
+    // first colon and skipping the opening quote is the reliable route; trimming quotes directly
+    // took the key's closing quote for the value's opening one and returned a colon.
+    let rest = &blob[pos + "_failed_assert".len()..];
+    let after_colon = rest.split_once(':').map(|(_, v)| v).unwrap_or(rest);
+    let value = after_colon.trim_start_matches([' ', '"']);
+    let end = value.find(['"', ',']).unwrap_or(value.len());
+    Some(value[..end].to_string())
+}
+
+fn stmt_has_assert(s: &crate::parser::ast::Stmt) -> bool {
+    use crate::parser::ast::Stmt;
+    match s {
+        Stmt::Assert(_, _) => true,
+        Stmt::If(gs) | Stmt::Do(gs) => gs.iter().any(|g| stmts_have_assert(&g.body)),
+        Stmt::Atomic(b, _) | Stmt::DStep(b, _) => stmts_have_assert(b),
+        Stmt::Unless { body, handler, .. } => stmts_have_assert(body) || stmts_have_assert(handler),
+        Stmt::For {
+            init, update, body, ..
+        } => stmt_has_assert(init) || stmt_has_assert(update) || stmts_have_assert(body),
+        _ => false,
+    }
+}
+
+fn stmts_have_assert(stmts: &[crate::parser::ast::Stmt]) -> bool {
+    stmts.iter().any(stmt_has_assert)
+}

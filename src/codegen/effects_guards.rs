@@ -325,13 +325,14 @@ impl LuaGenerator {
                     ));
                 }
                 Stmt::Assert(expr, _) => {
+                    // The step is always taken; the condition decides whether the state is marked
+                    // as assert-failed. Making the transition conditional instead only reported a
+                    // failure when the whole model stopped.
                     let e = self.expr_to_lua(expr);
+                    let check = self.assert_failure_effect(&e, &format!("assert({})", e));
                     self.emit(&format!(
-                        "    guard = function(s) return s.{} == {} and ({}) end,",
-                        step_var, step, e
-                    ));
-                    self.emit(&format!(
-                        "    effect = function(s) {} end,",
+                        "    effect = function(s) {}; {} end,",
+                        check,
                         tail.trim_start_matches("; ")
                     ));
                 }
@@ -384,6 +385,10 @@ impl LuaGenerator {
             if let Some(ref pname) = self.current_proctype {
                 let done = format!("_done_{}", pname);
                 deps.write_field(done);
+            }
+            if matches!(s, Stmt::Assert(_, _)) {
+                // A model-level finding, so no claim can reduce it away.
+                deps.write_field("_failed_assert".to_string());
             }
             self.emit_deps(&deps);
             self.emit(&format!("    label = \"{}:step{}\",", kind, step));

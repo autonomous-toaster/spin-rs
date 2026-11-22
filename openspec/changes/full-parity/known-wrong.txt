@@ -4,4 +4,3 @@ nested_if_multi__not_a	false clean
 nested_if_multi__ev_a	false refutation
 atomic_region__impl_ba	false refutation
 dstep_region__impl_ba	false refutation
-loop_and_assert	false clean
