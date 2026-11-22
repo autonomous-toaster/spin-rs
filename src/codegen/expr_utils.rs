@@ -152,11 +152,12 @@ impl LuaGenerator {
                 let args_str: Vec<String> = args.iter().map(|a| self.expr_to_lua(a)).collect();
                 format!("{}({})", name, args_str.join(", "))
             }
-            Expression::Len(ch) => format!("chan_len('{}')", ch),
-            Expression::Full(ch) => format!("chan_full('{}')", ch),
-            Expression::Empty(ch) => format!("chan_empty('{}')", ch),
-            Expression::NFull(ch) => format!("not chan_full('{}')", ch),
-            Expression::NEmpty(ch) => format!("not chan_empty('{}')", ch),
+            // The queue lives in the state, so every channel query takes it.
+            Expression::Len(ch) => format!("chan_len(s, '{}')", ch),
+            Expression::Full(ch) => format!("chan_full(s, '{}')", ch),
+            Expression::Empty(ch) => format!("chan_empty(s, '{}')", ch),
+            Expression::NFull(ch) => format!("not chan_full(s, '{}')", ch),
+            Expression::NEmpty(ch) => format!("not chan_empty(s, '{}')", ch),
             Expression::Enabled(pid) => format!("_spin_enabled({})", pid),
             Expression::Timeout => "_spin_timeout()".to_string(),
             Expression::NP_ => "_spin_np_()".to_string(),

@@ -348,7 +348,7 @@ impl LuaGenerator {
                     }];
                     values.extend(args.iter().map(|a| self.expr_to_lua(a)));
                     self.emit(&format!(
-                        "    guard = function(s) return s.{} == {} and not chan_full({}) end,",
+                        "    guard = function(s) return s.{} == {} and not chan_full(s, {}) end,",
                         step_var, step, chan
                     ));
                     self.emit(&format!(

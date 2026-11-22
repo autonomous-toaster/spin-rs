@@ -1,14 +1,154 @@
 //! Channel FFI functions for the Lua runtime.
+//!
+//! **The channel queue lives in the state table, not in the runtime.** It used to live in a
+//! registry shared by the whole runtime, keyed by channel name: `send` mutated the registry and
+//! mirrored a copy into the state, while `full`/`len`/`empty` read only the registry. The state a
+//! transition was expanded from therefore did not determine its own transitions - re-expanding an
+//! earlier state saw the messages a later state had left behind. That produced a false liveness
+//! refutation: after a send, the reopened initial state looked at a full channel, reported no
+//! transitions, and the stutter step of a terminated system turned into an "accepting cycle".
+//!
+//! Only the channel's *capacity* is read from the registry. Capacity is static, so it is constant
+//! across every state of a run, and the queue is not.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use super::LuaChannel;
 
-pub(crate) fn register_all(
+type Registry = Arc<Mutex<HashMap<String, LuaChannel>>>;
+
+/// Read a channel's queue out of the state table.
+///
+/// A single-value message is stored as a plain integer and a multi-value message as a table, so
+/// the serialized state stays compact and old blobs keep their shape.
+fn messages_of(state: &mlua::Table, name: &str) -> mlua::Result<Vec<Vec<i64>>> {
+    let mut out = Vec::new();
+    match state.get::<mlua::Value>(name)? {
+        mlua::Value::Nil => {}
+        mlua::Value::Table(t) => {
+            let n = t.raw_len();
+            for i in 1..=n {
+                match t.get::<mlua::Value>(i as i64)? {
+                    mlua::Value::Integer(v) => out.push(vec![v]),
+                    mlua::Value::Number(v) => out.push(vec![v as i64]),
+                    mlua::Value::Table(m) => {
+                        let mut parts = Vec::new();
+                        for j in 1..=m.raw_len() {
+                            match m.get::<mlua::Value>(j as i64)? {
+                                mlua::Value::Integer(v) => parts.push(v),
+                                mlua::Value::Number(v) => parts.push(v as i64),
+                                other => {
+                                    return Err(mlua::Error::runtime(format!(
+                                        "channel '{}': message component is {}",
+                                        name,
+                                        other.type_name()
+                                    )));
+                                }
+                            }
+                        }
+                        out.push(parts);
+                    }
+                    other => {
+                        return Err(mlua::Error::runtime(format!(
+                            "channel '{}': message is {}",
+                            name,
+                            other.type_name()
+                        )));
+                    }
+                }
+            }
+        }
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "channel '{}': expected a table of messages, found {}",
+                name,
+                other.type_name()
+            )));
+        }
+    }
+    Ok(out)
+}
+
+/// Write a channel's queue back into the state table in the canonical shape.
+fn write_messages(
     lua: &mlua::Lua,
-    channels: Arc<Mutex<HashMap<String, LuaChannel>>>,
+    state: &mlua::Table,
+    name: &str,
+    msgs: &[Vec<i64>],
 ) -> mlua::Result<()> {
+    let queue = lua.create_table()?;
+    for (i, msg) in msgs.iter().enumerate() {
+        if msg.len() == 1 {
+            queue.set(i + 1, msg[0])?;
+        } else {
+            let inner = lua.create_table()?;
+            for (j, v) in msg.iter().enumerate() {
+                inner.set(j + 1, *v)?;
+            }
+            queue.set(i + 1, inner)?;
+        }
+    }
+    state.set(name, queue)
+}
+
+/// A channel's capacity, which is static and so still comes from the declaration registry.
+fn capacity_of(chans: &HashMap<String, LuaChannel>, name: &str) -> mlua::Result<usize> {
+    chans.get(name).map(|c| c.capacity).ok_or_else(|| {
+        mlua::Error::runtime(format!("channel '{}' not found in the declaration", name))
+    })
+}
+
+/// Is the queue full, given its capacity? A rendezvous channel (capacity 0) is full when any
+/// message is waiting, because a sender is blocked on it.
+fn is_full(len: usize, capacity: usize) -> bool {
+    capacity == 0 && len > 0 || (capacity > 0 && len >= capacity)
+}
+
+fn state_and_name(
+    args: mlua::MultiValue,
+    what: &str,
+) -> mlua::Result<(mlua::Table, String, Vec<mlua::Value>)> {
+    let mut iter = args.into_iter();
+    let state = match iter.next() {
+        Some(mlua::Value::Table(s)) => s,
+        _ => {
+            return Err(mlua::Error::runtime(format!(
+                "{}: expected state table as first arg",
+                what
+            )));
+        }
+    };
+    let name = match iter.next() {
+        Some(mlua::Value::String(s)) => s.to_string_lossy().to_string(),
+        _ => {
+            return Err(mlua::Error::runtime(format!(
+                "{}: expected string channel name as second arg",
+                what
+            )));
+        }
+    };
+    Ok((state, name, iter.collect()))
+}
+
+fn values_to_message(values: Vec<mlua::Value>, what: &str) -> mlua::Result<Vec<i64>> {
+    let mut parts = Vec::new();
+    for arg in values {
+        match arg {
+            mlua::Value::Integer(i) => parts.push(i),
+            mlua::Value::Number(n) => parts.push(n as i64),
+            _ => {
+                return Err(mlua::Error::runtime(format!(
+                    "{}: expected integer values",
+                    what
+                )));
+            }
+        }
+    }
+    Ok(parts)
+}
+
+pub(crate) fn register_all(lua: &mlua::Lua, channels: Registry) -> mlua::Result<()> {
     register_chan_send(lua, Arc::clone(&channels))?;
     register_chan_recv(lua, Arc::clone(&channels))?;
     register_chan_peek(lua, Arc::clone(&channels))?;
@@ -22,329 +162,90 @@ pub(crate) fn register_all(
     Ok(())
 }
 
-fn register_chan_send(
-    lua: &mlua::Lua,
-    channels: Arc<Mutex<HashMap<String, LuaChannel>>>,
-) -> mlua::Result<()> {
+fn register_chan_send(lua: &mlua::Lua, channels: Registry) -> mlua::Result<()> {
     let f = lua.create_function(move |lua, args: mlua::MultiValue| {
-        let mut iter = args.into_iter();
-        let state: mlua::Table = match iter.next() {
-            Some(mlua::Value::Table(s)) => s,
-            _ => {
-                return Err(mlua::Error::runtime(
-                    "chan_send: expected state table as first arg",
-                ));
-            }
-        };
-        let name = match iter.next() {
-            Some(mlua::Value::String(s)) => s.to_string_lossy().to_string(),
-            _ => {
-                return Err(mlua::Error::runtime(
-                    "chan_send: expected string channel name as second arg",
-                ));
-            }
-        };
-        let mut parts = Vec::new();
-        for arg in iter {
-            match arg {
-                mlua::Value::Integer(i) => parts.push(i),
-                mlua::Value::Number(n) => parts.push(n as i64),
-                _ => return Err(mlua::Error::runtime("chan_send: expected integer values")),
-            }
+        let (state, name, values) = state_and_name(args, "chan_send")?;
+        let msg = values_to_message(values, "chan_send")?;
+        let mut queue = messages_of(&state, &name)?;
+        let capacity = capacity_of(&channels.lock().unwrap(), &name)?;
+        if capacity == 0 || queue.len() >= capacity {
+            return Err(mlua::Error::runtime("channel full"));
         }
-        let mut chans = channels.lock().unwrap();
-        if let Some(chan) = chans.get_mut(&name) {
-            if !chan.send(parts.clone()) {
-                return Err(mlua::Error::runtime("channel full"));
-            }
-            let chan_state: mlua::Table = lua.create_table()?;
-            for (i, val) in chan.messages.iter().enumerate() {
-                if let Some(&first) = val.first() {
-                    chan_state.set(i + 1, first)?;
-                }
-            }
-            state.set(name.clone(), chan_state)?;
-            Ok(())
-        } else {
-            Err(mlua::Error::runtime(format!(
-                "channel '{}' not found",
-                name
-            )))
-        }
+        queue.push(msg);
+        write_messages(lua, &state, &name, &queue)?;
+        Ok(())
     })?;
     lua.globals().set("_spin_chan_send", f)?;
     Ok(())
 }
 
-fn register_chan_recv(
-    lua: &mlua::Lua,
-    channels: Arc<Mutex<HashMap<String, LuaChannel>>>,
-) -> mlua::Result<()> {
+fn register_chan_send_sorted(lua: &mlua::Lua, channels: Registry) -> mlua::Result<()> {
     let f = lua.create_function(move |lua, args: mlua::MultiValue| {
-        let mut iter = args.into_iter();
-        let state: mlua::Table = match iter.next() {
-            Some(mlua::Value::Table(s)) => s,
-            _ => {
-                return Err(mlua::Error::runtime(
-                    "chan_recv: expected state table as first arg",
-                ));
-            }
-        };
-        let name = match iter.next() {
-            Some(mlua::Value::String(s)) => s.to_string_lossy().to_string(),
-            _ => {
-                return Err(mlua::Error::runtime(
-                    "chan_recv: expected string channel name as second arg",
-                ));
-            }
-        };
-        let mut chans = channels.lock().unwrap();
-        if let Some(chan) = chans.get_mut(&name) {
-            match chan.recv() {
-                Some(msg) => {
-                    let chan_state: mlua::Table = lua.create_table()?;
-                    for (i, val) in chan.messages.iter().enumerate() {
-                        if let Some(&first) = val.first() {
-                            chan_state.set(i + 1, first)?;
-                        }
-                    }
-                    state.set(name.clone(), chan_state)?;
-                    Ok(mlua::Value::Integer(msg.first().copied().unwrap_or(0)))
-                }
-                None => Err(mlua::Error::runtime("channel empty")),
-            }
-        } else {
-            Err(mlua::Error::runtime(format!(
-                "channel '{}' not found",
-                name
-            )))
+        let (state, name, values) = state_and_name(args, "chan_send_sorted")?;
+        let msg = values_to_message(values, "chan_send_sorted")?;
+        let mut queue = messages_of(&state, &name)?;
+        let capacity = capacity_of(&channels.lock().unwrap(), &name)?;
+        if capacity == 0 || queue.len() >= capacity {
+            return Err(mlua::Error::runtime("channel full"));
         }
-    })?;
-    lua.globals().set("_spin_chan_recv", f)?;
-    Ok(())
-}
-
-fn register_chan_peek(
-    lua: &mlua::Lua,
-    _channels: Arc<Mutex<HashMap<String, LuaChannel>>>,
-) -> mlua::Result<()> {
-    let f = lua.create_function(move |_lua, (state, name): (mlua::Table, String)| {
-        let chan_state: mlua::Table = match state.get(name.as_str()) {
-            Ok(t) => t,
-            Err(_) => return Err(mlua::Error::runtime("channel not found in state")),
-        };
-        match chan_state.get(1i32) {
-            Ok(mlua::Value::Integer(i)) => Ok(mlua::Value::Integer(i)),
-            Ok(mlua::Value::Nil) => Err(mlua::Error::runtime("channel empty")),
-            Err(e) => Err(mlua::Error::runtime(format!("channel peek error: {}", e))),
-            _ => Err(mlua::Error::runtime("channel peek: unexpected value type")),
-        }
-    })?;
-    lua.globals().set("_spin_chan_peek", f)?;
-    Ok(())
-}
-
-fn register_chan_len(
-    lua: &mlua::Lua,
-    channels: Arc<Mutex<HashMap<String, LuaChannel>>>,
-) -> mlua::Result<()> {
-    let f = lua.create_function(move |_lua, name: String| {
-        let chans = channels.lock().unwrap();
-        match chans.get(&name) {
-            Some(chan) => Ok(chan.len() as i64),
-            None => Err(mlua::Error::runtime(format!(
-                "channel '{}' not found",
-                name
-            ))),
-        }
-    })?;
-    lua.globals().set("_spin_chan_len", f)?;
-    Ok(())
-}
-
-fn register_chan_full(
-    lua: &mlua::Lua,
-    channels: Arc<Mutex<HashMap<String, LuaChannel>>>,
-) -> mlua::Result<()> {
-    let f = lua.create_function(move |_lua, name: String| {
-        let chans = channels.lock().unwrap();
-        match chans.get(&name) {
-            Some(chan) => Ok(chan.is_full()),
-            None => Err(mlua::Error::runtime(format!(
-                "channel '{}' not found",
-                name
-            ))),
-        }
-    })?;
-    lua.globals().set("_spin_chan_full", f)?;
-    Ok(())
-}
-
-fn register_chan_empty(
-    lua: &mlua::Lua,
-    channels: Arc<Mutex<HashMap<String, LuaChannel>>>,
-) -> mlua::Result<()> {
-    let f = lua.create_function(move |_lua, name: String| {
-        let chans = channels.lock().unwrap();
-        match chans.get(&name) {
-            Some(chan) => Ok(chan.is_empty()),
-            None => Err(mlua::Error::runtime(format!(
-                "channel '{}' not found",
-                name
-            ))),
-        }
-    })?;
-    lua.globals().set("_spin_chan_empty", f)?;
-    Ok(())
-}
-
-fn register_chan_send_sorted(
-    lua: &mlua::Lua,
-    channels: Arc<Mutex<HashMap<String, LuaChannel>>>,
-) -> mlua::Result<()> {
-    let f = lua.create_function(move |lua, args: mlua::MultiValue| {
-        let mut iter = args.into_iter();
-        let state: mlua::Table = match iter.next() {
-            Some(mlua::Value::Table(s)) => s,
-            _ => {
-                return Err(mlua::Error::runtime(
-                    "chan_send_sorted: expected state table as first arg",
-                ));
-            }
-        };
-        let name = match iter.next() {
-            Some(mlua::Value::String(s)) => s.to_string_lossy().to_string(),
-            _ => {
-                return Err(mlua::Error::runtime(
-                    "chan_send_sorted: expected string channel name",
-                ));
-            }
-        };
-        let mut parts = Vec::new();
-        for arg in iter {
-            match arg {
-                mlua::Value::Integer(i) => parts.push(i),
-                mlua::Value::Number(n) => parts.push(n as i64),
-                _ => {
-                    return Err(mlua::Error::runtime(
-                        "chan_send_sorted: expected integer values",
-                    ));
-                }
-            }
-        }
-        let mut chans = channels.lock().unwrap();
-        if let Some(chan) = chans.get_mut(&name) {
-            if !chan.send_sorted(parts.clone()) {
-                return Err(mlua::Error::runtime("channel full"));
-            }
-            let chan_state: mlua::Table = lua.create_table()?;
-            for (i, val) in chan.messages.iter().enumerate() {
-                if let Some(&first) = val.first() {
-                    chan_state.set(i + 1, first)?;
-                }
-            }
-            state.set(name.clone(), chan_state)?;
-            Ok(())
-        } else {
-            Err(mlua::Error::runtime(format!(
-                "channel '{}' not found",
-                name
-            )))
-        }
+        let val = msg.first().copied().unwrap_or(0);
+        let pos = queue
+            .iter()
+            .position(|m| m.first().copied().unwrap_or(0) > val)
+            .unwrap_or(queue.len());
+        queue.insert(pos, msg);
+        write_messages(lua, &state, &name, &queue)?;
+        Ok(())
     })?;
     lua.globals().set("_spin_chan_send_sorted", f)?;
     Ok(())
 }
 
-fn register_chan_recv_random(
+/// Shared body of every receive: take a message matching `select`, if any.
+fn do_recv(
     lua: &mlua::Lua,
-    channels: Arc<Mutex<HashMap<String, LuaChannel>>>,
-) -> mlua::Result<()> {
-    let f = lua.create_function(move |lua, args: mlua::MultiValue| {
-        let mut iter = args.into_iter();
-        let state: mlua::Table = match iter.next() {
-            Some(mlua::Value::Table(s)) => s,
-            _ => {
-                return Err(mlua::Error::runtime(
-                    "chan_recv_random: expected state table as first arg",
-                ));
-            }
-        };
-        let name = match iter.next() {
-            Some(mlua::Value::String(s)) => s.to_string_lossy().to_string(),
-            _ => {
-                return Err(mlua::Error::runtime(
-                    "chan_recv_random: expected string channel name",
-                ));
-            }
-        };
-        let mut chans = channels.lock().unwrap();
-        if let Some(chan) = chans.get_mut(&name) {
-            match chan.recv_random() {
-                Some(msg) => {
-                    let chan_state: mlua::Table = lua.create_table()?;
-                    for (i, val) in chan.messages.iter().enumerate() {
-                        if let Some(&first) = val.first() {
-                            chan_state.set(i + 1, first)?;
-                        }
-                    }
-                    state.set(name.clone(), chan_state)?;
-                    Ok(mlua::Value::Integer(msg.first().copied().unwrap_or(0)))
-                }
-                None => Err(mlua::Error::runtime("channel empty")),
-            }
-        } else {
-            Err(mlua::Error::runtime(format!(
-                "channel '{}' not found",
-                name
-            )))
+    args: mlua::MultiValue,
+    what: &str,
+    select: impl Fn(&[Vec<i64>]) -> Option<usize>,
+) -> mlua::Result<mlua::Value> {
+    let (state, name, _) = state_and_name(args, what)?;
+    let mut queue = messages_of(&state, &name)?;
+    match select(&queue) {
+        Some(idx) => {
+            let msg = queue.remove(idx);
+            write_messages(lua, &state, &name, &queue)?;
+            Ok(mlua::Value::Integer(msg.first().copied().unwrap_or(0)))
         }
+        None => Err(mlua::Error::runtime("channel empty")),
+    }
+}
+
+fn register_chan_recv(lua: &mlua::Lua, _channels: Registry) -> mlua::Result<()> {
+    let f = lua.create_function(move |lua, args: mlua::MultiValue| {
+        do_recv(lua, args, "chan_recv", |q| (!q.is_empty()).then_some(0))
+    })?;
+    lua.globals().set("_spin_chan_recv", f)?;
+    Ok(())
+}
+
+fn register_chan_recv_random(lua: &mlua::Lua, _channels: Registry) -> mlua::Result<()> {
+    let f = lua.create_function(move |lua, args: mlua::MultiValue| {
+        do_recv(lua, args, "chan_recv_random", |q| {
+            (!q.is_empty()).then_some(0)
+        })
     })?;
     lua.globals().set("_spin_chan_recv_random", f)?;
     Ok(())
 }
 
-fn register_chan_poll(
-    lua: &mlua::Lua,
-    channels: Arc<Mutex<HashMap<String, LuaChannel>>>,
-) -> mlua::Result<()> {
-    let f = lua.create_function(move |_lua, (name, expected): (String, i64)| {
-        let chans = channels.lock().unwrap();
-        match chans.get(&name) {
-            Some(chan) => Ok(chan.poll(expected)),
-            None => Err(mlua::Error::runtime(format!(
-                "channel '{}' not found",
-                name
-            ))),
-        }
-    })?;
-    lua.globals().set("_spin_chan_poll", f)?;
-    Ok(())
-}
-
-fn register_chan_recv_eval(
-    lua: &mlua::Lua,
-    channels: Arc<Mutex<HashMap<String, LuaChannel>>>,
-) -> mlua::Result<()> {
+fn register_chan_recv_eval(lua: &mlua::Lua, _channels: Registry) -> mlua::Result<()> {
     let f = lua.create_function(move |lua, args: mlua::MultiValue| {
-        let mut iter = args.into_iter();
-        let state: mlua::Table = match iter.next() {
-            Some(mlua::Value::Table(s)) => s,
-            _ => {
-                return Err(mlua::Error::runtime(
-                    "chan_recv_eval: expected state table as first arg",
-                ));
-            }
-        };
-        let name = match iter.next() {
-            Some(mlua::Value::String(s)) => s.to_string_lossy().to_string(),
-            _ => {
-                return Err(mlua::Error::runtime(
-                    "chan_recv_eval: expected string channel name",
-                ));
-            }
-        };
-        let expected = match iter.next() {
+        // The expected value is the third argument; it must be read before the shared body
+        // consumes the argument list.
+        let mut peek = args.clone().into_iter();
+        let _state = peek.next();
+        let _name = peek.next();
+        let expected = match peek.next() {
             Some(mlua::Value::Integer(i)) => i,
             Some(mlua::Value::Number(n)) => n as i64,
             _ => {
@@ -353,30 +254,68 @@ fn register_chan_recv_eval(
                 ));
             }
         };
-        let mut chans = channels.lock().unwrap();
-        if let Some(chan) = chans.get_mut(&name) {
-            match chan.recv_eval(expected) {
-                Some(msg) => {
-                    let chan_state: mlua::Table = lua.create_table()?;
-                    for (i, val) in chan.messages.iter().enumerate() {
-                        if let Some(&first) = val.first() {
-                            chan_state.set(i + 1, first)?;
-                        }
-                    }
-                    state.set(name.clone(), chan_state)?;
-                    Ok(mlua::Value::Integer(msg.first().copied().unwrap_or(0)))
-                }
-                None => Err(mlua::Error::runtime(
-                    "channel eval receive: value mismatch or empty",
-                )),
-            }
-        } else {
-            Err(mlua::Error::runtime(format!(
-                "channel '{}' not found",
-                name
-            )))
-        }
+        do_recv(lua, args, "chan_recv_eval", |q| {
+            let head = q.first()?.first().copied().unwrap_or(0);
+            (head == expected).then_some(0)
+        })
     })?;
     lua.globals().set("_spin_chan_recv_eval", f)?;
+    Ok(())
+}
+
+fn register_chan_peek(lua: &mlua::Lua, channels: Registry) -> mlua::Result<()> {
+    let f = lua.create_function(move |_lua, (state, name): (mlua::Table, String)| {
+        // An undeclared channel is an error rather than an empty one: answering "empty" would
+        // turn a typo in a generated name into a model that silently never receives.
+        capacity_of(&channels.lock().unwrap(), &name)?;
+        let queue = messages_of(&state, &name)?;
+        match queue.first() {
+            Some(msg) => Ok(mlua::Value::Integer(msg.first().copied().unwrap_or(0))),
+            None => Err(mlua::Error::runtime("channel empty")),
+        }
+    })?;
+    lua.globals().set("_spin_chan_peek", f)?;
+    Ok(())
+}
+
+fn register_chan_len(lua: &mlua::Lua, channels: Registry) -> mlua::Result<()> {
+    let f = lua.create_function(move |_lua, (state, name): (mlua::Table, String)| {
+        capacity_of(&channels.lock().unwrap(), &name)?;
+        Ok(messages_of(&state, &name)?.len() as i64)
+    })?;
+    lua.globals().set("_spin_chan_len", f)?;
+    Ok(())
+}
+
+fn register_chan_full(lua: &mlua::Lua, channels: Registry) -> mlua::Result<()> {
+    let f = lua.create_function(move |_lua, (state, name): (mlua::Table, String)| {
+        let len = messages_of(&state, &name)?.len();
+        let capacity = capacity_of(&channels.lock().unwrap(), &name)?;
+        Ok(is_full(len, capacity))
+    })?;
+    lua.globals().set("_spin_chan_full", f)?;
+    Ok(())
+}
+
+fn register_chan_empty(lua: &mlua::Lua, channels: Registry) -> mlua::Result<()> {
+    let f = lua.create_function(move |_lua, (state, name): (mlua::Table, String)| {
+        capacity_of(&channels.lock().unwrap(), &name)?;
+        Ok(messages_of(&state, &name)?.is_empty())
+    })?;
+    lua.globals().set("_spin_chan_empty", f)?;
+    Ok(())
+}
+
+fn register_chan_poll(lua: &mlua::Lua, _channels: Registry) -> mlua::Result<()> {
+    let f = lua.create_function(
+        move |_lua, (state, name, expected): (mlua::Table, String, i64)| {
+            let queue = messages_of(&state, &name)?;
+            match queue.first().and_then(|m| m.first().copied()) {
+                Some(v) if v == expected => Ok(mlua::Value::Integer(v)),
+                _ => Ok(mlua::Value::Nil),
+            }
+        },
+    )?;
+    lua.globals().set("_spin_chan_poll", f)?;
     Ok(())
 }

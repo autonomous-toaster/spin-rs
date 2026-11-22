@@ -148,6 +148,14 @@ impl LuaGenerator {
         }
     }
 
+    /// The field that terminates this body's process.
+    fn done_field(&self) -> String {
+        match self.current_proctype {
+            Some(ref p) => format!("_done_{}", p),
+            None => "_done".to_string(),
+        }
+    }
+
     /// Declare a transition that only moves the program counter.
     ///
     /// These used to be emitted opaque, which is sound but tells the reduction that the step
@@ -206,7 +214,7 @@ impl LuaGenerator {
                 }];
                 values.extend(args.iter().map(|a| self.expr_to_lua(a)));
                 (
-                    format!(" and not chan_full({})", chan),
+                    format!(" and not chan_full(s, {})", chan),
                     format!("_spin_chan_send(s, {}, {}); ", chan, values.join(", ")),
                 )
             }
@@ -232,7 +240,7 @@ impl LuaGenerator {
                     _ => return (String::new(), String::new()),
                 };
                 (
-                    format!(" and not chan_empty({})", chan),
+                    format!(" and not chan_empty(s, {})", chan),
                     format!("_spin_chan_recv(s, {}, {}); ", chan, vars),
                 )
             }
@@ -352,17 +360,29 @@ impl LuaGenerator {
                 }
                 FNode::Simple { stmt, next } => {
                     let (extra_guard, prefix) = self.fstmt_parts(&stmt);
+                    // Falling off the end of the body ends the process directly. Advancing to the
+                    // halt step first costs a step per process, and every extra step is another
+                    // interleaving for the search to enumerate.
+                    let done_field = self.done_field();
+                    let tail = if next == end {
+                        format!("s.{} = true", done_field)
+                    } else {
+                        format!("s.{} = {}", step_var, next)
+                    };
                     self.emit(&format!("    -- step {}: {}", i, describe_stmt(&stmt)));
                     self.emit(&format!(
                         "    guard = function(s) return s.{} == {}{} end,",
                         step_var, i, extra_guard
                     ));
-                    self.emit(&format!(
-                        "    effect = function(s) {}s.{} = {} end,",
-                        prefix, step_var, next
-                    ));
+                    self.emit(&format!("    effect = function(s) {}{} end,", prefix, tail));
                     let is_assert = matches!(stmt, Stmt::Assert(_, _));
+                    // The step counter is read by the guard and the termination flag is written
+                    // when this is the last step of the body; both are declared, the step counter
+                    // by the same convention as `emit_step_deps`.
                     let mut deps = self.deps_of(None, &[&stmt], &[step_var.as_str()]);
+                    if next == end {
+                        deps.write_field(done_field.clone());
+                    }
                     if is_assert {
                         deps.write_field("_failed_assert".to_string());
                     }
@@ -375,11 +395,17 @@ impl LuaGenerator {
                         "    guard = function(s) return s.{} == {} end,",
                         step_var, i
                     ));
-                    self.emit(&format!(
-                        "    effect = function(s) s.{} = {} end,",
-                        step_var, target
-                    ));
-                    self.emit_step_deps(&step_var, None);
+                    if target == end {
+                        let done = self.done_field();
+                        self.emit(&format!("    effect = function(s) s.{} = true end,", done));
+                        self.emit_step_deps(&step_var, Some(done));
+                    } else {
+                        self.emit(&format!(
+                            "    effect = function(s) s.{} = {} end,",
+                            step_var, target
+                        ));
+                        self.emit_step_deps(&step_var, None);
+                    }
                     self.emit(&format!("    label = \"body:step{}\",", i));
                 }
                 FNode::Goto(name) => {

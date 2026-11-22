@@ -93,7 +93,7 @@ impl LuaGenerator {
                 self.open_opaque_transition();
                 self.indent += 1;
                 self.emit(&format!(
-                    "    guard = function(s) return not chan_full({}) end,",
+                    "    guard = function(s) return not chan_full(s, {}) end,",
                     chan_name
                 ));
                 let send_args = if args_concat.is_empty() {
@@ -113,7 +113,7 @@ impl LuaGenerator {
                 self.open_opaque_transition();
                 self.indent += 1;
                 self.emit(&format!(
-                    "    guard = function(s) return not chan_full({}) end,",
+                    "    guard = function(s) return not chan_full(s, {}) end,",
                     chan_name
                 ));
                 let send_args = if args_concat.is_empty() {
@@ -133,7 +133,7 @@ impl LuaGenerator {
                 self.open_opaque_transition();
                 self.indent += 1;
                 self.emit(&format!(
-                    "    guard = function(s) return not chan_full({}) end,",
+                    "    guard = function(s) return not chan_full(s, {}) end,",
                     chan_name
                 ));
                 self.emit(&format!(
@@ -154,7 +154,7 @@ impl LuaGenerator {
                 self.open_opaque_transition();
                 self.indent += 1;
                 self.emit(&format!(
-                    "    guard = function(s) return not chan_empty({}) end,",
+                    "    guard = function(s) return not chan_empty(s, {}) end,",
                     chan_name
                 ));
                 self.emit(&format!(
@@ -169,7 +169,7 @@ impl LuaGenerator {
                 self.open_opaque_transition();
                 self.indent += 1;
                 self.emit(&format!(
-                    "    guard = function(s) return _spin_chan_poll({}, {}) ~= nil end,",
+                    "    guard = function(s) return _spin_chan_poll(s, {}, {}) ~= nil end,",
                     chan_name, val_str
                 ));
                 self.emit(&format!(
@@ -184,7 +184,7 @@ impl LuaGenerator {
                 self.open_opaque_transition();
                 self.indent += 1;
                 self.emit(&format!(
-                    "    guard = function(s) return _spin_chan_poll({}, {}) ~= nil end,",
+                    "    guard = function(s) return _spin_chan_poll(s, {}, {}) ~= nil end,",
                     chan_name, val_str
                 ));
                 self.emit("    effect = function(s) end");
@@ -196,7 +196,7 @@ impl LuaGenerator {
                 self.open_opaque_transition();
                 self.indent += 1;
                 self.emit(&format!(
-                    "    guard = function(s) return not chan_empty({}) end,",
+                    "    guard = function(s) return not chan_empty(s, {}) end,",
                     chan_name
                 ));
                 self.emit(&format!(
@@ -323,11 +323,12 @@ impl LuaGenerator {
     /// Extract guard expression for a statement (for combined guards in d_step/atomic)
     pub(crate) fn guard_for_stmt(&self, stmt: &Stmt) -> String {
         match stmt {
+            // `guard_for_stmt` is spliced into a generated guard whose state is `s`.
             Stmt::Send { channel, .. } => {
-                format!("not chan_full({})", self.channel_to_lua(channel))
+                format!("not chan_full(s, {})", self.channel_to_lua(channel))
             }
             Stmt::Recv { channel, .. } => {
-                format!("not chan_empty({})", self.channel_to_lua(channel))
+                format!("not chan_empty(s, {})", self.channel_to_lua(channel))
             }
             Stmt::Assert(expr, _) => self.expr_to_lua(expr),
             Stmt::Skip(_) | Stmt::Break(_) => "true".to_string(),

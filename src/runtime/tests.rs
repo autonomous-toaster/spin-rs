@@ -149,13 +149,15 @@ fn test_register_functions_via_lua() {
     let result = send_fn.call::<()>((state.clone(), "test", 42i64));
     assert!(result.is_ok());
 
-    // Test chan_len via Lua (still uses Rust registry, not state table)
+    // Every query takes the state: the queue lives there, not in the runtime registry. A query
+    // that consulted the registry instead would answer from whatever the last explored path left
+    // behind rather than from the state being expanded.
     let len_fn = rt
         .lua
         .globals()
         .get::<mlua::Function>("_spin_chan_len")
         .unwrap();
-    let len: i64 = len_fn.call("test").unwrap();
+    let len: i64 = len_fn.call((state.clone(), "test")).unwrap();
     assert_eq!(len, 1);
 
     // Test chan_recv via Lua (now requires state table as first arg)
@@ -173,16 +175,16 @@ fn test_register_functions_via_lua() {
         .globals()
         .get::<mlua::Function>("_spin_chan_empty")
         .unwrap();
-    let empty: bool = empty_fn.call("test").unwrap();
+    let empty: bool = empty_fn.call((state.clone(), "test")).unwrap();
     assert!(empty);
 
-    // Test chan_full via Lua
+    // Test chan_full via Lua: capacity 5 with an empty queue is not full
     let full_fn = rt
         .lua
         .globals()
         .get::<mlua::Function>("_spin_chan_full")
         .unwrap();
-    let full: bool = full_fn.call("test").unwrap();
+    let full: bool = full_fn.call((state.clone(), "test")).unwrap();
     assert!(!full);
 }
 
@@ -190,62 +192,54 @@ fn test_register_functions_via_lua() {
 fn test_register_functions_error_paths() {
     let mut rt = LuaRuntime::new().unwrap();
     rt.register_channel("exists", 5);
+    // Every channel function takes the state first, because the queue lives in the state.
+    let state: mlua::Table = rt.lua.create_table().unwrap();
 
-    // Test send to non-existent channel
     let send_fn = rt
         .lua
         .globals()
         .get::<mlua::Function>("_spin_chan_send")
         .unwrap();
-    let result = send_fn.call::<()>(("nonexistent", 1i64));
-    assert!(result.is_err());
-
-    // Test recv from non-existent channel
     let recv_fn = rt
         .lua
         .globals()
         .get::<mlua::Function>("_spin_chan_recv")
         .unwrap();
-    let result = recv_fn.call::<i64>(("nonexistent",));
-    assert!(result.is_err());
-
-    // Test len on non-existent channel
     let len_fn = rt
         .lua
         .globals()
         .get::<mlua::Function>("_spin_chan_len")
         .unwrap();
-    let result = len_fn.call::<i64>("nonexistent");
-    assert!(result.is_err());
-
-    // Test full on non-existent channel
     let full_fn = rt
         .lua
         .globals()
         .get::<mlua::Function>("_spin_chan_full")
         .unwrap();
-    let result = full_fn.call::<bool>("nonexistent");
-    assert!(result.is_err());
-
-    // Test empty on non-existent channel
     let empty_fn = rt
         .lua
         .globals()
         .get::<mlua::Function>("_spin_chan_empty")
         .unwrap();
-    let result = empty_fn.call::<bool>("nonexistent");
+
+    // An undeclared channel is an error, not an empty one: silently answering "empty" would
+    // turn a typo in the generated name into a model that never receives anything.
+    let result = send_fn.call::<()>((state.clone(), "nonexistent", 1i64));
+    assert!(result.is_err());
+    let result = recv_fn.call::<i64>((state.clone(), "nonexistent"));
+    assert!(result.is_err());
+    let result = len_fn.call::<i64>((state.clone(), "nonexistent"));
+    assert!(result.is_err());
+    let result = full_fn.call::<bool>((state.clone(), "nonexistent"));
+    assert!(result.is_err());
+    let result = empty_fn.call::<bool>((state.clone(), "nonexistent"));
     assert!(result.is_err());
 
-    // Test send with wrong argument type
-    let result = send_fn.call::<()>((42i64, 1i64));
+    // A missing state table is an error rather than an implicit one.
+    let result = send_fn.call::<()>(("exists", 1i64));
     assert!(result.is_err());
 
-    // Test recv with wrong argument type
-    let result = recv_fn.call::<i64>((42i64,));
-    assert!(result.is_err());
-
-    // Test chan_send with non-integer value
-    let result = send_fn.call::<()>(("exists", "bad"));
+    // A non-integer message is an error.
+    let result = send_fn.call::<()>((state.clone(), "exists", "bad"));
     assert!(result.is_err());
 
     // Test printf

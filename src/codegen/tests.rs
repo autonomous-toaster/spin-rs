@@ -313,3 +313,16 @@ fn test_transition_dependencies_cover_effects() {
     }
     assert!(checked > 0, "the scan found no transitions to verify");
 }
+
+#[test]
+fn zz_dump_lua() {
+    for src in [
+        "bool a;\nchan c = [1] of { bit };\nactive proctype P() { c ! 1; a = 1 }\nltl p { <> ( a ) }\n",
+        "bool a,b;\nchan c = [1] of { bit };\nactive proctype P() { c ! 1; b = 1; a = 1 }\nltl p { <> ( a ) }\n",
+    ] {
+        let model = parser::parse(src).unwrap();
+        let lua = generate(&model);
+        println!("=== {src}");
+        println!("{}", lua.source);
+    }
+}

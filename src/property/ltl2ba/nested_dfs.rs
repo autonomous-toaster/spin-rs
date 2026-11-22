@@ -82,6 +82,17 @@ where
         M: Model<State = S>,
     {
         let init_hash = init_product.cached_hash();
+        if std::env::var("SPINRS_DEBUG_LTL").is_ok() {
+            eprintln!(
+                "check: buchi {} states, accepting {:?}",
+                buchi.num_states, buchi.accepting
+            );
+            for (i, ts) in buchi.transitions.iter().enumerate() {
+                for t in ts {
+                    eprintln!("  buchi {} -{:?}-> {}", i, t.conditions, t.to);
+                }
+            }
+        }
 
         if let Some(violation) = self.dfs1(model, buchi, init_product, init_hash, 0) {
             return Some(violation);
@@ -170,6 +181,14 @@ where
             return None; // Already explored by inner DFS
         }
 
+        if std::env::var("SPINRS_DEBUG_LTL").is_ok() {
+            eprintln!("  dfs2 enter {:x} (seed {:x})", hash, seed);
+            eprintln!(
+                "    state: {:?}",
+                model.state_to_string(&product.model_state)
+            );
+            eprintln!("    props: {:?}", model.atomic_props(&product.model_state));
+        }
         self.visited2.insert(hash);
         self.stack2.push(hash);
 
@@ -192,7 +211,16 @@ where
             // accepting cycle. Reporting any back-edge flagged cycles that never touch
             // an accepting state: a model whose states all loop inside a rejecting
             // automaton state was reported as a liveness violation.
+            if std::env::var("SPINRS_DEBUG_LTL").is_ok() {
+                eprintln!(
+                    "  dfs2 {} --{}--> {} (seed {:x}, acc={})",
+                    hash, prod_trans.label, next_hash, seed, prod_trans.is_accepting
+                );
+            }
             if next_hash == seed {
+                if std::env::var("SPINRS_DEBUG_LTL").is_ok() {
+                    eprintln!("  VIOLATION at {} via {}", next_hash, prod_trans.label);
+                }
                 return Some(Violation {
                     property_name: self.property_name.clone(),
                     trail: self.trail.clone(),
