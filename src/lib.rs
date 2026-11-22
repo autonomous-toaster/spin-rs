@@ -107,6 +107,7 @@
 pub mod cli;
 pub mod codegen;
 pub mod engine;
+pub mod parity;
 pub mod parser;
 pub mod property;
 pub mod runtime;

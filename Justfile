@@ -2,7 +2,7 @@ set quiet
 
 # Run all checks (mirrors CI)
 [parallel]
-ci: veriplan check lint check-file-sizes machete crap test
+ci: veriplan check lint check-file-sizes machete crap test parity
 build: cargo-build
 
 # Fast compile check — all targets, all workspace crates
@@ -60,6 +60,23 @@ veriplan:
     else
         echo "⚠ veriplan skipped (veriplan not installed)"
         exit 0
+    fi
+
+# Differential parity gate against pan. Skips when spin and gcc are absent, because an
+# unmeasured corpus is not a passing one - the gate itself exits 2 in that case.
+[group('optional')]
+parity:
+    #!/usr/bin/env bash
+    if ! command -v spin >/dev/null 2>&1 || ! command -v gcc >/dev/null 2>&1; then
+        echo "⚠ parity skipped (spin and gcc required)"
+        exit 0
+    fi
+    if output=$(cargo run --release --quiet --bin parity_gate -- --gate 2>&1); then
+        printf '%s\n' "$output" | tail -3
+        echo "✓ parity passed"
+    else
+        printf '%s\n' "$output"
+        exit 1
     fi
 
 # Check format without modifying files
