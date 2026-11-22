@@ -139,9 +139,11 @@ impl<M: Model> Checker<M> {
             );
             result.violations.extend(sub.violations);
             result.unverified.extend(sub.unverified);
-            if self.config.stop_at_first_violation && !result.violations.is_empty() {
-                stopped = Some("violation");
-            }
+            // `stop_at_first_violation` stops the *traversal* at its first violation, which is
+            // what makes a refutation cheap. It used to stop the whole run, so every claim behind
+            // the first one was starved without ever being tried, and the shares those decided
+            // claims would have freed were never available. Each claim now gets its turn; a caller
+            // who wants the run itself to end has `max_states` for that.
         }
 
         result.violations = dedup_violations(result.violations);
@@ -161,7 +163,9 @@ impl<M: Model> Checker<M> {
 
         // Liveness claims live outside the per-claim safety loop. The nested DFS is never
         // reduced, because an accepting cycle can consist of invisible transitions.
-        if !(self.config.stop_at_first_violation && result.errors > 0) {
+        if self.config.stop_at_first_violation && result.errors > 0 {
+            self.report_skipped_liveness(&mut result);
+        } else {
             self.check_ltl_properties(&mut result);
         }
         result

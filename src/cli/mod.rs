@@ -107,10 +107,12 @@ pub struct Cli {
     #[arg(long)]
     pub strong_fairness: bool,
 
-    /// Stop at the first violation instead of exploring the whole reachable space.
+    /// Stop each claim's traversal at its first violation instead of exploring its whole
+    /// reachable space.
     ///
-    /// Matches pan's default. Any property not reported was then not fully explored, so treat
-    /// the remainder as unverified rather than as satisfied.
+    /// The liveness pass is skipped as well, and every liveness claim it would have examined is
+    /// reported as `early_stop` rather than left out: a claim that is absent from both lists would
+    /// read as satisfied. Turn the flag off if you need liveness verdicts.
     #[arg(long)]
     pub stop_at_first_violation: bool,
 

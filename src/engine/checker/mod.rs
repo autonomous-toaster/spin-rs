@@ -3,6 +3,7 @@
 pub mod deps;
 pub mod dfs;
 mod por_run;
+mod props;
 
 pub use deps::{TransitionDeps, ample_set};
 

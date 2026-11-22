@@ -205,6 +205,11 @@ Two consequences of doing this per claim, which the field documentation states a
 - **`states_explored` is a sum over per-claim traversals.** A model with two claims may report
   twice the states of a single unreduced pass. It is the same quantity as summing pan's per-claim
   runs, and it is not comparable with the pre-reduction value of the field.
+- **`--stop-at-first-violation` stops each claim's traversal**, not the run: a refutation is cheap,
+  every other claim still gets its turn, and the share a decided claim frees goes to the claims
+  behind it. The liveness pass is skipped in that mode, and every claim it would have examined is
+  reported as `early_stop` with a reason saying it was never examined - it is not reported as
+  satisfied, which is what an absent claim would otherwise mean.
 - **`max_states` is shared out between the claims.** Each claim gets `max_states / claims`, at
   least one state, and whatever a *decided* claim does not use is handed to the claims behind it -
   an undecided claim keeps nothing, so an expensive early claim cannot take the pool. A starved

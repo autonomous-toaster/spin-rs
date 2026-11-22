@@ -1,3 +1,5 @@
+use super::props::{evaluate_propositional, first_unresolved_atom, is_propositional};
+pub(crate) use super::props::{extract_var_from_state, is_safety_formula};
 use super::*;
 use crate::engine::fairness::{FairnessMode, FairnessTracker};
 use crate::engine::storage::HashCompactStore;
@@ -366,8 +368,15 @@ impl<M: Model> Checker<M> {
         // Check remaining LTL properties (non-[]p formulas via nested DFS). Skipped when an
         // early stop already produced a refutation: the caller asked for the first one, and
         // exploring the rest would defeat that.
-        if scope.is_none() && !(self.config.stop_at_first_violation && result.errors > 0) {
-            self.check_ltl_properties(&mut result);
+        if scope.is_none() {
+            if self.config.stop_at_first_violation && result.errors > 0 {
+                // The liveness pass is skipped to keep a stopped run cheap, but a claim that was
+                // never examined is not a claim that holds. Leaving it absent from the result made
+                // a refuted liveness claim read as satisfied to any caller counting entries.
+                self.report_skipped_liveness(&mut result);
+            } else {
+                self.check_ltl_properties(&mut result);
+            }
         }
 
         // With an early stop, every claim that did not produce a violation was left
@@ -401,6 +410,38 @@ impl<M: Model> Checker<M> {
 
     /// Check LTL properties using PropertyChecker (nested DFS).
     /// Skips []expr formulas that were already checked as safety properties during DFS.
+    /// Name every claim the skipped liveness pass never examined.
+    ///
+    /// A claim that is absent from both `violations` and `unverified` reads as satisfied, which is
+    /// the one thing this type exists to prevent.
+    pub(super) fn report_skipped_liveness(&self, result: &mut CheckResult) {
+        let decided: std::collections::HashSet<&str> = result
+            .violations
+            .iter()
+            .map(|v| v.property_name.as_str())
+            .collect();
+        let named: std::collections::HashSet<&str> = result
+            .unverified
+            .iter()
+            .map(|u| u.property_name.as_str())
+            .collect();
+        let skipped: Vec<String> = self
+            .model
+            .ltl_formulas()
+            .iter()
+            .filter(|f| !is_safety_formula(&f.formula))
+            .map(|f| f.name.as_deref().unwrap_or("ltl").to_string())
+            .filter(|n| !decided.contains(n.as_str()) && !named.contains(n.as_str()))
+            .collect();
+        for name in skipped {
+            result.unverified.push(Unverified::new(
+                name,
+                UnverifiedKind::EarlyStop,
+                "the run stopped at the first violation, so the liveness pass was skipped and this claim was never examined - it is not satisfied",
+            ));
+        }
+    }
+
     pub(super) fn check_ltl_properties(&self, result: &mut CheckResult) {
         let formulas = self.model.ltl_formulas();
         if formulas.is_empty() {
@@ -803,102 +844,6 @@ struct SafetyCheck {
     formula: crate::property::LtlFormula,
 }
 
-/// Check if an LTL formula is purely propositional (no temporal operators).
-fn is_propositional(formula: &crate::property::LtlFormula) -> bool {
-    match formula {
-        crate::property::LtlFormula::True | crate::property::LtlFormula::False => true,
-        crate::property::LtlFormula::Atom(_) => true,
-        crate::property::LtlFormula::Not(inner) => is_propositional(inner),
-        crate::property::LtlFormula::And(l, r)
-        | crate::property::LtlFormula::Or(l, r)
-        | crate::property::LtlFormula::Implies(l, r) => is_propositional(l) && is_propositional(r),
-        // Temporal operators
-        crate::property::LtlFormula::Always(_)
-        | crate::property::LtlFormula::Eventually(_)
-        | crate::property::LtlFormula::Next(_)
-        | crate::property::LtlFormula::Until(_, _)
-        | crate::property::LtlFormula::Release(_, _) => false,
-    }
-}
-
-/// The first atom of `formula` that neither the state's fields nor the model can decide.
-///
-/// Used only to say *why* a propositional check came back undecided: a fragment the parser
-/// produced and an atom the state does not carry are different debts.
-fn first_unresolved_atom<M: crate::engine::checker::Model>(
-    formula: &crate::property::LtlFormula,
-    state_str: &str,
-    model: &M,
-    state: &M::State,
-) -> Option<String> {
-    use crate::property::LtlFormula as F;
-    match formula {
-        F::Atom(name) => {
-            let resolvable = extract_var_from_state(state_str, name).is_some()
-                || model.eval_atom(state, name).is_some();
-            (!resolvable).then(|| name.clone())
-        }
-        F::True | F::False => None,
-        F::Not(inner) | F::Always(inner) | F::Eventually(inner) | F::Next(inner) => {
-            first_unresolved_atom(inner, state_str, model, state)
-        }
-        F::And(l, r) | F::Or(l, r) | F::Implies(l, r) | F::Until(l, r) | F::Release(l, r) => {
-            first_unresolved_atom(l, state_str, model, state)
-                .or_else(|| first_unresolved_atom(r, state_str, model, state))
-        }
-    }
-}
-
-/// Evaluate a propositional LTL formula against a state string.
-///
-/// Returns `None` when an atom does not resolve to a variable in the state.
-/// An unresolved atom must never be silently read as `false`: with a property of
-/// the shape `[](a -> b)` that makes the whole property vacuous and reports success
-/// for a model the checker never actually judged.
-fn evaluate_propositional<M: crate::engine::checker::Model>(
-    formula: &crate::property::LtlFormula,
-    state_str: &str,
-    model: &M,
-    state: &M::State,
-) -> Option<bool> {
-    match formula {
-        crate::property::LtlFormula::True => Some(true),
-        crate::property::LtlFormula::False => Some(false),
-        crate::property::LtlFormula::Atom(name) => extract_var_from_state(state_str, name)
-            .map(|val| val != 0)
-            // A bare name is answered from the state's fields. Anything else - a comparison, an
-            // arithmetic atom - is an expression, and the model may be able to decide it. Leaving
-            // those undecided made every [] ( x <= 2 ) a decline.
-            .or_else(|| model.eval_atom(state, name)),
-        crate::property::LtlFormula::Not(inner) => {
-            evaluate_propositional(inner, state_str, model, state).map(|b| !b)
-        }
-        crate::property::LtlFormula::And(l, r) => match (
-            evaluate_propositional(l, state_str, model, state),
-            evaluate_propositional(r, state_str, model, state),
-        ) {
-            (Some(a), Some(b)) => Some(a && b),
-            _ => None,
-        },
-        crate::property::LtlFormula::Or(l, r) => match (
-            evaluate_propositional(l, state_str, model, state),
-            evaluate_propositional(r, state_str, model, state),
-        ) {
-            (Some(a), Some(b)) => Some(a || b),
-            _ => None,
-        },
-        crate::property::LtlFormula::Implies(l, r) => match (
-            evaluate_propositional(l, state_str, model, state),
-            evaluate_propositional(r, state_str, model, state),
-        ) {
-            (Some(a), Some(b)) => Some(!a || b),
-            _ => None,
-        },
-        // Temporal operators inside []expr shouldn't reach here (filtered by is_propositional)
-        _ => Some(true),
-    }
-}
-
 /// Collapse violations to one per property, keeping the first trail.
 ///
 /// The search reaches the same property violation through many states and paths, so the
@@ -913,61 +858,4 @@ pub(super) fn dedup_violations(violations: Vec<Violation>) -> Vec<Violation> {
         }
     }
     out
-}
-
-/// Check if a formula string is a safety formula ([]expr where expr is propositional).
-pub(crate) fn is_safety_formula(formula_str: &str) -> bool {
-    if let Ok(crate::property::LtlFormula::Always(inner)) =
-        crate::property::LtlFormula::parse(formula_str)
-    {
-        return is_propositional(&inner);
-    }
-    false
-}
-
-/// Extract a variable's value from a state blob string.
-/// State blob format: {key:val,key:val,...} or {"key":val,"key":val,...}
-///
-/// Returns `None` if the variable is absent, so callers can distinguish an
-/// unresolved atom from a variable that is genuinely zero.
-pub(crate) fn extract_var_from_state(state_str: &str, var_name: &str) -> Option<i64> {
-    let inner = state_str
-        .trim_start_matches('{')
-        .trim_end_matches('}')
-        .trim();
-
-    // Try the quoted form first, then the unquoted form.
-    for key in [format!("\"{}\":", var_name), format!("{}:", var_name)] {
-        let Some(p) = inner.find(&key) else {
-            continue;
-        };
-        // Require a key boundary so that searching for "a" cannot match the tail
-        // of a longer key such as "done_a".
-        let at_boundary = p == 0 || matches!(inner.as_bytes()[p - 1], b'{' | b',' | b' ');
-        if !at_boundary {
-            continue;
-        }
-        // The value starts immediately after the key's own colon. Searching for
-        // another ':' here reads the next key's value instead, which made every
-        // []-safety property evaluate against the wrong variable.
-        let rest = inner[p + key.len()..].trim_start();
-        if rest.starts_with("true") {
-            return Some(1);
-        }
-        if rest.starts_with("false") {
-            return Some(0);
-        }
-        if rest.starts_with("nil") {
-            return Some(0);
-        }
-        let num: String = rest
-            .chars()
-            .take_while(|c| c.is_ascii_digit() || *c == '-')
-            .collect();
-        if num.is_empty() || num == "-" {
-            return None;
-        }
-        return num.parse::<i64>().ok();
-    }
-    None
 }

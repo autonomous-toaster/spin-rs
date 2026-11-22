@@ -486,3 +486,67 @@ fn a_never_claim_is_reported_rather_than_ignored() {
         r.unverified
     );
 }
+
+#[test]
+fn a_skipped_liveness_pass_is_reported_not_satisfied() {
+    // With `stop_at_first_violation` the liveness pass is skipped. The claims it would have
+    // examined used to be absent from the result, which reads as satisfied: a consumer measured
+    // `[] ( failed -> <> active )` - refuted by pan - coming back as a pass.
+    let src = "
+bit a = 0, b = 0, bad = 0;
+active proctype P() { a = 1; bad = 1 }
+ltl s0 { [] ( !bad ) }
+ltl p18 { [] ( a -> <> b ) }
+ ";
+    let cfg = CheckerConfig {
+        por_enabled: true,
+        stop_at_first_violation: true,
+        ..Default::default()
+    };
+    let r = crate::verify_with_config(src, &cfg).expect("the fixture must load");
+    assert!(
+        r.violations.iter().any(|v| v.property_name == "s0"),
+        "the safety claim is refuted: {:?}",
+        r.violations
+    );
+    let entry = r
+        .unverified
+        .iter()
+        .find(|u| u.property_name == "p18")
+        .expect("the skipped liveness claim must be named, not absent");
+    assert_eq!(entry.kind.as_str(), "early_stop", "{entry:?}");
+    assert!(
+        entry.reason.contains("never examined"),
+        "the reason must say it was not examined: {}",
+        entry.reason
+    );
+}
+
+#[test]
+fn the_flag_stops_a_traversal_not_the_run() {
+    // Stopping the whole run left every claim behind the first violation starved without ever
+    // being tried, and the shares a refutation frees never became available.
+    let src = "
+bool a, b, c;
+active proctype P1() { do :: (1) -> c = 1; c = 2; c = 3; break od }
+active proctype P2() { a = 1 }
+active proctype P3() { b = 1 }
+ltl p0 { [] ( !c ) }
+ltl p1 { [] ( a ) }
+ltl p2 { [] ( b ) }
+ ";
+    let cfg = CheckerConfig {
+        por_enabled: true,
+        stop_at_first_violation: true,
+        ..Default::default()
+    };
+    let r = crate::verify_with_config(src, &cfg).expect("the fixture must load");
+    for claim in ["p0", "p1", "p2"] {
+        assert!(
+            r.violations.iter().any(|v| v.property_name == claim),
+            "{claim} must be decided even though an earlier claim was refuted: {:?} / {:?}",
+            r.violations,
+            r.unverified
+        );
+    }
+}

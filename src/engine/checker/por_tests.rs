@@ -337,14 +337,19 @@ ltl p0 { [] ( !bad ) }
 ltl p1 { [] ( t2 -> t1 ) }
  ";
     let r = crate::verify_with_config(src, &cfg).expect("fixture must load");
-    for c in ["p0", "p1"] {
-        let reported = r.violations.iter().any(|v| v.property_name == c)
-            || r.unverified.iter().any(|u| u.property_name == c);
-        assert!(
-            reported,
-            "claim {c} was silently absent after an early stop"
-        );
-    }
+    assert!(
+        r.violations.iter().any(|v| v.property_name == "p0"),
+        "the first claim is refuted: {:?}",
+        r.violations
+    );
+    // p1 is a safety claim: its own traversal runs now that the flag stops the traversal rather
+    // than the run, so it closes and holds. Absence from both lists means examined-and-satisfied,
+    // which is the contract - what the flag used to do was leave it unexamined and silent.
+    assert!(
+        !r.unverified.iter().any(|u| u.property_name == "p1"),
+        "p1 must be examined, not starved: {:?}",
+        r.unverified
+    );
 }
 /// Locate a program on PATH.
 fn have(prog: &str) -> bool {
