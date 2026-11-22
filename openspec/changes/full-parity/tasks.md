@@ -13,6 +13,16 @@
       `adv_loop_and_assert`; fails if any of the four shapes is unreachable from the grammar
 - [x] 1.5 CI gate: a false refutation or false clean fails the build; declines are counted and
       printed, never subtracted from the total
+- [x] 1.6 A second corpus that the author of pan wrote, not us. Spin ships no test suite: its
+      repository has no test target and no `Test/` directory, and the `test0..test5` script in
+      `Examples/README_tests.txt` is a guided tour with expected pan output rather than a harness.
+      What it does ship is 78 models under `Examples/`. `parity_gate --dir <path>` runs any
+      directory of `.pml` files through the same six-way classifier, and a file with more than one
+      claim is named `not comparable` rather than guessed at. On those 78: 3 agree, 1 decline,
+      64 refusals, 6 pan-unbuildable, 4 not comparable, **0 wrong verdicts**. Six of the eight
+      comparable models were wrong before this was wired up, and every one of them was a defect the
+      generated corpus could not reach: an `init` block registered with no dispatcher, ```_pid` shared between
+      processes, `&&`/`||` emitted without parentheses, and the preprocessor missing entirely
 
 ## Phase 2: Execution Model
 
