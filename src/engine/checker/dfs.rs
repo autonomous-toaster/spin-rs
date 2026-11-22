@@ -271,10 +271,8 @@ impl<M: Model> Checker<M> {
 
         let unresolved: Vec<Unverified> = unresolved
             .into_iter()
-            .map(|(property_name, reason)| Unverified {
-                property_name,
-                kind: UnverifiedKind::UnsupportedProperty,
-                reason,
+            .map(|(property_name, reason)| {
+                Unverified::new(property_name, UnverifiedKind::UnsupportedProperty, reason)
             })
             .collect();
 
@@ -308,6 +306,8 @@ impl<M: Model> Checker<M> {
                     "search pruned states at the depth limit of {} before the state space closed",
                     self.config.max_depth
                 ),
+                states_used: storage.len(),
+                budget: None,
             });
         }
         if hit_state_limit {
@@ -327,6 +327,10 @@ impl<M: Model> Checker<M> {
                         budget
                     ),
                 },
+                // How much this traversal actually stored, and what it was allowed: a caller
+                // sizing a budget for a plan needs the distance, not just "used up".
+                states_used: storage.len(),
+                budget: Some(budget),
             });
         }
 
@@ -352,10 +356,12 @@ impl<M: Model> Checker<M> {
                 .iter()
                 .map(|f| f.name.as_deref().unwrap_or("ltl"))
                 .filter(|n| !decided.contains(*n))
-                .map(|n| Unverified {
-                    property_name: n.to_string(),
-                    kind: UnverifiedKind::EarlyStop,
-                    reason: "search stopped at the first violation, so this claim was not fully explored".to_string(),
+                .map(|n| {
+                    Unverified::new(
+                        n.to_string(),
+                        UnverifiedKind::EarlyStop,
+                        "search stopped at the first violation, so this claim was not fully explored",
+                    )
                 })
                 .collect();
             result.unverified.extend(undecided);
@@ -397,21 +403,21 @@ impl<M: Model> Checker<M> {
                             // read as invalid; treating it as clean made a false property
                             // read as verified. Report it as unverified.
                             log::warn!("LTL check error for '{}': {}", prop_name, e);
-                            result.unverified.push(Unverified {
-                                property_name: prop_name.to_string(),
-                                kind: UnverifiedKind::UnsupportedProperty,
-                                reason: format!("{}", e),
-                            });
+                            result.unverified.push(Unverified::new(
+                                prop_name.to_string(),
+                                UnverifiedKind::UnsupportedProperty,
+                                format!("{}", e),
+                            ));
                         }
                     }
                 }
                 Err(e) => {
                     log::warn!("Failed to parse LTL formula '{}': {}", prop_name, e);
-                    result.unverified.push(Unverified {
-                        property_name: prop_name.to_string(),
-                        kind: UnverifiedKind::UnparsableFormula,
-                        reason: format!("LTL formula could not be parsed: {}", e),
-                    });
+                    result.unverified.push(Unverified::new(
+                        prop_name.to_string(),
+                        UnverifiedKind::UnparsableFormula,
+                        format!("LTL formula could not be parsed: {}", e),
+                    ));
                 }
             }
         }
@@ -616,6 +622,8 @@ impl<M: Model> Checker<M> {
                     "search pruned states at the depth limit of {} before the state space closed",
                     self.config.max_depth
                 ),
+                states_used: storage.len(),
+                budget: None,
             });
         }
         if hit_state_limit {
@@ -626,6 +634,8 @@ impl<M: Model> Checker<M> {
                     "search stopped at the state limit of {} before the state space closed",
                     self.config.max_states
                 ),
+                states_used: storage.len(),
+                budget: Some(self.config.max_states),
             });
         }
 
@@ -649,10 +659,12 @@ impl<M: Model> Checker<M> {
                 .iter()
                 .map(|f| f.name.as_deref().unwrap_or("ltl"))
                 .filter(|n| !decided.contains(*n))
-                .map(|n| Unverified {
-                    property_name: n.to_string(),
-                    kind: UnverifiedKind::EarlyStop,
-                    reason: "search stopped at the first violation, so this claim was not fully explored".to_string(),
+                .map(|n| {
+                    Unverified::new(
+                        n.to_string(),
+                        UnverifiedKind::EarlyStop,
+                        "search stopped at the first violation, so this claim was not fully explored",
+                    )
                 })
                 .collect();
             result.unverified.extend(undecided);

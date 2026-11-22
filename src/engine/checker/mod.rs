@@ -243,6 +243,37 @@ pub struct Unverified {
     pub kind: UnverifiedKind,
     /// Human-readable detail.
     pub reason: String,
+    /// States this claim's own traversal stored.
+    ///
+    /// A caller deciding how much budget to give a plan needs to know whether a claim came four
+    /// thousand states short or four million. The reason string said "used up" and nothing else.
+    pub states_used: usize,
+    /// The ceiling that traversal was given, when it had one.
+    pub budget: Option<usize>,
+}
+
+impl Unverified {
+    /// An unverified entry with no measured usage.
+    pub fn new(
+        property_name: impl Into<String>,
+        kind: UnverifiedKind,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            property_name: property_name.into(),
+            kind,
+            reason: reason.into(),
+            states_used: 0,
+            budget: None,
+        }
+    }
+
+    /// Record what the claim's traversal used and what it was allowed.
+    pub fn with_usage(mut self, states_used: usize, budget: Option<usize>) -> Self {
+        self.states_used = states_used;
+        self.budget = budget;
+        self
+    }
 }
 
 /// Verification result.

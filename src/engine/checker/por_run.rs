@@ -1,6 +1,26 @@
 use super::dfs::dedup_violations;
 use super::*;
 
+/// The budget a claim is given: its share, plus what decided claims before it did not use.
+///
+/// Taking the leftover clears it, so two claims cannot be given the same unused states.
+fn grant(share: usize, leftover: &mut usize) -> usize {
+    let budget = share + *leftover;
+    *leftover = 0;
+    budget
+}
+
+/// Add back what a claim did not use, if it was decided.
+///
+/// A decided claim - refuted, or its traversal closed - can never use its remainder, so that pool
+/// is dead and the claims behind it may have it. An undecided claim contributes nothing: leaving it
+/// its remainder would be the pooling that let an early claim's appetite starve the rest.
+fn contribute(leftover: &mut usize, budget: usize, used: usize, decided: bool) {
+    if decided {
+        *leftover += budget.saturating_sub(used.min(budget));
+    }
+}
+
 impl<M: Model> Checker<M> {
     /// Run one reduced traversal per claim, aggregated into one result.
     ///
@@ -43,6 +63,13 @@ impl<M: Model> Checker<M> {
         // that a claim was skipped because of a violation when there was none is a false report.
         let mut stopped: Option<&'static str> = None;
         let mut first = true;
+        // Budget a claim finished with, available to the claims behind it.
+        //
+        // Only a *decided* claim contributes: once a claim is refuted or its traversal closes,
+        // whatever is left of its share can never be used by it, so the pool is dead. An
+        // undecided claim contributes nothing - letting it keep an unused remainder would be the
+        // pooling this replaced, where an early claim's appetite starved the rest.
+        let mut leftover = 0usize;
 
         for scope in &scopes {
             if let Some(reason) = stopped {
@@ -61,28 +88,29 @@ impl<M: Model> Checker<M> {
                         ),
                     )
                 };
-                result.unverified.push(Unverified {
-                    property_name: scope.name.clone(),
-                    kind,
-                    reason: why,
-                });
+                result.unverified.push(
+                    Unverified::new(scope.name.clone(), kind, why)
+                        // Not reached, so it used nothing; the share is what it was entitled to.
+                        .with_usage(0, Some(share)),
+                );
                 continue;
             }
-            // This claim's own share, never another claim's. The pool cannot be exhausted by an
-            // earlier claim any more, so the only way a share is unavailable is a budget too small
-            // to have one at all.
-            let budget = share;
+            // This claim's own share plus what decided claims before it did not need.
+            let budget = grant(share, &mut leftover);
             // A claim with nothing left is reported, never skipped: absence must not be allowed
             // to read as satisfaction.
             if budget == 0 {
-                result.unverified.push(Unverified {
-                    property_name: scope.name.clone(),
-                    kind: UnverifiedKind::StateBudget,
-                    reason: format!(
-                        "the run's state budget of {} leaves no share for this claim",
-                        self.config.max_states
-                    ),
-                });
+                result.unverified.push(
+                    Unverified::new(
+                        scope.name.clone(),
+                        UnverifiedKind::StateBudget,
+                        format!(
+                            "the run's state budget of {} leaves no share for this claim",
+                            self.config.max_states
+                        ),
+                    )
+                    .with_usage(0, Some(budget)),
+                );
                 stopped = Some("budget");
                 continue;
             }
@@ -92,6 +120,23 @@ impl<M: Model> Checker<M> {
             result.states_stored += sub.states_stored;
             result.transitions += sub.transitions;
             result.depth_reached = result.depth_reached.max(sub.depth_reached);
+            // A claim is decided when its traversal closed or refuted it. A starved traversal
+            // that also found a violation is decided: the violation exists whatever else was
+            // unexplored.
+            let starved = sub.unverified.iter().any(|u| {
+                u.property_name == scope.name
+                    && matches!(
+                        u.kind,
+                        UnverifiedKind::StateBudget | UnverifiedKind::DepthBudget
+                    )
+            });
+            let refuted = sub.violations.iter().any(|v| v.property_name == scope.name);
+            contribute(
+                &mut leftover,
+                budget,
+                sub.states_explored,
+                !starved || refuted,
+            );
             result.violations.extend(sub.violations);
             result.unverified.extend(sub.unverified);
             if self.config.stop_at_first_violation && !result.violations.is_empty() {
@@ -101,6 +146,17 @@ impl<M: Model> Checker<M> {
 
         result.violations = dedup_violations(result.violations);
         result.errors = result.violations.len();
+        // A claim a violation already decided needs no "not fully explored" entry as well. Two
+        // entries for one claim made a caller's per-claim summary disagree with its own totals,
+        // and the entry says nothing the violation does not.
+        let decided: std::collections::HashSet<String> = result
+            .violations
+            .iter()
+            .map(|v| v.property_name.clone())
+            .collect();
+        result
+            .unverified
+            .retain(|u| !decided.contains(&u.property_name));
         result.elapsed_secs = start.elapsed().as_secs_f64();
 
         // Liveness claims live outside the per-claim safety loop. The nested DFS is never
@@ -109,5 +165,36 @@ impl<M: Model> Checker<M> {
             self.check_ltl_properties(&mut result);
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod budget_share_tests {
+    use super::{contribute, grant};
+
+    #[test]
+    fn a_claim_gets_its_share_and_the_leftover() {
+        let mut leftover = 7;
+        assert_eq!(grant(10, &mut leftover), 17);
+        // Taking it clears it, so two claims cannot be handed the same unused states.
+        assert_eq!(leftover, 0);
+    }
+
+    #[test]
+    fn only_a_decided_claim_contributes() {
+        let mut leftover = 0;
+        contribute(&mut leftover, 10, 4, true);
+        assert_eq!(leftover, 6);
+        // An undecided claim keeps its pool: letting it contribute is the pooling that starved
+        // the claims behind an early one.
+        contribute(&mut leftover, 10, 4, false);
+        assert_eq!(leftover, 6);
+    }
+
+    #[test]
+    fn a_claim_that_used_more_than_it_was_given_contributes_nothing() {
+        let mut leftover = 3;
+        contribute(&mut leftover, 10, 10, true);
+        assert_eq!(leftover, 3);
     }
 }

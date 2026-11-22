@@ -499,3 +499,69 @@ fn reduction_preserves_verdicts_across_a_sweep_of_small_shapes() {
     }
     assert_eq!(checked, 40, "the sweep must actually enumerate its shapes");
 }
+
+#[test]
+fn a_refuted_claim_is_not_also_reported_unverified() {
+    // A claim whose traversal refuted it was decided. It used to appear in both lists, which made
+    // a caller's per-claim summary disagree with its own totals: 62 claims, 71 entries.
+    let src = "
+bool a, b, c, d;
+active proctype P1() { d = 1; d = 2; d = 3; d = 4; d = 5; d = 6; d = 7; d = 8 }
+active proctype P2() { a = 1 }
+active proctype P3() { b = 1 }
+active proctype P4() { c = 1 }
+ltl p0 { [] ( !d ) }
+ltl p1 { [] ( a ) }
+ltl p2 { [] ( b ) }
+ltl p3 { [] ( c ) }
+ ";
+    let r = run(src, true, 4);
+    for claim in ["p1", "p2", "p3"] {
+        assert!(
+            r.violations.iter().any(|v| v.property_name == claim),
+            "{claim} must be refuted: {:?}",
+            r.unverified
+        );
+        assert!(
+            !r.unverified.iter().any(|u| u.property_name == claim),
+            "{claim} was refuted, so it needs no unverified entry as well: {:?}",
+            r.unverified
+        );
+    }
+}
+
+#[test]
+fn an_undecided_claim_reports_what_it_used_and_what_it_was_given() {
+    // A caller sizing a budget for a plan needs the distance, not just "used up": four thousand
+    // states short and four million states short are different answers.
+    let src = "
+bool a, b, c, d;
+active proctype P1() { do :: (1) -> d = 1; d = 2; break od }
+active proctype P2() { do :: (1) -> a = 1; a = 2; break od }
+active proctype P3() { do :: (1) -> b = 1; b = 2; break od }
+active proctype P4() { do :: (1) -> c = 1; c = 2; break od }
+ltl p0 { [] ( !d ) }
+ltl p1 { [] ( !a ) }
+ ";
+    let r = run(src, true, 4);
+    let starved: Vec<_> = r
+        .unverified
+        .iter()
+        .filter(|u| u.kind == UnverifiedKind::StateBudget && u.budget.is_some())
+        .collect();
+    assert!(
+        !starved.is_empty(),
+        "the fixture must starve a claim: {:?}",
+        r.unverified
+    );
+    for u in starved {
+        // A traversal stops when it reaches its ceiling, so a starved claim used exactly what it
+        // was given. That equality is what makes the number usable for sizing a budget.
+        assert_eq!(
+            Some(u.states_used),
+            u.budget,
+            "a starved claim must report the ceiling it reached: {u:?}"
+        );
+        assert!(u.states_used > 0, "states used must be reported: {u:?}");
+    }
+}
