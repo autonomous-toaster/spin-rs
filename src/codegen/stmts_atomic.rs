@@ -245,6 +245,25 @@ impl LuaGenerator {
             self.emit("    -- empty atomic/d_step");
             return;
         }
+        // pan executes an atomic sequence as ONE transition, so the states between its statements
+        // are not observable: atomic { b = 1; a = 1 } does not refute [] ( b -> a ). Emitting one
+        // transition per statement does refute it, because the state {b:1, a:0} is reachable.
+        //
+        // Fusing needs the guard of every statement conjoined and the effect of every statement
+        // concatenated, and that effect logic lives in emit_assignment and friends. Until it is
+        // factored out, refuse a multi-statement region rather than report a violation the model
+        // does not have. A single statement needs no fusing.
+        if body.len() > 1 {
+            self.emit("    -- multi-statement atomic/d_step is not fused yet (full-parity 2.12)");
+            self.emit("    table.insert(transitions, {");
+            self.emit_opaque_deps();
+            self.emit(
+                "        guard = function(s) error('a multi-statement atomic/d_step region is not fused into one transition yet') end,",
+            );
+            self.emit("        effect = function(s) end,");
+            self.emit("    })");
+            return;
+        }
         let step_var = if let Some(ref pname) = self.current_proctype {
             format!("_atomic_step_{}", pname)
         } else {
