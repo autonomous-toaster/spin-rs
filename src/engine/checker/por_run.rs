@@ -22,15 +22,33 @@ impl<M: Model> Checker<M> {
             elapsed_secs: 0.0,
         };
         let mut used = 0usize;
-        let mut stopped = false;
+        // Why the remaining claims will not be checked. "Stopped" is not one condition: a run can
+        // stop because it refuted a claim, or because the budget ran out, and telling a caller
+        // that a claim was skipped because of a violation when there was none is a false report.
+        let mut stopped: Option<&'static str> = None;
         let mut first = true;
 
         for scope in &scopes {
-            if stopped {
+            if let Some(reason) = stopped {
+                let (kind, why) = if reason == "violation" {
+                    (
+                        UnverifiedKind::EarlyStop,
+                        "search stopped at the first violation, so this claim was not fully explored"
+                            .to_string(),
+                    )
+                } else {
+                    (
+                        UnverifiedKind::StateBudget,
+                        format!(
+                            "the run's state budget of {} was exhausted by earlier claims, so this one was not reached",
+                            self.config.max_states
+                        ),
+                    )
+                };
                 result.unverified.push(Unverified {
                     property_name: scope.name.clone(),
-                    kind: UnverifiedKind::EarlyStop,
-                    reason: "search stopped at the first violation, so this claim was not fully explored".to_string(),
+                    kind,
+                    reason: why,
                 });
                 continue;
             }
@@ -46,7 +64,7 @@ impl<M: Model> Checker<M> {
                         self.config.max_states
                     ),
                 });
-                stopped = true;
+                stopped = Some("budget");
                 continue;
             }
             let sub = self.check_dfs_inner(Some(scope), budget, first);
@@ -59,7 +77,7 @@ impl<M: Model> Checker<M> {
             result.violations.extend(sub.violations);
             result.unverified.extend(sub.unverified);
             if self.config.stop_at_first_violation && !result.violations.is_empty() {
-                stopped = true;
+                stopped = Some("violation");
             }
         }
 

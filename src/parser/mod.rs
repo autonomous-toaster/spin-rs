@@ -543,6 +543,23 @@ fn for_c_style(input: Input) -> IResult<Input, Stmt> {
         },
     ))
 }
+/// Parse a single expression.
+///
+/// Used to decide an atomic proposition that names no single state variable, such as
+/// `a == b`: the atom is an expression, and the alternative is to leave it undecided.
+pub fn parse_expression(source: &str) -> anyhow::Result<Expression> {
+    let trimmed = source.trim();
+    match expressions::expr(trimmed) {
+        Ok((rest, e)) if rest.trim().is_empty() => Ok(e),
+        Ok((rest, _)) => anyhow::bail!(
+            "expression \"{}\" has {} character(s) left over",
+            trimmed,
+            rest.trim().len()
+        ),
+        Err(e) => anyhow::bail!("cannot parse expression \"{}\": {:?}", trimmed, e),
+    }
+}
+
 pub fn parse(source: &str) -> anyhow::Result<PromelaModel> {
     let (rest, declarations) =
         many0(top_level)(source).map_err(|e| anyhow::anyhow!("parse error: {:?}", e))?;

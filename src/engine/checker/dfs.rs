@@ -106,7 +106,7 @@ impl<M: Model> Checker<M> {
                 && let Some(state_str) = self.model.state_to_string(&state)
             {
                 for check in &safety_checks {
-                    match evaluate_propositional(&check.formula, &state_str) {
+                    match evaluate_propositional(&check.formula, &state_str, &self.model, &state) {
                         Some(true) => {}
                         Some(false) => {
                             let state_trail = self.build_trail(&trail, state_idx);
@@ -286,7 +286,13 @@ impl<M: Model> Checker<M> {
         // cannot tell "closed, no violations" from "gave up at the cap".
         if hit_depth_limit {
             result.unverified.push(Unverified {
-                property_name: "model".to_string(),
+                // A starved traversal belongs to the claim it was checking. Naming it "model"
+                // left the claim itself unmentioned, so a caller reading property_name saw a
+                // model-level note and could report the claim as satisfied.
+                property_name: match scope {
+                    Some(s) => s.name.clone(),
+                    None => "model".to_string(),
+                },
                 kind: UnverifiedKind::DepthBudget,
                 reason: format!(
                     "search pruned states at the depth limit of {} before the state space closed",
@@ -296,16 +302,14 @@ impl<M: Model> Checker<M> {
         }
         if hit_state_limit {
             result.unverified.push(Unverified {
-                property_name: "model".to_string(),
+                property_name: match scope {
+                    Some(s) => s.name.clone(),
+                    None => "model".to_string(),
+                },
                 kind: UnverifiedKind::StateBudget,
                 reason: format!(
-                    "search stopped at the state limit of {} before the state space closed{}",
-                    budget,
-                    match scope {
-                        Some(s) =>
-                            format!(" (while checking '{}', which could not be decided)", s.name),
-                        None => String::new(),
-                    }
+                    "search stopped at the state limit of {} before the state space closed",
+                    budget
                 ),
             });
         }
@@ -469,7 +473,7 @@ impl<M: Model> Checker<M> {
                 && let Some(state_str) = self.model.state_to_string(&state)
             {
                 for check in &safety_checks {
-                    match evaluate_propositional(&check.formula, &state_str) {
+                    match evaluate_propositional(&check.formula, &state_str, &self.model, &state) {
                         Some(true) => {}
                         Some(false) => {
                             let state_trail = self.build_trail(&trail, state_idx);
@@ -766,33 +770,41 @@ fn is_propositional(formula: &crate::property::LtlFormula) -> bool {
 /// An unresolved atom must never be silently read as `false`: with a property of
 /// the shape `[](a -> b)` that makes the whole property vacuous and reports success
 /// for a model the checker never actually judged.
-fn evaluate_propositional(formula: &crate::property::LtlFormula, state_str: &str) -> Option<bool> {
+fn evaluate_propositional<M: crate::engine::checker::Model>(
+    formula: &crate::property::LtlFormula,
+    state_str: &str,
+    model: &M,
+    state: &M::State,
+) -> Option<bool> {
     match formula {
         crate::property::LtlFormula::True => Some(true),
         crate::property::LtlFormula::False => Some(false),
-        crate::property::LtlFormula::Atom(name) => {
-            extract_var_from_state(state_str, name).map(|val| val != 0)
-        }
+        crate::property::LtlFormula::Atom(name) => extract_var_from_state(state_str, name)
+            .map(|val| val != 0)
+            // A bare name is answered from the state's fields. Anything else - a comparison, an
+            // arithmetic atom - is an expression, and the model may be able to decide it. Leaving
+            // those undecided made every [] ( x <= 2 ) a decline.
+            .or_else(|| model.eval_atom(state, name)),
         crate::property::LtlFormula::Not(inner) => {
-            evaluate_propositional(inner, state_str).map(|b| !b)
+            evaluate_propositional(inner, state_str, model, state).map(|b| !b)
         }
         crate::property::LtlFormula::And(l, r) => match (
-            evaluate_propositional(l, state_str),
-            evaluate_propositional(r, state_str),
+            evaluate_propositional(l, state_str, model, state),
+            evaluate_propositional(r, state_str, model, state),
         ) {
             (Some(a), Some(b)) => Some(a && b),
             _ => None,
         },
         crate::property::LtlFormula::Or(l, r) => match (
-            evaluate_propositional(l, state_str),
-            evaluate_propositional(r, state_str),
+            evaluate_propositional(l, state_str, model, state),
+            evaluate_propositional(r, state_str, model, state),
         ) {
             (Some(a), Some(b)) => Some(a || b),
             _ => None,
         },
         crate::property::LtlFormula::Implies(l, r) => match (
-            evaluate_propositional(l, state_str),
-            evaluate_propositional(r, state_str),
+            evaluate_propositional(l, state_str, model, state),
+            evaluate_propositional(r, state_str, model, state),
         ) {
             (Some(a), Some(b)) => Some(!a || b),
             _ => None,

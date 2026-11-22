@@ -87,6 +87,19 @@ end
         lua_ok(self.lua.load(&full_source).exec())
     }
 
+    /// Evaluate a Lua expression against a serialized state.
+    ///
+    /// The state is rebuilt from the blob exactly as `enumerate_transitions` does, so the
+    /// expression sees the state the caller asked about and nothing else.
+    pub fn eval_bool_in_state(&self, chunk: &str, state_blob: &str) -> anyhow::Result<bool> {
+        let source = format!(
+            "do local s = {{}}; {}; return (({}) and true or false) end",
+            state_literal(state_blob),
+            chunk
+        );
+        lua_ok(self.lua.load(source).eval::<bool>())
+    }
+
     /// Get or create a channel by name.
     pub fn register_channel(&mut self, name: &str, capacity: usize) {
         self.channels
@@ -202,6 +215,11 @@ pub struct LuaModel {
     /// Reduction asks which of these a claim can observe, so it needs the real field names
     /// (p1_x, t1_done) rather than the Promela identifiers they came from.
     state_fields: Vec<String>,
+    /// The parsed model, kept so a claim's atom can be translated against its globals.
+    atom_model: crate::parser::ast::PromelaModel,
+    /// Atom text to the Lua expression that decides it, so the product search pays for the
+    /// translation once rather than at every transition.
+    atom_chunks: std::cell::RefCell<std::collections::HashMap<String, String>>,
 }
 
 impl LuaModel {
@@ -274,6 +292,8 @@ impl LuaModel {
             eval_error: std::cell::RefCell::new(None),
             has_asserts,
             state_fields,
+            atom_model: model.clone(),
+            atom_chunks: std::cell::RefCell::new(std::collections::HashMap::new()),
         })
     }
 
@@ -429,6 +449,44 @@ impl Model for LuaModel {
 
     fn process_count(&self) -> usize {
         self.process_count
+    }
+
+    /// Decide a claim's atom by evaluating it against the state.
+    ///
+    /// `atomic_props` answers one field at a time, which covers a bare identifier. A comparison
+    /// like `a == b` is an expression over several fields, so it is parsed and translated once
+    /// per atom and evaluated against the state blob the caller names. The translation is cached
+    /// because the product search asks for the same handful of atoms at every transition.
+    fn eval_atom(&self, state: &Self::State, atom: &str) -> Option<bool> {
+        const PREDEFINED: &[&str] = &["true", "false", "nil"];
+        if PREDEFINED.contains(&atom) {
+            return None; // answered by evaluate_atomic_props
+        }
+        let chunk = {
+            let mut cache = self.atom_chunks.borrow_mut();
+            match cache.get(atom) {
+                Some(c) => c.clone(),
+                None => {
+                    let expr = crate::parser::parse_expression(atom).ok()?;
+                    let lua = crate::codegen::expression_to_lua(&self.atom_model, &expr);
+                    cache.insert(atom.to_string(), lua.clone());
+                    lua
+                }
+            }
+        };
+        let runtime = self.runtime.borrow();
+        match runtime.eval_bool_in_state(&chunk, &state.0) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                // An atom that cannot be evaluated is not false; record it so the caller reports
+                // the claim as unverified rather than deciding it.
+                let mut slot = self.eval_error.borrow_mut();
+                if slot.is_none() {
+                    *slot = Some(format!("atom '{}' could not be evaluated: {}", atom, e));
+                }
+                None
+            }
+        }
     }
 
     fn atomic_props(&self, state: &Self::State) -> Option<std::collections::HashMap<String, bool>> {

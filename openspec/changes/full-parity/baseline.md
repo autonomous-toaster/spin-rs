@@ -5,13 +5,13 @@ one claim per model, so ours and pan are like for like.
 
 | outcome | count |
 |---|---|
-| agree | 91 |
+| agree | 121 |
 | false refutation | 0 |
 | false clean | 0 |
 | decline | 0 |
-| refusal | 0 |
+| refusal | 6 |
 | pan unbuildable | 0 |
-| total | 91 |
+| total | 127 |
 
 ## Wrong verdicts
 
@@ -21,22 +21,25 @@ None.
 
 | template | agree | wrong | other |
 |---|---|---|---|
-| `assign_then_atomic` | 5 | 0 | 0 |
-| `assign_then_do` | 5 | 0 | 0 |
-| `atomic_region` | 5 | 0 | 0 |
-| `do_then_assign` | 5 | 0 | 0 |
-| `do_then_do` | 5 | 0 | 0 |
-| `do_two_stmts` | 5 | 0 | 0 |
-| `dstep_region` | 5 | 0 | 0 |
-| `for_multi_then_assign` | 5 | 0 | 0 |
-| `for_then_assign` | 5 | 0 | 0 |
-| `for_two_stmts` | 5 | 0 | 0 |
-| `goto_over` | 5 | 0 | 0 |
-| `if_then_assign` | 5 | 0 | 0 |
+| `assign_then_atomic` | 6 | 0 | 0 |
+| `assign_then_do` | 6 | 0 | 0 |
+| `atomic_region` | 6 | 0 | 0 |
+| `do_then_assign` | 6 | 0 | 0 |
+| `do_then_do` | 6 | 0 | 0 |
+| `do_two_stmts` | 6 | 0 | 0 |
+| `dstep_region` | 6 | 0 | 0 |
+| `for_multi_then_assign` | 6 | 0 | 0 |
+| `for_then_assign` | 6 | 0 | 0 |
+| `for_two_stmts` | 6 | 0 | 0 |
+| `goto_over` | 6 | 0 | 0 |
+| `guard_a` | 6 | 0 | 0 |
+| `if_then_assign` | 6 | 0 | 0 |
 | `loop_and_assert` | 1 | 0 | 0 |
-| `nested_if_multi` | 5 | 0 | 0 |
-| `nested_if_two` | 5 | 0 | 0 |
-| `send_then_assign` | 5 | 0 | 0 |
-| `seq2_ab` | 5 | 0 | 0 |
-| `seq2_ba` | 5 | 0 | 0 |
-| `seq3_bxa` | 5 | 0 | 0 |
+| `nested_if_multi` | 6 | 0 | 0 |
+| `nested_if_two` | 6 | 0 | 0 |
+| `race_a` | 6 | 0 | 0 |
+| `rendezvous` | 0 | 0 | 6 |
+| `send_then_assign` | 6 | 0 | 0 |
+| `seq2_ab` | 6 | 0 | 0 |
+| `seq2_ba` | 6 | 0 | 0 |
+| `seq3_bxa` | 6 | 0 | 0 |

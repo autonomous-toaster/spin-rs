@@ -148,8 +148,15 @@ where
             // action is to leave the Büchi transition disabled rather than to assert a
             // value we did not observe.
             let all_conditions_met = buchi_trans.conditions.iter().all(|(prop, must_be_true)| {
-                match props.get(prop.as_str()) {
-                    Some(prop_val) => prop_val == must_be_true,
+                // A bare identifier is answered from the state's fields; anything else, such as
+                // `a == b`, is an expression the model may be able to decide. Leaving those
+                // absent made every comparison-shaped claim undecided.
+                let value = props
+                    .get(prop.as_str())
+                    .copied()
+                    .or_else(|| model.eval_atom(&next_state, prop));
+                match value {
+                    Some(prop_val) => prop_val == *must_be_true,
                     None => false,
                 }
             });

@@ -36,6 +36,16 @@ pub trait Model {
         None
     }
 
+    /// Decide an atomic proposition that names no single state variable, such as `a == b`.
+    ///
+    /// `atomic_props` answers per state field, which covers a bare identifier and nothing else.
+    /// A comparison used to be read as "absent" and therefore false, which made the product
+    /// transition disabled and the claim undecided - or, worse, vacuously satisfied. Returning
+    /// None means "not decided" and the caller must not read it as false.
+    fn eval_atom(&self, _state: &Self::State, _atom: &str) -> Option<bool> {
+        None
+    }
+
     /// Return LTL formulas associated with this model (empty by default).
     fn ltl_formulas(&self) -> &[crate::parser::ast::LtlFormula] {
         &[]

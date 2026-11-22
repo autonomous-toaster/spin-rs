@@ -246,13 +246,18 @@ active proctype P1() { do :: (1) -> a = 1; a = 2; break od }
 active proctype P2() { do :: (1) -> b = 1; b = 2; break od }
 active proctype P3() { do :: (1) -> c = 1; c = 2; break od }
 active proctype P4() { do :: (1) -> d = 1; d = 2; break od }
-ltl p0 { [] ( a == 0 || b == 0 ) }
-ltl p1 { [] ( b == 0 || c == 0 ) }
-ltl p2 { [] ( c == 0 || d == 0 ) }
+ltl p0 { [] ( !a ) }
+ltl p1 { [] ( !b ) }
+ltl p2 { [] ( !c ) }
  ";
     let r = run(src, true, 2);
     let claims = ["p0", "p1", "p2"];
     // The invariant: no claim may be absent. Each is either refuted or reported undecided.
+    //
+    // These claims are single atoms and every one of them is genuinely refutable, so a claim that
+    // is neither refuted nor starved would be one the run dropped. They used to be comparison
+    // atoms, which were always reported undecided - so the invariant held for the wrong reason:
+    // it passed because nothing could be decided, not because nothing was lost.
     for c in claims {
         let reported = r.violations.iter().any(|v| v.property_name == c)
             || r.unverified.iter().any(|u| u.property_name == c);

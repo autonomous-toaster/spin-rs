@@ -159,6 +159,13 @@ const CLAIMS: &[Claim] = &[
         name: "impl_db",
         text: "[] ( d -> b )",
     },
+    // A comparison atom, which is an expression over two fields rather than one name. It used to
+    // be undecidable - reported as unchecked, never as a verdict - so no template could exercise
+    // it.
+    Claim {
+        name: "eq_ab",
+        text: "[] ( a == b )",
+    },
     Claim {
         name: "ev_a",
         text: "<> ( a )",
@@ -206,6 +213,51 @@ fn loop_and_assert() -> Model {
     }
 }
 
+/// Two-process shapes.
+///
+/// Every entry in `TEMPLATES` is a single process, so no transition of one process ever races
+/// another and reduction is never exercised. These pair the same bodies with a second process
+/// that writes the same variables: whether the verdict is a refutation or not, pan and we have
+/// to agree on it, and a reduction that dropped an interfering transition would disagree.
+fn two_process_models() -> Vec<Model> {
+    const SHAPES: &[(&str, &str, &str)] = &[
+        // A second writer of `a`: `[] ( a -> b )` is genuinely refuted, because Q sets a while
+        // P has not reached b yet.
+        ("race_a", "b = 1; a = 1", "a = 1"),
+        // A second process that reads `a` in a guard: the guard can only fire after P sets it.
+        (
+            "guard_a",
+            "b = 1; a = 1",
+            "if :: (a) -> d = 1 :: else -> skip fi",
+        ),
+        // A rendezvous channel: its send pairs with a receive in another process, so it is one
+        // transition over two processes. This engine moves one process per transition, so the
+        // shape is counted as a refusal rather than left out of the corpus.
+        ("rendezvous", "c ! 1; b = 1", "bit x; c ? x"),
+    ];
+    let mut out = Vec::new();
+    for (name, p_body, q_body) in SHAPES {
+        for c in CLAIMS {
+            let procs =
+                format!("active proctype P() {{ {p_body} }}\nactive proctype Q() {{ {q_body} }}");
+            // The rendezvous shape needs a capacity-0 declaration; every other shape uses the
+            // shared buffered declarations, if any.
+            let globals = if *name == "rendezvous" {
+                "chan c = [0] of { bit };"
+            } else {
+                ""
+            };
+            out.push(Model {
+                name: format!("{name}__{}", c.name),
+                source: render(globals, &procs, Some(c.text)),
+                template: name,
+                claim: c.name,
+            });
+        }
+    }
+    out
+}
+
 /// Every generated model.
 pub fn corpus() -> Vec<Model> {
     let mut out = Vec::new();
@@ -221,6 +273,7 @@ pub fn corpus() -> Vec<Model> {
         }
     }
     out.push(loop_and_assert());
+    out.extend(two_process_models());
     out
 }
 

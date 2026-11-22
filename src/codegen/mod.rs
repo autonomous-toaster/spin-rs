@@ -24,6 +24,28 @@ pub fn generate(model: &PromelaModel) -> GeneratedLua {
     g.finish()
 }
 
+/// Translate one Promela expression into Lua against the model's globals.
+///
+/// A claim's atom is evaluated against a state rather than generated as part of a transition, so
+/// it needs the same name mapping the emitters use - global variables are stored under their own
+/// names - but no proctype context.
+pub fn expression_to_lua(model: &PromelaModel, e: &Expression) -> String {
+    let mut g = LuaGenerator::new();
+    for decl in &model.declarations {
+        match decl {
+            TopLevel::GlobalVar(v) => {
+                g.global_vars.insert(v.name.clone());
+            }
+            TopLevel::ChanDecl { name, .. } => {
+                g.global_vars.insert(name.clone());
+            }
+            _ => {}
+        }
+    }
+    g.current_proctype = None;
+    g.expr_to_lua(e)
+}
+
 /// Compile a Promela model into Lua source code with optimizations.
 pub fn generate_with_opt(model: &PromelaModel, opt: &optimize::OptLevel) -> GeneratedLua {
     let optimized = optimize::apply_to_model(model, opt);

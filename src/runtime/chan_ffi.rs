@@ -168,7 +168,15 @@ fn register_chan_send(lua: &mlua::Lua, channels: Registry) -> mlua::Result<()> {
         let msg = values_to_message(values, "chan_send")?;
         let mut queue = messages_of(&state, &name)?;
         let capacity = capacity_of(&channels.lock().unwrap(), &name)?;
-        if capacity == 0 || queue.len() >= capacity {
+        if capacity == 0 {
+            // A rendezvous send pairs with a receive in another process, so it is one transition
+            // over two processes. This engine moves one process per transition, so the model is
+            // refused rather than given a verdict it has not earned.
+            return Err(mlua::Error::runtime(
+                "a rendezvous channel (capacity 0) needs a transition over two processes, which is not implemented",
+            ));
+        }
+        if queue.len() >= capacity {
             return Err(mlua::Error::runtime("channel full"));
         }
         queue.push(msg);
@@ -185,7 +193,12 @@ fn register_chan_send_sorted(lua: &mlua::Lua, channels: Registry) -> mlua::Resul
         let msg = values_to_message(values, "chan_send_sorted")?;
         let mut queue = messages_of(&state, &name)?;
         let capacity = capacity_of(&channels.lock().unwrap(), &name)?;
-        if capacity == 0 || queue.len() >= capacity {
+        if capacity == 0 {
+            return Err(mlua::Error::runtime(
+                "a rendezvous channel (capacity 0) needs a transition over two processes, which is not implemented",
+            ));
+        }
+        if queue.len() >= capacity {
             return Err(mlua::Error::runtime("channel full"));
         }
         let val = msg.first().copied().unwrap_or(0);
