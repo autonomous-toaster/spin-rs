@@ -472,10 +472,13 @@ fn for_stmt(input: Input) -> IResult<Input, Stmt> {
     alt((for_promela_style, for_c_style))(input)
 }
 
-/// Parse Promela-style: for (var in start .. end) { body } and expand at parse time.
+/// Parse Promela-style `for (var : start .. end) { body }` and expand at parse time.
+///
+/// The separator is a colon in Promela; this accepted only `in`, so every valid Promela for-loop
+/// was rejected as a parse error. Both are accepted now.
 fn for_promela_style(input: Input) -> IResult<Input, Stmt> {
     let (input, var_name) = ident(input)?;
-    let (input, _) = symbol("in")(input)?;
+    let (input, _) = alt((symbol("in"), symbol(":")))(input)?;
     let (input, start_val) = int_literal(input)?;
     let (input, _) = symbol("..")(input)?;
     let (input, end_val) = int_literal(input)?;
