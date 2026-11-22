@@ -5,13 +5,13 @@ one claim per model, so ours and pan are like for like.
 
 | outcome | count |
 |---|---|
-| agree | 125 |
+| agree | 129 |
 | false refutation | 0 |
 | false clean | 0 |
 | decline | 0 |
 | refusal | 6 |
 | pan unbuildable | 0 |
-| total | 131 |
+| total | 135 |
 
 ## Wrong verdicts
 
@@ -24,6 +24,8 @@ None.
 | `assign_then_atomic` | 6 | 0 | 0 |
 | `assign_then_do` | 6 | 0 | 0 |
 | `atomic_region` | 6 | 0 | 0 |
+| `bit_wrap` | 1 | 0 | 0 |
+| `byte_wrap` | 1 | 0 | 0 |
 | `channel_por` | 1 | 0 | 0 |
 | `channel_state` | 1 | 0 | 0 |
 | `do_blocks` | 1 | 0 | 0 |
@@ -38,6 +40,7 @@ None.
 | `guard_a` | 6 | 0 | 0 |
 | `if_then_assign` | 6 | 0 | 0 |
 | `loop_and_assert` | 1 | 0 | 0 |
+| `mod_negative` | 1 | 0 | 0 |
 | `nested_if_multi` | 6 | 0 | 0 |
 | `nested_if_two` | 6 | 0 | 0 |
 | `race_a` | 6 | 0 | 0 |
@@ -47,3 +50,4 @@ None.
 | `seq2_ab` | 6 | 0 | 0 |
 | `seq2_ba` | 6 | 0 | 0 |
 | `seq3_bxa` | 6 | 0 | 0 |
+| `zero_guard` | 1 | 0 | 0 |

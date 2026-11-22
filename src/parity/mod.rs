@@ -287,6 +287,32 @@ fn fixed_models() -> Vec<Model> {
             "chan c[2] = [1] of { bit };\nbit a = 0, b = 0;\nactive proctype P() { c[0] ! 1 }\nactive proctype Q() { bit x; if :: c[0] ? x -> a = 1 :: else -> skip fi }",
             "[] ( !a )",
         ),
+        // Promela's integers are fixed width. 255 + 1 wraps to 0; a value that keeps 256 refutes a
+        // claim pan satisfies.
+        (
+            "byte_wrap",
+            "byte x = 255;\nbit bad = 0;\nactive proctype P() { x = x + 1; if :: (x == 0) -> bad = 1 :: else -> skip fi }",
+            "[] ( !bad )",
+        ),
+        // `bit b = 2` stores 0, not 2.
+        (
+            "bit_wrap",
+            "bit b = 0;\nbit bad = 0;\nactive proctype P() { b = 2; if :: (b == 0) -> bad = 1 :: else -> skip fi }",
+            "[] ( !bad )",
+        ),
+        // Remainder follows C: -7 % 2 is -1. Lua floors it to 1, which made this claim false here.
+        (
+            "mod_negative",
+            "short x = 0;\nbit bad = 0;\nactive proctype P() { x = 0 - 7; if :: (x % 2 == -1) -> bad = 1 :: else -> skip fi }",
+            "[] ( !bad )",
+        ),
+        // A guard is true when it is non-zero: with n == 0 the branch is disabled, as in pan. Lua
+        // treats 0 as true, so the branch ran and the claim was refuted.
+        (
+            "zero_guard",
+            "byte n = 0;\nbit a = 0;\nactive proctype P() { if :: (n) -> a = 1 :: else -> skip fi }",
+            "[] ( !a )",
+        ),
         // A do loop whose guards run out blocks; it does not fall through. pan calls that an
         // invalid end state, and reporting it as clean would be a false green.
         (
