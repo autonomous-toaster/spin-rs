@@ -16,21 +16,19 @@
 
 ## Phase 2: Execution Model
 
-- [ ] 2.1 CFG builder per proctype: nodes = positions between statements, edges = statements
-      (not yet: a body of more than one statement is routed through the step machine, which
-      sequences simple statements correctly and refuses the constructs it cannot flatten)
-- [ ] 2.2 Emit one transition per edge, guarded on the position, effect carrying the successor
+- [x] 2.1 CFG builder per proctype: nodes = positions between statements, edges = statements
+      (`src/codegen/flatten.rs`: layout then emit, every jump resolved at generation time)
+- [x] 2.2 Emit one transition per edge, guarded on the position, effect carrying the successor
 - [ ] 2.3 Collapse the five counters into one `_pc_<P>`; derive termination from it
-- [ ] 2.4 `atomic` and `d_step` as one fused edge per region
-- [ ] 2.5 `goto`, `label`, `break` as edge targets; no control transfer writes the termination flag
+- [x] 2.4 `atomic` and `d_step` as one fused edge per region
+- [x] 2.5 `goto`, `label`, `break` as edge targets; no control transfer writes the termination flag
 - [ ] 2.6 `for` as init edge, loop-head node and exit edge
 - [x] 2.7 Sequencing sweep: the generated corpus measures this. Sequences, an assignment before
       a loop and two sequential loops no longer produce a wrong verdict
-- [ ] 2.10 Nested `do/od` as a step: refused today, 12 of the 28 refusals
+- [x] 2.10 Nested `do/od` as a step
 - [ ] 2.11 `for` loops as steps: refused today, 4 of the refusals
-- [ ] 2.12 `atomic` and `d_step` as ONE fused step: not fused, which is 2 wrong verdicts and 4
-      refusals (the intermediate state between two assignments is reachable; pan's is not)
-- [ ] 2.13 A nested `if` whose branch is another `if`: refused today, 4 of the refusals
+- [x] 2.12 `atomic` and `d_step` as ONE fused step
+- [x] 2.13 A nested `if` whose branch is another `if`
 - [ ] 2.8 Remove the shape-specific repairs the CFG makes unnecessary, one at a time, each
       gated by 1.5: nested-if expansion, trailing-`break` fold, multi-statement branch refusal,
       blocking-expression hoisting guard
@@ -67,7 +65,13 @@
 - [ ] 5.4 `never` claims: verdict parity against pan
 - [ ] 5.5 `progress`, `accept` and `end` labels; non-progress cycles
 - [ ] 5.6 Liveness verdict parity on the generated corpus
-- [ ] 5.7 A model that terminates SHALL NOT be reported as an accepting cycle: `b = 1; a = 1` with
+- [ ] 5.7 A model that terminates SHALL NOT be reported as an accepting cycle: fixed for every
+      shape except a channel send before the observed write
+- [ ] 2.15 `for (i : 0 .. 0) { b = 1 }; a = 1` still fails to parse, though the same loop without
+      the leading `byte i;` and the trailing statement parses. The colon separator is accepted now
+- [ ] 2.16 `<>` over a model that sends on a channel before the observed write reports an accepting
+      cycle at trail length 0 where pan accepts. Repro:
+      `chan c = [1] of { bit }; active proctype P() { c ! 1; a = 1 }` with `<> ( a )`: `b = 1; a = 1` with
       `<>(a)` is refuted today and pan accepts it
 
 ## Phase 6: Inert Mechanisms

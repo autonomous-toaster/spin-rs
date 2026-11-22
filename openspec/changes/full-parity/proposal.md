@@ -76,15 +76,15 @@ sequences correctly, with a trailing `break` so the last step terminates the pro
 the step machine cannot flatten - a nested `do`, a `for`, a `goto`, an `atomic` region - are now
 **refused** rather than reordered or silently advanced past.
 
-| outcome | before Phase 1 | after Phase 2 so far |
+| outcome | before | after |
 |---|---|---|
-| agree | 31 | 31 |
-| false refutation | 25 | **4** |
-| false clean | 5 | **2** |
-| refusal | 4 | 28 |
+| agree | 31 | **60** |
+| false refutation | 25 | **1** |
+| false clean | 5 | **0** |
+| refusal | 4 | **4** |
 
-Wrong verdicts: **30 to 6**. Refusals rose because a refusal is what an unsequenced construct now
-does instead of being quietly reordered; those 28 are the CFG work (2.10-2.13), not regressions.
+Wrong verdicts: **30 to 1**. The four refusals are one `for` model shape that does not parse;
+everything the step machine refused is now expressed as edges.
 
 Three silent defects were found and fixed on the way, all of the same shape - a mechanism that is
 declared and participates in nothing: the step machine dropped `atomic`/`unless`/`for` statements
