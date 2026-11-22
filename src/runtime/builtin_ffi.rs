@@ -13,6 +13,8 @@ pub(crate) fn register_all(lua: &mlua::Lua) -> mlua::Result<()> {
     register_np_(lua)?;
     register_pc_value(lua)?;
     register_truthy(lua)?;
+    register_wrap(lua)?;
+    register_int_ops(lua)?;
     register_get_priority(lua)?;
     register_set_priority(lua)?;
     Ok(())
@@ -114,6 +116,60 @@ fn register_np_(lua: &mlua::Lua) -> mlua::Result<()> {
         Ok(true)
     })?;
     lua.globals().set("_spin_np_", f)?;
+    Ok(())
+}
+
+/// Integer division and remainder with C's semantics, which are Promela's.
+///
+/// Lua's `/` is floating point and its `%` floors: `-7 % 2` is 1 in Lua and -1 in C, so a claim of
+/// the form `(x % 2 == -1)` was false here and true in pan. Division truncates toward zero, and
+/// dividing by zero is refused rather than producing an infinity that then gets truncated.
+fn register_int_ops(lua: &mlua::Lua) -> mlua::Result<()> {
+    let div = lua.create_function(|_lua, (a, b): (i64, i64)| {
+        if b == 0 {
+            return Err(mlua::Error::runtime("division by zero"));
+        }
+        Ok(a / b)
+    })?;
+    lua.globals().set("_spin_div", div)?;
+    let rem = lua.create_function(|_lua, (a, b): (i64, i64)| {
+        if b == 0 {
+            return Err(mlua::Error::runtime("modulo by zero"));
+        }
+        Ok(a % b)
+    })?;
+    lua.globals().set("_spin_mod", rem)?;
+    Ok(())
+}
+
+/// Truncate a value to a Promela type.
+///
+/// Promela's types are fixed width and assignments wrap: `byte x = 255; x = x + 1` leaves x at 0, and
+/// `bit b = 2` leaves b at 0. Lua numbers are arbitrary precision, so every stored value went out of
+/// range and a claim that pan satisfies was refuted - or, in the four probe models that found this,
+/// a claim that pan refutes was reported clean.
+///
+/// The argument is the type's width in bits and whether it is signed; the state stores the value
+/// after truncation, exactly as pan's state vector does.
+fn register_wrap(lua: &mlua::Lua) -> mlua::Result<()> {
+    let f = lua.create_function(|_lua, (width, signed, v): (i64, bool, i64)| {
+        if width <= 0 {
+            return Ok(v);
+        }
+        let modulus = 1i64.checked_shl(width as u32).unwrap_or(0);
+        if modulus == 0 {
+            return Ok(v);
+        }
+        let mut r = v % modulus;
+        if r < 0 {
+            r += modulus;
+        }
+        if signed && r >= modulus / 2 {
+            r -= modulus;
+        }
+        Ok(r)
+    })?;
+    lua.globals().set("_spin_wrap", f)?;
     Ok(())
 }
 

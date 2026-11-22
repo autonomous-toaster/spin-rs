@@ -66,6 +66,7 @@ impl LuaGenerator {
             (Add, " + "),
             (Sub, " - "),
             (Mul, " * "),
+            // Integer division and remainder follow C, not Lua: see `_spin_div`.
             (Div, " / "),
             (Mod, " % "),
             (Eq, " == "),
@@ -140,6 +141,18 @@ impl LuaGenerator {
                         let r = self.expr_to_lua(right);
                         format!("(({} ~= 0) or ({} ~= 0)) and 1 or 0", l, r)
                     }
+                    // Promela divides and takes remainders as C does, and Lua does neither:
+                    // `/` is floating point and `%` floors, so `-7 % 2` was 1 where pan has -1.
+                    Div => format!(
+                        "_spin_div({}, {})",
+                        self.expr_to_lua(left),
+                        self.expr_to_lua(right)
+                    ),
+                    Mod => format!(
+                        "_spin_mod({}, {})",
+                        self.expr_to_lua(left),
+                        self.expr_to_lua(right)
+                    ),
                     _ => format!(
                         "{}{}{}",
                         self.expr_to_lua(left),

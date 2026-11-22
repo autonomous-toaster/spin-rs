@@ -284,7 +284,7 @@ impl LuaGenerator {
                 value,
                 ..
             } => {
-                let v = self.expr_to_lua(value);
+                let v = self.wrap_value(target, self.expr_to_lua(value));
                 let target_name = if self.global_vars.contains(target.as_str()) {
                     target.to_string()
                 } else if let Some(ref pname) = self.current_proctype {

@@ -12,7 +12,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::parser::ast::{Expression, RecvTarget, Stmt};
+use crate::parser::ast::{Expression, RecvTarget, Stmt, VarType};
 
 use super::LuaGenerator;
 use super::optimize::{vars_in_expr, vars_read_by_stmt, vars_written_by_stmt};
@@ -121,6 +121,29 @@ impl LuaGenerator {
     /// Same mapping, boxed so callers outside an expression context can hold it.
     pub(crate) fn map_fn_pub(&self) -> impl Fn(&str) -> String + '_ {
         move |n: &str| self.state_field(n)
+    }
+
+    /// Truncate an assigned value to the declared type of the target.
+    ///
+    /// Promela's types are fixed width: `byte x = 255; x = x + 1` leaves x at 0, `bit b = 2` leaves b
+    /// at 0. Lua numbers are arbitrary precision, so a value went out of range and stayed there.
+    /// A field whose type is unknown - a typedef member, say - is left alone rather than guessed
+    /// at.
+    pub(crate) fn wrap_value(&self, target: &str, value_lua: String) -> String {
+        let field = self.state_field(target);
+        match self.var_types.get(&field) {
+            Some(VarType::Bit) | Some(VarType::Bool) => {
+                format!("_spin_wrap(1, false, {})", value_lua)
+            }
+            Some(VarType::Byte) => format!("_spin_wrap(8, false, {})", value_lua),
+            Some(VarType::Short) => format!("_spin_wrap(16, true, {})", value_lua),
+            Some(VarType::Int) => format!("_spin_wrap(32, true, {})", value_lua),
+            Some(VarType::Unsigned(Some(w))) => {
+                format!("_spin_wrap({}, false, {})", w, value_lua)
+            }
+            Some(VarType::Unsigned(None)) => format!("_spin_wrap(32, false, {})", value_lua),
+            _ => value_lua,
+        }
     }
 
     /// Dependencies of a transition that evaluates `guard` and executes `body`, plus any

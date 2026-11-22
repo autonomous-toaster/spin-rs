@@ -10,6 +10,7 @@ impl LuaGenerator {
             proctype_names: Vec::new(),
             current_proctype: None,
             current_provided: None,
+            var_types: std::collections::HashMap::new(),
             global_vars: std::collections::HashSet::new(),
             inlines: std::collections::HashMap::new(),
             label_steps: std::collections::HashMap::new(),
@@ -86,6 +87,7 @@ impl LuaGenerator {
             match decl {
                 TopLevel::GlobalVar(v) => {
                     self.global_vars.insert(v.name.clone());
+                    self.var_types.insert(v.name.clone(), v.var_type.clone());
                     if let Some(arr_size) = v.array_size {
                         if arr_size > 0 {
                             // Emit array as Lua table: {0, 0, ...}
@@ -146,6 +148,8 @@ impl LuaGenerator {
                         // Local variable declarations from body (prefixed with proctype name)
                         let local_vars = Self::collect_var_decls(&p.body);
                         for vd in local_vars {
+                            self.var_types
+                                .insert(format!("{}_{}", prefix, vd.name), vd.var_type.clone());
                             if let Some(arr_size) = vd.array_size {
                                 if arr_size > 0 {
                                     let default = default_value(&vd.var_type);

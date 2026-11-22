@@ -64,6 +64,11 @@ pub(crate) struct LuaGenerator {
     pub(crate) current_proctype: Option<String>,
     /// The `provided (expr)` condition of the proctype being emitted, if it has one.
     pub(crate) current_provided: Option<Expression>,
+    /// Declared type of every state field, keyed by the field name the state stores.
+    ///
+    /// Promela's types are fixed width and assignments wrap, so the value a variable holds is not
+    /// the value the expression produced.
+    pub(crate) var_types: std::collections::HashMap<String, VarType>,
     pub(crate) global_vars: std::collections::HashSet<String>,
     pub(crate) inlines: std::collections::HashMap<String, crate::parser::ast::InlineDef>,
     /// Label step numbers for goto/break/label: label_name -> step_number

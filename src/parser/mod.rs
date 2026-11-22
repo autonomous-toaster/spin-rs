@@ -7,7 +7,7 @@ use nom::{
     branch::alt,
     combinator::{map, opt},
     multi::{many0, many1, separated_list0, separated_list1},
-    sequence::{delimited, pair, preceded},
+    sequence::{delimited, pair, preceded, terminated},
 };
 use std::fs;
 use std::path::Path;
@@ -96,6 +96,7 @@ fn stmt_inner(input: Input) -> IResult<Input, Stmt> {
         skip_stmt,
         recv_stmt,
         var_decl_stmt,
+        incr_stmt,
         assignment_stmt,
         send_stmt,
         label_stmt,
@@ -107,6 +108,36 @@ fn var_decl_stmt(input: Input) -> IResult<Input, Stmt> {
     let (input, decl) = var_decl(input)?;
     let (input, _) = opt(symbol(";"))(input)?;
     Ok((input, Stmt::VarDecl(decl)))
+}
+
+/// `x++`, `x--`, `++x`, `--x`: an increment written as a statement.
+///
+/// Parsed before `assignment_stmt`, which would otherwise read `x` as a bare expression and leave
+/// the operator unconsumed, taking the enclosing proctype down with it.
+fn incr_stmt(input: Input) -> IResult<Input, Stmt> {
+    fn build(name: String, delta: i64) -> Stmt {
+        Stmt::Assignment {
+            target: name.clone(),
+            index: None,
+            field: None,
+            value: Box::new(Expression::BinaryOp {
+                op: if delta > 0 {
+                    BinaryOp::Add
+                } else {
+                    BinaryOp::Sub
+                },
+                left: Box::new(Expression::Ident(name)),
+                right: Box::new(Expression::IntLit(delta.abs())),
+            }),
+            line: 0,
+        }
+    }
+    alt((
+        map(preceded(symbol("++"), ident), |name| build(name, 1)),
+        map(preceded(symbol("--"), ident), |name| build(name, -1)),
+        map(terminated(ident, symbol("++")), |name| build(name, 1)),
+        map(terminated(ident, symbol("--")), |name| build(name, -1)),
+    ))(input)
 }
 
 fn assignment_stmt(input: Input) -> IResult<Input, Stmt> {

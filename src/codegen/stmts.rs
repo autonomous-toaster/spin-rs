@@ -9,7 +9,7 @@ impl LuaGenerator {
         value: &Expression,
         depth: usize,
     ) {
-        let expr_str = self.expr_to_lua(value);
+        let expr_str = self.wrap_value(target, self.expr_to_lua(value));
         self.emit(&format!(
             "    -- T{}: {}{}",
             depth,
