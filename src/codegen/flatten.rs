@@ -256,10 +256,9 @@ impl LuaGenerator {
 
     /// The field that terminates this body's process.
     fn done_field(&self) -> String {
-        match self.current_proctype {
-            Some(ref p) => format!("_done_{}", p),
-            None => "_done".to_string(),
-        }
+        self.current_done
+            .clone()
+            .unwrap_or_else(|| "_done".to_string())
     }
 
     /// Declare a transition that only moves the program counter.
@@ -368,11 +367,10 @@ impl LuaGenerator {
             self.emit_stmts(body, 0);
             return;
         }
-        let step_var = if let Some(ref pname) = self.current_proctype {
-            format!("_step_{}", pname)
-        } else {
-            "_step".to_string()
-        };
+        let step_var = self
+            .current_step
+            .clone()
+            .unwrap_or_else(|| "_step".to_string());
         let provided = self.provided_guard();
         let total: usize = exec.iter().map(|s| self.fsize(s)).sum();
         let end = total;
@@ -516,10 +514,7 @@ impl LuaGenerator {
                         "    guard = function(s) return s.{} == {}{} end,",
                         step_var, i, provided
                     ));
-                    let done = match self.current_proctype {
-                        Some(ref p) => format!("s._done_{} = true", p),
-                        None => "s._done = true".to_string(),
-                    };
+                    let done = format!("s.{} = true", self.done_field());
                     self.emit(&format!("    effect = function(s) {} end,", done));
                     self.emit_opaque_deps();
                     self.emit(&format!("    label = \"body:step{}\",", i));

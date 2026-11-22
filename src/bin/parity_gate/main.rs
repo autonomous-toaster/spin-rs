@@ -6,6 +6,8 @@
 //!   the change directory.
 //! - `--gate` fails when the corpus contains a wrong verdict that is not already listed in
 //!   the recorded baseline, and warns when a recorded one starts passing, so the list cannot rot.
+//! - `--dir <path>` runs a directory of `.pml` files instead of the generated corpus, which is how
+//!   the models shipped with spin itself are measured. Reports and exits; writes nothing.
 //!
 //! Exit codes: 0 pass, 1 wrong verdict, 2 no oracle. A gate that cannot reach pan exits 2 rather
 //! than reporting success: an unmeasured corpus is not a passing corpus.
@@ -35,6 +37,13 @@ fn run() -> i32 {
         .windows(2)
         .find(|w| w[0] == "--filter")
         .map(|w| w[1].clone());
+    let dir = args
+        .windows(2)
+        .find(|w| w[0] == "--dir")
+        .map(|w| w[1].clone());
+    if let Some(path) = dir {
+        return run_directory(Path::new(&path));
+    }
 
     if baseline == gate {
         eprintln!("usage: parity_gate --baseline | --gate [--filter <substr>]");
@@ -85,6 +94,153 @@ fn run() -> i32 {
         return 0;
     }
     gate_result(&rows)
+}
+
+/// Run every `.pml` file under `path` instead of the generated corpus.
+///
+/// This is how the models that ship with spin itself are measured: `Examples/` in the Spin source
+/// tree carries 78 of them, from the tool's own author, and `Examples/README_tests.txt` records
+/// pan's expected results for a handful. The comparison is the same one the generated corpus gets -
+/// verdict and error count per model - with one addition: a file carrying more than one claim is
+/// not comparable from a single error count, so it is named as such instead of being guessed at.
+fn run_directory(path: &Path) -> i32 {
+    if !path.exists() {
+        eprintln!("no such directory: {}", path.display());
+        return 2;
+    }
+    if !oracle_available() {
+        eprintln!("no oracle: spin and gcc must be on PATH.");
+        return 2;
+    }
+
+    let mut files = Vec::new();
+    collect_pml(path, &mut files);
+    files.sort();
+    if files.is_empty() {
+        eprintln!("no .pml files under {}", path.display());
+        return 2;
+    }
+
+    let root = std::env::temp_dir().join("spin_rs_parity_dir");
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::create_dir_all(&root);
+
+    println!(
+        "external corpus: {} models under {}",
+        files.len(),
+        path.display()
+    );
+    let mut rows = Vec::with_capacity(files.len());
+    // Why each model we could not decide went undecided. Grouped at the end, because the list
+    // of reasons is the work list: fifty refusals with one reason is one missing feature.
+    let mut reasons: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for (i, file) in files.iter().enumerate() {
+        let Ok(source) = std::fs::read_to_string(file) else {
+            continue;
+        };
+        let name = file
+            .strip_prefix(path)
+            .unwrap_or(file)
+            .display()
+            .to_string();
+        let claims = count_claims(&source);
+        let dir = root.join(format!("m{i}"));
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join("m.pml"), &source);
+
+        let (outcome, ours, pan) = if claims > 1 {
+            (Outcome::NotComparable, Ours::Decline, None)
+        } else {
+            let (ours, why) = ours_outcome_capped(&source);
+            if let Some(why) = why {
+                reasons.entry(why).or_default().push(name.clone());
+            }
+            let pan = pan_errors(&dir, None);
+            (classify(ours, pan), ours, pan)
+        };
+        if i % 10 == 0 {
+            println!("  {} / {}", i + 1, files.len());
+        }
+        rows.push(Row {
+            name,
+            template: "external",
+            outcome,
+            ours,
+            pan,
+        });
+    }
+
+    if !reasons.is_empty() {
+        println!("\nnot decided, by reason:");
+        for (reason, names) in &reasons {
+            println!("  {:>3}  {}", names.len(), reason);
+            if names.len() <= 3 {
+                for n in names {
+                    println!("         {}", n);
+                }
+            }
+        }
+    }
+
+    report(&rows);
+    if rows.iter().any(|r| r.outcome.is_wrong()) {
+        1
+    } else {
+        0
+    }
+}
+
+fn collect_pml(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_pml(&path, out);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("pml") {
+            out.push(path);
+        }
+    }
+}
+
+/// `ltl` and `never` declarations, which each become a claim pan checks in its own run.
+fn count_claims(source: &str) -> usize {
+    source
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            t.starts_with("ltl ") || t.starts_with("ltl{") || t.starts_with("never")
+        })
+        .count()
+}
+
+/// Our verdict with a state cap, so one upstream model cannot hang the measurement.
+fn ours_outcome_capped(source: &str) -> (Ours, Option<String>) {
+    let cfg = spin_rs::CheckerConfig {
+        max_states: 300_000,
+        ..Default::default()
+    };
+    match spin_rs::verify_with_config(source, &cfg) {
+        Ok(r) if r.unverified.is_empty() => (Ours::Verdict(r.errors), None),
+        Ok(r) => (
+            Ours::Decline,
+            Some(format!(
+                "declined: {}",
+                r.unverified.first().map(|u| u.kind.as_str()).unwrap_or("?")
+            )),
+        ),
+        Err(e) => (
+            Ours::Refuse,
+            Some(format!("refused: {}", first_line(&e.to_string()))),
+        ),
+    }
+}
+
+/// Everything before the first newline, so a multi-line diagnostic groups with its kind.
+fn first_line(s: &str) -> String {
+    s.lines().next().unwrap_or("").to_string()
 }
 
 fn ours_outcome(source: &str) -> Ours {

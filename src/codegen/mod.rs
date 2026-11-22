@@ -64,6 +64,19 @@ pub(crate) struct LuaGenerator {
     pub(crate) current_proctype: Option<String>,
     /// The `provided (expr)` condition of the proctype being emitted, if it has one.
     pub(crate) current_provided: Option<Expression>,
+    /// The field that records this body's process as finished.
+    ///
+    /// A proctype uses `_done_<name>` and an `init` block uses `_done_init`, which the state
+    /// declares and the init transition function tests. The flattened body wrote `_done` when
+    /// there was no proctype name, so an init block never marked itself finished and every model
+    /// with an init block ended in a reported deadlock.
+    pub(crate) current_done: Option<String>,
+    /// The state field that holds this body's program counter.
+    ///
+    /// It was derived from the proctype name, so an `init` block emitted guards on `s._step`, a
+    /// field no state declares: every guard was false, the init never ran, and the model was
+    /// reported as a deadlock.
+    pub(crate) current_step: Option<String>,
     /// Declared type of every state field, keyed by the field name the state stores.
     ///
     /// Promela's types are fixed width and assignments wrap, so the value a variable holds is not

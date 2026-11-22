@@ -313,6 +313,14 @@ fn fixed_models() -> Vec<Model> {
             "byte n = 0;\nbit a = 0;\nactive proctype P() { if :: (n) -> a = 1 :: else -> skip fi }",
             "[] ( !a )",
         ),
+        // An `init` block. Its transition function was emitted and never registered with the
+        // dispatcher, so it never ran; the process also wrote `_done` where the state tracks
+        // `_done_init`, so every model with an init block ended in a reported deadlock.
+        (
+            "init_block",
+            "bool a = 0;\ninit { a = 1 }\nactive proctype P() { skip }",
+            "<> ( a )",
+        ),
         // A do loop whose guards run out blocks; it does not fall through. pan calls that an
         // invalid end state, and reporting it as clean would be a false green.
         (
@@ -381,6 +389,9 @@ pub enum Outcome {
     Refusal,
     /// pan could not build the model, so there is nothing to compare against.
     PanUnbuildable,
+    /// The model carries more than one claim, so one error count cannot be compared with pan's
+    /// per-claim runs. Named rather than silently dropped.
+    NotComparable,
 }
 
 impl Outcome {
@@ -392,12 +403,18 @@ impl Outcome {
             Outcome::Decline => "decline",
             Outcome::Refusal => "refusal",
             Outcome::PanUnbuildable => "pan unbuildable",
+            Outcome::NotComparable => "not comparable",
         }
     }
 
     /// True when the comparison found a difference that is our fault.
     pub fn is_wrong(self) -> bool {
         matches!(self, Outcome::FalseRefutation | Outcome::FalseClean)
+    }
+
+    /// Was this model actually compared against pan?
+    pub fn is_compared(self) -> bool {
+        !matches!(self, Outcome::PanUnbuildable | Outcome::NotComparable)
     }
 }
 

@@ -10,6 +10,8 @@ impl LuaGenerator {
             proctype_names: Vec::new(),
             current_proctype: None,
             current_provided: None,
+            current_done: None,
+            current_step: None,
             var_types: std::collections::HashMap::new(),
             global_vars: std::collections::HashSet::new(),
             inlines: std::collections::HashMap::new(),
@@ -263,6 +265,7 @@ impl LuaGenerator {
             .any(|d| matches!(d, TopLevel::Init(_)))
         {
             self.emit("    state._done_init = false");
+            self.emit("    state._step_init = 0");
         }
         for line in &lines {
             self.emit(line);
@@ -296,22 +299,24 @@ impl LuaGenerator {
                     }
                 }
                 TopLevel::Init(i) => {
-                    // init block: runs once at startup
+                    // init block: runs once at startup. Registered with the dispatcher, which
+                    // iterates exactly this list: emitting the function without pushing its name
+                    // produced a transition table nothing ever called, so an init block never ran.
+                    self.proctype_names
+                        .push("_spin_transitions_init".to_string());
                     self.emit("-- init block");
                     self.emit("function _spin_transitions_init(state)");
                     self.indent += 1;
                     self.emit("    if state._done_init then return {} end");
                     self.emit("    local transitions = {}");
+                    // The body terminates the init process at its last step. This used to be an
+                    // extra always-enabled transition emitted after the body, which marked init
+                    // done even while the body was midway through.
+                    self.current_done = Some("_done_init".to_string());
+                    self.current_step = Some("_step_init".to_string());
                     self.emit_body_sequenced(&i.body, 0);
-                    self.emit("    -- Mark init as done after first execution");
-                    self.emit("    table.insert(transitions, {");
-                    self.indent += 1;
-                    self.emit("        guard = function() return true end,");
-                    self.emit("        effect = function(s) s._done_init = true end,");
-                    self.emit("        owner = \"init\", reads = {}, writes = {\"_done_init\"}, internal = true, opaque = false,");
-                    self.emit("        label = \"init:done\",");
-                    self.indent -= 1;
-                    self.emit("    })");
+                    self.current_done = None;
+                    self.current_step = None;
                     self.emit("    return transitions");
                     self.indent -= 1;
                     self.emit("end");
@@ -366,6 +371,8 @@ impl LuaGenerator {
         };
         self.proctype_names.push(fn_name.clone());
         self.current_proctype = Some(prefix.clone());
+        self.current_done = Some(format!("_done_{}", prefix));
+        self.current_step = Some(format!("_step_{}", prefix));
         // `provided` gates the whole proctype: pan runs it only while the condition holds.
         self.current_provided = p.provided.clone();
 
@@ -399,5 +406,7 @@ impl LuaGenerator {
         self.emit("");
         self.current_proctype = None;
         self.current_provided = None;
+        self.current_done = None;
+        self.current_step = None;
     }
 }

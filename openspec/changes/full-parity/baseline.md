@@ -5,13 +5,13 @@ one claim per model, so ours and pan are like for like.
 
 | outcome | count |
 |---|---|
-| agree | 129 |
+| agree | 130 |
 | false refutation | 0 |
 | false clean | 0 |
 | decline | 0 |
 | refusal | 6 |
 | pan unbuildable | 0 |
-| total | 135 |
+| total | 136 |
 
 ## Wrong verdicts
 
@@ -39,6 +39,7 @@ None.
 | `goto_over` | 6 | 0 | 0 |
 | `guard_a` | 6 | 0 | 0 |
 | `if_then_assign` | 6 | 0 | 0 |
+| `init_block` | 1 | 0 | 0 |
 | `loop_and_assert` | 1 | 0 | 0 |
 | `mod_negative` | 1 | 0 | 0 |
 | `nested_if_multi` | 6 | 0 | 0 |
