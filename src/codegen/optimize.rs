@@ -144,12 +144,22 @@ pub fn vars_written_by_stmt(stmt: &Stmt) -> HashSet<String> {
         Stmt::Assignment { target, .. } => {
             vars.insert(target.clone());
         }
+        Stmt::Send { channel, .. } => {
+            // A send changes the channel's queue, which is part of the state now. Without this a
+            // send looked like it only advanced its own program counter, so reduction saw it as
+            // independent of a receive or a len() test on the same channel and pruned one of the
+            // orders: a model whose claim is only refuted when the test comes first came back
+            // clean with reduction on and refuted with it off.
+            vars.extend(vars_in_expr(channel));
+        }
         Stmt::Recv {
-            target: RecvTarget::VarList(vs),
-            ..
+            channel, target, ..
         } => {
-            for v in vs {
-                vars.insert(v.clone());
+            vars.extend(vars_in_expr(channel));
+            if let RecvTarget::VarList(vs) = target {
+                for v in vs {
+                    vars.insert(v.clone());
+                }
             }
         }
         Stmt::Atomic(body, _) | Stmt::DStep(body, _) => {

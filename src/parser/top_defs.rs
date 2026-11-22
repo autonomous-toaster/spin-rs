@@ -113,19 +113,34 @@ pub(crate) fn c_code_block(input: Input) -> IResult<Input, TopLevel> {
     let (input, _) = ws_char('}')(input)?;
     Ok((input, TopLevel::CCode(code.trim().to_string(), 0)))
 }
-/// Parse a channel array declaration: `chan name[N];`
+/// Parse a channel array declaration: `chan name[N] = [cap] of { type };`
+///
+/// The capacity and message type are optional here because `chan name[N];` also appears; without
+/// them the elements are registered as rendezvous channels, which is what the type-less form means.
 pub(crate) fn chan_array_decl(input: Input) -> IResult<Input, TopLevel> {
     let (input, _) = keyword("chan")(input)?;
     let (input, name) = ident(input)?;
     let (input, _) = ws_char('[')(input)?;
     let (input, size) = delimited(skip_ws, int_literal, skip_ws)(input)?;
     let (input, _) = ws_char(']')(input)?;
-    let (input, _) = symbol(";")(input)?;
+    let (input, rest) = opt(|i| {
+        let (i, _) = symbol("=")(i)?;
+        let (i, _) = ws_char('[')(i)?;
+        let (i, cap) = delimited(skip_ws, int_literal, skip_ws)(i)?;
+        let (i, _) = ws_char(']')(i)?;
+        let (i, _) = keyword("of")(i)?;
+        let (i, _) = ws_char('{')(i)?;
+        let (i, _ty) = var_type(i)?;
+        let (i, _) = ws_char('}')(i)?;
+        Ok((i, cap))
+    })(input)?;
+    let (input, _) = opt(symbol(";"))(input)?;
     Ok((
         input,
         TopLevel::ChannelArray {
             name: name.to_string(),
             size,
+            capacity: rest.unwrap_or(0),
             line: 0,
         },
     ))

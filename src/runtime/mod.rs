@@ -242,11 +242,18 @@ impl LuaModel {
                     let capacity = 0; // Default to rendezvous
                     runtime.register_channel(&v.name, capacity);
                 }
-                crate::parser::ast::TopLevel::ChannelArray { name, size, .. } => {
-                    // Register N individual rendezvous channels: name_0, name_1, ...
+                crate::parser::ast::TopLevel::ChannelArray {
+                    name,
+                    size,
+                    capacity,
+                    ..
+                } => {
+                    // Register N individual channels, name_0 .. name_N-1, each with the declared
+                    // capacity. This used to force capacity 0, which made every channel array a
+                    // rendezvous array whatever the declaration said.
                     for i in 0..*size {
                         let chan_name = format!("{}_{}", name, i);
-                        runtime.register_channel(&chan_name, 0); // All rendezvous (capacity 0)
+                        runtime.register_channel(&chan_name, *capacity as usize);
                     }
                 }
                 crate::parser::ast::TopLevel::Ltl(ltl) => {

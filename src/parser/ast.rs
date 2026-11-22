@@ -37,6 +37,8 @@ pub enum TopLevel {
     ChannelArray {
         name: String,
         size: i64,
+        /// Messages each element can hold. Promela writes it as `chan c[2] = [1] of { bit }`.
+        capacity: i64,
         line: usize,
     },
     /// Mtype declaration: mtype = { name1, name2, ... }

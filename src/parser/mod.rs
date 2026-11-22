@@ -253,6 +253,16 @@ fn guard_body(input: Input) -> IResult<Input, Guard> {
     if is_stmt_start {
         let mut body = Vec::new();
         let mut remaining = input;
+        // The first statement is the guard and the arrow separates it from the body:
+        // `:: c ? x -> a = 1` is an option that is enabled when `c` has a message. Without
+        // consuming the arrow here the guard body ended at the receive and the enclosing
+        // `if` then choked on `->`, which is why a receive could never be written as a guard.
+        if let Ok((rest, s)) = stmt(remaining) {
+            body.push(s);
+            if let Ok((rest, _)) = opt(symbol("->"))(rest) {
+                remaining = rest;
+            }
+        }
         loop {
             // Check if we're at a guard separator (::) or end marker (od/fi)
             let peek = remaining.trim_start();

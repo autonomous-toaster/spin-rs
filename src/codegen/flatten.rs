@@ -21,7 +21,7 @@ enum FNode {
     /// range is exhausted it continues after the loop. An `if` or a `do` with no enabled guard
     /// blocks, which is what pan calls an invalid end state.
     Select {
-        options: Vec<(Option<Expression>, usize)>,
+        options: Vec<SelectOption>,
         exit: Option<usize>,
     },
     /// An unconditional jump.
@@ -39,6 +39,21 @@ enum FNode {
     Halt,
     /// A construct with no encoding yet. Refused rather than reordered or dropped.
     Refuse(&'static str),
+}
+
+/// One branch of a selection.
+///
+/// Promela lets a guard be an expression or a statement: `:: (x > 0) ->` and `:: c ? x ->` are both
+/// legal, and the second is how a receive is written as a guard. The parser reports the first as a
+/// condition and the second as a body whose first statement is the guard, so both spellings are
+/// carried here and the emitter uses whichever is present.
+struct SelectOption {
+    condition: Option<Expression>,
+    /// The Lua guard derived from the first statement, already in state form.
+    stmt_guard: Option<String>,
+    /// That first statement, kept so the transition can declare what it reads.
+    first_stmt: Option<Stmt>,
+    target: usize,
 }
 
 impl LuaGenerator {
@@ -113,7 +128,18 @@ impl LuaGenerator {
                     let start = cursor;
                     let (body_cont, body_brk) = if is_loop { (at, next) } else { (next, brk) };
                     cursor = self.flayout_seq(&g.body, start, body_cont, body_brk, nodes, labels);
-                    options.push((g.condition.clone(), start));
+                    // A guard whose condition the parser did not capture is either `else` or a
+                    // statement standing in for the guard. Only a blocking statement supplies one.
+                    let stmt_guard = match g.condition {
+                        Some(_) => None,
+                        None => g.body.first().and_then(|s| self.select_guard_for(s)),
+                    };
+                    options.push(SelectOption {
+                        condition: g.condition.clone(),
+                        stmt_guard,
+                        first_stmt: g.body.first().cloned(),
+                        target: start,
+                    });
                 }
                 // Neither an `if` nor a `do` has an implicit exit: pan reports "invalid end state"
                 // for a process sitting at a loop head whose guards are all false, so a `do` that is
@@ -170,7 +196,12 @@ impl LuaGenerator {
                 let body_at = sel_at + 1;
                 let upd_at = body_at + body.iter().map(|b| self.fsize(b)).sum::<usize>();
                 nodes[sel_at] = FNode::Select {
-                    options: vec![(Some(condition.clone()), body_at)],
+                    options: vec![SelectOption {
+                        condition: Some(condition.clone()),
+                        stmt_guard: None,
+                        first_stmt: None,
+                        target: body_at,
+                    }],
                     exit: Some(next),
                 };
                 self.flayout_stmt(init, at, sel_at, brk, nodes, labels);
@@ -186,6 +217,27 @@ impl LuaGenerator {
                     next,
                 }
             }
+        }
+    }
+
+    /// The guard a statement supplies when it stands in for a guard.
+    ///
+    /// Promela lets a receive be written as a guard: `:: c ? x ->` is an option that is enabled
+    /// exactly when `c` has a message. The parser reports that as a body whose first statement is
+    /// the receive, so the guard has to be derived from it. Any other statement is always
+    /// executable and contributes nothing here, which leaves the option as `else`.
+    fn select_guard_for(&self, s: &Stmt) -> Option<String> {
+        match s {
+            Stmt::Send { channel, .. } => Some(format!(
+                "not chan_full(s, {})",
+                self.channel_to_lua(channel)
+            )),
+            Stmt::Recv { channel, .. } => Some(format!(
+                "not chan_empty(s, {})",
+                self.channel_to_lua(channel)
+            )),
+            Stmt::Expr(e, _) => Some(self.expr_to_lua(e)),
+            _ => None,
         }
     }
 
@@ -321,37 +373,36 @@ impl LuaGenerator {
             let node = std::mem::replace(&mut nodes[i], FNode::Refuse("taken"));
             if let FNode::Select { options, exit } = node {
                 self.emit(&format!("    -- step {}: selection", i));
+                // Each option's guard text, in the order the options appear. A condition is an
+                // expression; a statement guard is whatever makes that statement executable, such
+                // as a non-empty channel for a receive. An option with neither is `else`.
                 let conds: Vec<String> = options
                     .iter()
-                    .map(|(c, _)| match c {
-                        Some(e) => self.expr_to_lua(e),
-                        None => String::new(),
+                    .map(|o| match (&o.condition, &o.stmt_guard) {
+                        (Some(e), _) => self.expr_to_lua(e),
+                        (None, Some(g)) => g.clone(),
+                        (None, None) => String::new(),
                     })
                     .collect();
-                for (k, (cond, target)) in options.iter().enumerate() {
-                    let guard = match cond {
-                        Some(e) => {
-                            let c = self.expr_to_lua(e);
-                            format!(" and ({})", c)
-                        }
-                        None => {
-                            // `else`: enabled only when no other guard is.
-                            let others: Vec<String> = conds
-                                .iter()
-                                .enumerate()
-                                .filter(|(j, s)| *j != k && !s.is_empty())
-                                .map(|(_, s)| s.clone())
-                                .collect();
-                            // No condition means either `else` or a guard whose condition is
-                            // its first statement (`:: f = 1`), and the AST does not say which.
-                            // With no other guard to exclude it is enabled: treating it as a
-                            // never-enabled branch made the nested-if branch unreachable, which
-                            // was a false clean on []!(f).
-                            if others.is_empty() {
-                                String::new()
-                            } else {
-                                format!(" and not (({}))", others.join(") or ("))
-                            }
+                for (k, option) in options.iter().enumerate() {
+                    let cond = option.condition.clone();
+                    let target = option.target;
+                    let guard = if !conds[k].is_empty() {
+                        format!(" and ({})", conds[k])
+                    } else {
+                        // `else`: enabled only when no other guard is. With no other guard to
+                        // exclude it, it is enabled - treating it as a never-enabled branch made
+                        // the nested-if branch unreachable, which was a false clean on []!(f).
+                        let others: Vec<String> = conds
+                            .iter()
+                            .enumerate()
+                            .filter(|(j, s)| *j != k && !s.is_empty())
+                            .map(|(_, s)| s.clone())
+                            .collect();
+                        if others.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" and not (({}))", others.join(") or ("))
                         }
                     };
                     self.emit("    table.insert(transitions, {");
@@ -370,10 +421,20 @@ impl LuaGenerator {
                     // 19681 for 8.
                     match cond {
                         Some(e) => {
-                            let d = self.deps_of(Some(e), &[], &[step_var.as_str()]);
+                            let d = self.deps_of(Some(&e), &[], &[step_var.as_str()]);
                             self.emit_deps(&d);
                         }
-                        None => self.emit_step_deps(&step_var, None),
+                        None => {
+                            // A statement guard reads whatever the statement guards on: the
+                            // channel for a receive, the expression for a blocking one.
+                            match option.first_stmt.as_ref() {
+                                Some(st) => {
+                                    let d = self.deps_of(None, &[st], &[step_var.as_str()]);
+                                    self.emit_deps(&d);
+                                }
+                                None => self.emit_step_deps(&step_var, None),
+                            }
+                        }
                     }
                     self.emit(&format!("    label = \"body:step{}\",", i));
                     self.indent -= 1;
@@ -401,8 +462,8 @@ impl LuaGenerator {
                         step_var, target
                     ));
                     let mut deps: Option<super::deps::Deps> = None;
-                    for (cond, _) in &options {
-                        if let Some(e) = cond {
+                    for option in &options {
+                        if let Some(e) = &option.condition {
                             deps = Some(match deps {
                                 None => self.deps_of(Some(e), &[], &[step_var.as_str()]),
                                 Some(mut d) => {

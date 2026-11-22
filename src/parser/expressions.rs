@@ -130,8 +130,25 @@ pub(crate) fn unary(input: Input) -> IResult<Input, Expression> {
     ))(input)
 }
 
+/// The names the channel builtins answer to.
+///
+/// They are in the keyword list, and ident refuses a keyword, so len(c) could never parse: the
+/// match arms below were reached only for the four builtins that are not keywords. A mechanism
+/// that no input could reach.
+fn builtin_name(input: Input) -> IResult<Input, String> {
+    alt((
+        map(keyword("len"), |_| "len".to_string()),
+        map(keyword("full"), |_| "full".to_string()),
+        map(keyword("empty"), |_| "empty".to_string()),
+        map(keyword("nfull"), |_| "nfull".to_string()),
+        map(keyword("nempty"), |_| "nempty".to_string()),
+        map(keyword("enabled"), |_| "enabled".to_string()),
+        ident,
+    ))(input)
+}
+
 pub(crate) fn func_call(input: Input) -> IResult<Input, Expression> {
-    let (input, name) = ident(input)?;
+    let (input, name) = builtin_name(input)?;
     let (input, args) = delimited(
         ws_char('('),
         separated_list0(symbol(","), expr),
