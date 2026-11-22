@@ -387,8 +387,8 @@ impl LuaGenerator {
         ));
         self.emit(&format!("function {}(state)", fn_name));
         self.indent += 1;
-        // Set _pid for this process instance
-        self.emit(&format!("    state._pid = {}", instance));
+        // `_pid` is a constant of this process, not a field of the state.
+        self.emit(&format!("    local _spin_pid = {}", instance));
         // Check done flag - if set, this process is done (break was executed)
         self.emit(&format!(
             "    if state._done_{} then return {{}} end",

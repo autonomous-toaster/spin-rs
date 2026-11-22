@@ -12,6 +12,61 @@ use nom::{
 use super::Input;
 use super::*;
 
+/// A proctype parameter list entry, which may declare several names with one type.
+///
+/// Promela writes `(short id, a, b)` for three shorts and `(short id, byte x)` for two parameters,
+/// so a comma continues the name list only while the next word is not a type. A qualified type
+/// (`mtype:fruit z`) is the third form.
+fn param_decls(input: Input) -> IResult<Input, Vec<VarDecl>> {
+    let (input, var_type) = var_type(input)?;
+    let (input, _) = opt(|i| {
+        let (i, _) = ws_char(':')(i)?;
+        ident(i)
+    })(input)?;
+    let (mut input, first) = ident(input)?;
+    let mut out = vec![VarDecl {
+        var_type: var_type.clone(),
+        name: first,
+        array_size: None,
+        init: None,
+        line: 0,
+    }];
+    loop {
+        let peek = match symbol(",")(input) {
+            Ok((rest, _)) => rest,
+            Err(_) => break,
+        };
+        // A comma followed by a type keyword starts the next parameter instead.
+        let next_word = peek
+            .trim_start()
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .next()
+            .unwrap_or("")
+            .to_string();
+        const TYPE_WORDS: &[&str] = &[
+            "bit", "bool", "byte", "short", "int", "unsigned", "chan", "mtype", "hidden",
+        ];
+        if TYPE_WORDS.contains(&next_word.as_str()) {
+            // Leave the comma for the caller: it separates two parameters, not two names.
+            break;
+        }
+        match ident(peek) {
+            Ok((rest, name)) => {
+                out.push(VarDecl {
+                    var_type: var_type.clone(),
+                    name,
+                    array_size: None,
+                    init: None,
+                    line: 0,
+                });
+                input = rest;
+            }
+            Err(_) => break,
+        }
+    }
+    Ok((input, out))
+}
+
 pub(crate) fn proctype_def(input: Input) -> IResult<Input, TopLevel> {
     let (input, _) = skip_ws(input)?;
     let (input, active_kw) = opt(keyword("active"))(input)?;
@@ -25,7 +80,10 @@ pub(crate) fn proctype_def(input: Input) -> IResult<Input, TopLevel> {
     let (input, name) = ident(input)?;
     let (input, params) = delimited(
         ws_char('('),
-        opt(separated_list0(symbol(","), var_decl)),
+        opt(separated_list1(
+            alt((symbol(","), symbol(";"))),
+            param_decls,
+        )),
         ws_char(')'),
     )(input)?;
     // `provided (expr)` and `priority N` come between the parameter list and the body.
@@ -51,7 +109,7 @@ pub(crate) fn proctype_def(input: Input) -> IResult<Input, TopLevel> {
             active,
             provided,
             priority,
-            parameters: params.unwrap_or_default(),
+            parameters: params.unwrap_or_default().into_iter().flatten().collect(),
             body,
             pid,
             line: 0,
@@ -159,6 +217,16 @@ pub(crate) fn chan_array_decl(input: Input) -> IResult<Input, TopLevel> {
     ))
 }
 
+/// One field type inside a channel's message list: `int`, `mtype`, or a qualified `mtype:fruit`.
+fn message_field(input: Input) -> IResult<Input, ()> {
+    let (input, _) = var_type(input)?;
+    let (input, _) = opt(|i| {
+        let (i, _) = ws_char(':')(i)?;
+        ident(i)
+    })(input)?;
+    Ok((input, ()))
+}
+
 /// Parse a channel declaration: `chan name = [N] of { type };`
 pub(crate) fn chan_decl(input: Input) -> IResult<Input, TopLevel> {
     let (input, _) = keyword("chan")(input)?;
@@ -169,9 +237,13 @@ pub(crate) fn chan_decl(input: Input) -> IResult<Input, TopLevel> {
     let (input, _) = ws_char(']')(input)?;
     let (input, _) = keyword("of")(input)?;
     let (input, _) = ws_char('{')(input)?;
-    let (input, _msg_type) = var_type(input)?;
+    // A message may carry several typed fields, and a field type may be a named mtype. The types
+    // are parsed and not stored: a message is a list of values here, which is what send and
+    // receive carry.
+    let (input, _) = separated_list1(symbol(","), message_field)(input)?;
     let (input, _) = ws_char('}')(input)?;
-    let (input, _) = symbol(";")(input)?;
+    // The terminator is optional in Promela, and spin's own examples omit it.
+    let (input, _) = opt(symbol(";"))(input)?;
     Ok((
         input,
         TopLevel::ChanDecl {
@@ -205,7 +277,13 @@ pub(crate) fn top_level(input: Input) -> IResult<Input, Vec<TopLevel>> {
 /// Parse mtype declaration: `mtype = { name1, name2, ... }`
 pub(crate) fn mtype_decl(input: Input) -> IResult<Input, TopLevel> {
     let (input, _) = keyword("mtype")(input)?;
-    let (input, _) = symbol("=")(input)?;
+    // Promela writes `mtype = { a, b }`, the older `mtype { a, b }`, and a named form
+    // `mtype:fruit = { appel, peer }`.
+    let (input, _) = opt(|i| {
+        let (i, _) = ws_char(':')(i)?;
+        ident(i)
+    })(input)?;
+    let (input, _) = opt(symbol("="))(input)?;
     let (input, _) = ws_char('{')(input)?;
     let (input, names) = separated_list1(symbol(","), ident)(input)?;
     let (input, _) = ws_char('}')(input)?;

@@ -313,6 +313,14 @@ fn fixed_models() -> Vec<Model> {
             "byte n = 0;\nbit a = 0;\nactive proctype P() { if :: (n) -> a = 1 :: else -> skip fi }",
             "[] ( !a )",
         ),
+        // `&&` and `||` in a guard. They were translated with the operands spliced in
+        // unparenthesised, so Lua read `a == 0 ~= 0` as `a == (0 ~= 0)`: a comparison against
+        // false, which made every such guard permanently disabled.
+        (
+            "or_guard",
+            "bool a = 0, b = 0, d = 0;\nactive proctype P() { a = 1; if :: (a == 1 || b == 1) -> d = 1 :: else -> skip fi }",
+            "[] ( !d )",
+        ),
         // An `init` block. Its transition function was emitted and never registered with the
         // dispatcher, so it never ran; the process also wrote `_done` where the state tracks
         // `_done_init`, so every model with an init block ended in a reported deadlock.

@@ -43,6 +43,7 @@ impl std::error::Error for ParseError {}
 mod expressions;
 mod helpers;
 mod literals;
+mod preprocess;
 mod top_defs;
 
 // ─── Declarations ──────────────────────────────────────────────
@@ -53,6 +54,12 @@ pub(crate) fn array_dim(input: Input) -> IResult<Input, i64> {
 
 pub(crate) fn var_decl(input: Input) -> IResult<Input, VarDecl> {
     let (input, vt) = var_type(input)?;
+    // A named mtype instance: `mtype:fruit b` declares `b` with the type `mtype:fruit`. The
+    // qualifier names which mtype, and the variable's own type is still mtype.
+    let (input, _) = opt(|i| {
+        let (i, _) = ws_char(':')(i)?;
+        ident(i)
+    })(input)?;
     let (input, name) = ident(input)?;
     let (input, arr) = opt(array_dim)(input)?;
     let (input, init) = opt(preceded(symbol("="), expr))(input)?;
@@ -613,6 +620,12 @@ pub fn parse_expression(source: &str) -> anyhow::Result<Expression> {
 }
 
 pub fn parse(source: &str) -> anyhow::Result<PromelaModel> {
+    // Spin preprocesses before it parses, so a macro is part of the language rather than a
+    // pre-pass a caller is expected to do. A directive this implementation does not support is an
+    // error naming it, never a silently different model.
+    let expanded =
+        preprocess::preprocess(source).map_err(|e| anyhow::anyhow!("preprocessor: {}", e))?;
+    let source: &str = &expanded;
     let (rest, declarations) =
         many0(top_level)(source).map_err(|e| anyhow::anyhow!("parse error: {:?}", e))?;
     let declarations: Vec<TopLevel> = declarations.into_iter().flatten().collect();

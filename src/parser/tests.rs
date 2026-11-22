@@ -60,13 +60,22 @@ fn test_ltl_formula() {
 }
 #[test]
 fn test_preprocessor() {
-    let source = "#define N 5\nbyte x;\n";
+    // A macro is expanded before parsing, as spin's own preprocessor does, so the directive does
+    // not survive as a declaration. Keeping it as one meant a model that used the preprocessor
+    // either dropped the macro or failed to parse.
+    let source = "#define N 5\nbyte q[N];\n";
     let model = parse(source).unwrap();
-    assert_eq!(model.declarations.len(), 2);
+    assert_eq!(model.declarations.len(), 1);
     match &model.declarations[0] {
-        TopLevel::PreprocessorDirective(d) => assert!(d.contains("define")),
-        _ => panic!("expected preprocessor"),
+        TopLevel::GlobalVar(v) => assert_eq!(v.array_size, Some(5)),
+        other => panic!("expected a global variable, got {:?}", other),
     }
+}
+
+#[test]
+fn test_preprocessor_refuses_what_it_cannot_expand() {
+    let err = parse("#define F(a) a\nbyte x;\n").unwrap_err().to_string();
+    assert!(err.contains("function-like macro 'F'"), "{err}");
 }
 #[test]
 fn test_channel_send_recv() {

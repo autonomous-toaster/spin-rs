@@ -5,13 +5,13 @@ one claim per model, so ours and pan are like for like.
 
 | outcome | count |
 |---|---|
-| agree | 130 |
+| agree | 131 |
 | false refutation | 0 |
 | false clean | 0 |
 | decline | 0 |
 | refusal | 6 |
 | pan unbuildable | 0 |
-| total | 136 |
+| total | 137 |
 
 ## Wrong verdicts
 
@@ -44,6 +44,7 @@ None.
 | `mod_negative` | 1 | 0 | 0 |
 | `nested_if_multi` | 6 | 0 | 0 |
 | `nested_if_two` | 6 | 0 | 0 |
+| `or_guard` | 1 | 0 | 0 |
 | `race_a` | 6 | 0 | 0 |
 | `recv_guard` | 1 | 0 | 0 |
 | `rendezvous` | 0 | 0 | 6 |

@@ -100,9 +100,14 @@ impl LuaGenerator {
             Expression::StringLit(s) => format!("\"{}\"", s),
             Expression::BoolLit(b) => b.to_string(),
             Expression::Ident(name) => {
-                // Built-in variables like _pid are not prefixed
+                // `_pid` is the id of the process *whose transition this is*, so it is a constant
+                // of the emitted function rather than a state field. It used to be stored in the
+                // state and set by each transition function while enumerating, which meant the
+                // table was written by the last process enumerated and every guard and effect in
+                // it saw that process's pid: Peterson's two instances both behaved as pid 1, and
+                // the mutual exclusion assertion was refuted.
                 if name == "_pid" {
-                    "s._pid".to_string()
+                    "_spin_pid".to_string()
                 } else if self.global_vars.contains(name.as_str()) {
                     // Global variables are stored unprefixed in the state
                     format!("s.{}", name)
@@ -129,17 +134,22 @@ impl LuaGenerator {
             Expression::BinaryOp { op, left, right } => {
                 use BinaryOp::*;
                 match op {
+                    // Promela's `&&` and `||` are value operators that read their operands
+                    // with Promela truthiness, so each side goes through `_spin_truthy`. It used
+                    // to be `((a ~= 0) and (b ~= 0))` with `a` spliced in unparenthesised, which
+                    // Lua reads as `a == (0 ~= 0)` - a comparison against `false`. In Peterson's
+                    // `(flag[1 - _pid] == 0 || turn == 1 - _pid)` every side became a comparison
+                    // with `false`, so the guard was permanently disabled and mutual exclusion was
+                    // "proved" by never entering the critical section.
                     And => {
-                        // Promela: a && b  →  Lua: ((a ~= 0) and (b ~= 0)) and 1 or 0
                         let l = self.expr_to_lua(left);
                         let r = self.expr_to_lua(right);
-                        format!("(({} ~= 0) and ({} ~= 0)) and 1 or 0", l, r)
+                        format!("(_spin_truthy({}) and _spin_truthy({})) and 1 or 0", l, r)
                     }
                     Or => {
-                        // Promela: a || b  →  Lua: ((a ~= 0) or (b ~= 0)) and 1 or 0
                         let l = self.expr_to_lua(left);
                         let r = self.expr_to_lua(right);
-                        format!("(({} ~= 0) or ({} ~= 0)) and 1 or 0", l, r)
+                        format!("(_spin_truthy({}) or _spin_truthy({})) and 1 or 0", l, r)
                     }
                     // Promela divides and takes remainders as C does, and Lua does neither:
                     // `/` is floating point and `%` floors, so `-7 % 2` was 1 where pan has -1.
