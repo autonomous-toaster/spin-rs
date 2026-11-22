@@ -1,5 +1,6 @@
 use super::LuaGenerator;
 use super::default_value;
+use super::sends_on;
 use crate::parser::ast::*;
 
 impl LuaGenerator {
@@ -12,6 +13,7 @@ impl LuaGenerator {
             current_provided: None,
             current_done: None,
             current_step: None,
+            rendezvous: std::collections::BTreeMap::new(),
             var_types: std::collections::HashMap::new(),
             global_vars: std::collections::HashSet::new(),
             inlines: std::collections::HashMap::new(),
@@ -278,6 +280,36 @@ impl LuaGenerator {
     }
 
     pub(crate) fn emit_proctypes(&mut self, model: &PromelaModel) {
+        // Which channels are rendezvous, and who can be on the sending side of each.
+        self.rendezvous.clear();
+        let zero_capacity: std::collections::HashSet<String> = model
+            .declarations
+            .iter()
+            .filter_map(|d| match d {
+                TopLevel::ChanDecl { name, capacity, .. } if *capacity == 0 => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+        for decl in &model.declarations {
+            if let TopLevel::Proctype(p) = decl {
+                let count = if p.active {
+                    p.pid.map(|n| n as usize).unwrap_or(1)
+                } else {
+                    1
+                };
+                let prefix = if count == 1 {
+                    p.name.clone()
+                } else {
+                    format!("{}_", p.name)
+                };
+                for chan in sends_on(&p.body, &zero_capacity) {
+                    self.rendezvous
+                        .entry(chan)
+                        .or_default()
+                        .push((prefix.clone(), count));
+                }
+            }
+        }
         // First pass: collect inline definitions
         self.inlines.clear();
         for decl in &model.declarations {

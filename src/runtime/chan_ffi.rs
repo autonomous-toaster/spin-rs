@@ -159,6 +159,90 @@ pub(crate) fn register_all(lua: &mlua::Lua, channels: Registry) -> mlua::Result<
     register_chan_recv_random(lua, Arc::clone(&channels))?;
     register_chan_poll(lua, Arc::clone(&channels))?;
     register_chan_recv_eval(lua, Arc::clone(&channels))?;
+    register_rendezvous(lua)?;
+    Ok(())
+}
+
+/// A rendezvous channel, staged from the sender and released by the receiver.
+///
+/// A capacity-0 channel cannot be buffered: pan runs the send and the receive as **one**
+/// transition, so the sender completes only when a receiver takes the message. This engine moves
+/// one process per transition, so the pairing is expressed in two halves that the state carries:
+///
+/// - the sender *stages* `{values, owner, pid, cont}` into the channel and does not advance its
+///   program counter, so its send step stays enabled-but-blocked (the guard rejects a second
+///   stage);
+/// - the receiver consumes the staged message, binds its variables, advances its own program
+///   counter and writes `cont` into the stager's program counter, which is what completes the
+///   send.
+///
+/// The stager's identity travels *in the message*, so the receiver does not have to know which
+/// process will meet it at generation time.
+fn register_rendezvous(lua: &mlua::Lua) -> mlua::Result<()> {
+    let stage = lua.create_function(move |lua, args: mlua::MultiValue| -> mlua::Result<()> {
+        let mut iter = args.into_iter();
+        let state = match iter.next() {
+            Some(mlua::Value::Table(t)) => t,
+            _ => return Err(mlua::Error::runtime("stage: expected the state table")),
+        };
+        let name = match iter.next() {
+            Some(mlua::Value::String(s)) => s.to_string_lossy().to_string(),
+            _ => return Err(mlua::Error::runtime("stage: expected a channel name")),
+        };
+        let owner = match iter.next() {
+            Some(mlua::Value::String(s)) => s.to_string_lossy().to_string(),
+            _ => return Err(mlua::Error::runtime("stage: expected the owner proctype")),
+        };
+        let pid = match iter.next() {
+            Some(mlua::Value::Integer(i)) => i,
+            _ => return Err(mlua::Error::runtime("stage: expected the pid")),
+        };
+        let cont = match iter.next() {
+            Some(mlua::Value::Integer(i)) => i,
+            _ => {
+                return Err(mlua::Error::runtime(
+                    "stage: expected the continuation step",
+                ));
+            }
+        };
+        let values = lua.create_table()?;
+        for (i, v) in iter.enumerate() {
+            match v {
+                mlua::Value::Integer(i2) => values.set(i + 1, i2)?,
+                mlua::Value::Number(n) => values.set(i + 1, n as i64)?,
+                _ => return Err(mlua::Error::runtime("stage: expected integer values")),
+            }
+        }
+        let staged = lua.create_table()?;
+        staged.set("values", values)?;
+        staged.set("owner", owner)?;
+        staged.set("pid", pid)?;
+        staged.set("cont", cont)?;
+        state.set(name, staged)?;
+        Ok(())
+    })?;
+    lua.globals().set("_spin_chan_stage", stage)?;
+
+    let staged = lua.create_function(move |_lua, (state, name): (mlua::Table, String)| {
+        Ok(matches!(
+            state.get::<mlua::Value>(name.as_str())?,
+            mlua::Value::Table(_)
+        ))
+    })?;
+    lua.globals().set("_spin_chan_staged", staged)?;
+
+    let pair = lua.create_function(move |_lua, (state, name): (mlua::Table, String)| {
+        match state.get::<mlua::Value>(name.as_str())? {
+            mlua::Value::Table(t) => {
+                state.set(name.as_str(), mlua::Value::Nil)?;
+                // The values are handed back as a table the caller reads, and the stager's
+                // identity with it.
+                Ok(t)
+            }
+            _ => Err(mlua::Error::runtime("rendezvous: nothing staged")),
+        }
+    })?;
+    lua.globals().set("_spin_chan_pair", pair)?;
     Ok(())
 }
 

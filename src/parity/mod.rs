@@ -328,6 +328,20 @@ fn fixed_models() -> Vec<Model> {
             "bool a = 0, b = 0, d = 0;\nactive proctype P() { a = 1; if :: (a == 1 || b == 1) -> d = 1 :: else -> skip fi }",
             "[] ( !d )",
         ),
+        // A rendezvous handshake under a liveness claim: the send completes only when the
+        // receiver takes it, so `got` does become true and `<>(got)` holds.
+        (
+            "rendezvous_liveness",
+            "chan c = [0] of { bit };\nbool got = false;\nactive proctype Sender() { c ! 1 }\nactive proctype Receiver() { c ? got }",
+            "<> ( got )",
+        ),
+        // Ordering through a rendezvous: the flag after the send can only be set once the
+        // handshake completed, which is what makes this claim hold.
+        (
+            "rendezvous_order",
+            "chan c = [0] of { bit };\nbool handshake = false;\nbool after = false;\nactive proctype Sender() { c ! 1; after = true }\nactive proctype Receiver() { c ? handshake }",
+            "[] ( after -> handshake )",
+        ),
         // Promela has no boolean type: `true`/`false` are 1/0. Emitting Lua booleans put one in
         // the state, so every later read inherited it - `!flag` and `flag == 0` both refuted a
         // model pan proves - and assigning one raised an argument error at the truncation

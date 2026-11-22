@@ -77,6 +77,14 @@ pub(crate) struct LuaGenerator {
     /// field no state declares: every guard was false, the init never ran, and the model was
     /// reported as a deadlock.
     pub(crate) current_step: Option<String>,
+    /// Channels declared with capacity 0, which pan runs as a single transition over both
+    /// processes, and the proctypes that send on each of them.
+    ///
+    /// A rendezvous send is staged by the sender and released by the receiver, so the receiver's
+    /// generated code has to write the stager's program counter. That is only possible if it knows
+    /// which proctypes can be on the other side, hence this map, filled from the AST before any
+    /// body is emitted.
+    pub(crate) rendezvous: std::collections::BTreeMap<String, Vec<(String, usize)>>,
     /// Declared type of every state field, keyed by the field name the state stores.
     ///
     /// Promela's types are fixed width and assignments wrap, so the value a variable holds is not
@@ -107,6 +115,50 @@ mod tests;
 
 #[cfg(test)]
 mod expr_tests;
+
+/// The rendezvous channels a body sends on, found without laying the body out.
+fn sends_on(
+    body: &[crate::parser::ast::Stmt],
+    zero_capacity: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    use crate::parser::ast::{Expression, Stmt};
+    fn channel_name(e: &Expression) -> Option<String> {
+        match e {
+            Expression::Ident(n) => Some(n.clone()),
+            Expression::ArrayAccess { name, .. } => Some(name.clone()),
+            _ => None,
+        }
+    }
+    fn walk(stmts: &[Stmt], out: &mut Vec<String>, zero: &std::collections::HashSet<String>) {
+        for s in stmts {
+            match s {
+                Stmt::Send { channel, .. } => {
+                    if let Some(n) = channel_name(channel)
+                        && zero.contains(&n)
+                        && !out.contains(&n)
+                    {
+                        out.push(n);
+                    }
+                }
+                Stmt::If(gs) | Stmt::Do(gs) => {
+                    for g in gs {
+                        walk(&g.body, out, zero);
+                    }
+                }
+                Stmt::Atomic(b, _) | Stmt::DStep(b, _) => walk(b, out, zero),
+                Stmt::Unless { body, handler, .. } => {
+                    walk(body, out, zero);
+                    walk(handler, out, zero);
+                }
+                Stmt::For { body, .. } => walk(body, out, zero),
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(body, &mut out, zero_capacity);
+    out
+}
 
 pub(crate) fn default_value(var_type: &VarType) -> String {
     match var_type {

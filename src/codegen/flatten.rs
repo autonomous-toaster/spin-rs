@@ -37,6 +37,20 @@ enum FNode {
     },
     /// The process ends here.
     Halt,
+    /// A rendezvous send: stage the message and stay at this step, so the send completes only
+    /// when a receiver takes it. The continuation travels inside the message.
+    RdvSend {
+        channel: String,
+        values: Vec<String>,
+        next: usize,
+    },
+    /// A rendezvous receive: take the staged message, bind the variables, advance this process and
+    /// release the stager by writing its continuation into its program counter.
+    RdvRecv {
+        channel: String,
+        vars: Vec<String>,
+        next: usize,
+    },
     /// A construct with no encoding yet. Refused rather than reordered or dropped.
     Refuse(&'static str),
 }
@@ -149,6 +163,25 @@ impl LuaGenerator {
                     exit: None,
                 };
             }
+            // A capacity-0 channel is a handshake, not a queue: the send and the receive are one
+            // transition in pan. It is split into two steps here - stage, then release - because
+            // this engine moves one process per transition. See the runtime's `_spin_chan_stage`.
+            Stmt::Send { channel, .. } if self.is_rendezvous_send(channel) => {
+                nodes[at] = FNode::RdvSend {
+                    channel: self.channel_name(channel),
+                    values: self.rdv_send_values(s),
+                    next,
+                }
+            }
+            Stmt::Recv {
+                channel, target, ..
+            } if self.is_rendezvous_recv(channel, target) => {
+                nodes[at] = FNode::RdvRecv {
+                    channel: self.channel_name(channel),
+                    vars: self.rdv_recv_vars(target),
+                    next,
+                }
+            }
             Stmt::Break(_) => nodes[at] = FNode::Jump(brk),
             Stmt::Goto(l, _) => nodes[at] = FNode::Goto(l.clone()),
             Stmt::Label(name, _) => {
@@ -233,6 +266,69 @@ impl LuaGenerator {
         }
     }
 
+    /// The channel's Promela name, for the rendezvous helpers.
+    fn channel_name(&self, channel: &Expression) -> String {
+        match channel {
+            Expression::Ident(n) => n.clone(),
+            Expression::ArrayAccess { name, .. } => name.clone(),
+            _ => String::new(),
+        }
+    }
+
+    /// Is this a send on a capacity-0 channel?
+    fn is_rendezvous_send(&self, channel: &Expression) -> bool {
+        self.rendezvous.contains_key(&self.channel_name(channel))
+    }
+
+    /// Is this a receive that a rendezvous can satisfy? A poll or an eval-receive on a capacity-0
+    /// channel keeps its own encoding.
+    fn is_rendezvous_recv(&self, channel: &Expression, target: &RecvTarget) -> bool {
+        self.rendezvous.contains_key(&self.channel_name(channel))
+            && matches!(target, RecvTarget::VarList(_))
+    }
+
+    /// The values a rendezvous send carries, already in state form.
+    fn rdv_send_values(&self, stmt: &Stmt) -> Vec<String> {
+        match stmt {
+            Stmt::Send { target, args, .. } => {
+                let mut out = vec![match target {
+                    SendTarget::Ident(id) => {
+                        if self.global_vars.contains(id.as_str()) {
+                            format!("s.{}", id)
+                        } else if let Some(ref p) = self.current_proctype {
+                            format!("s.{}_{}", p, id)
+                        } else {
+                            format!("s.{}", id)
+                        }
+                    }
+                    SendTarget::Value(v) | SendTarget::Sorted(v) => self.expr_to_lua(v),
+                }];
+                out.extend(args.iter().map(|a| self.expr_to_lua(a)));
+                out
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// The variables a rendezvous receive binds, in state form.
+    fn rdv_recv_vars(&self, target: &RecvTarget) -> Vec<String> {
+        match target {
+            RecvTarget::VarList(vs) => vs
+                .iter()
+                .map(|v| {
+                    if self.global_vars.contains(v.as_str()) {
+                        format!("s.{}", v)
+                    } else if let Some(ref p) = self.current_proctype {
+                        format!("s.{}_{}", p, v)
+                    } else {
+                        format!("s.{}", v)
+                    }
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// The guard a statement supplies when it stands in for a guard.
     ///
     /// Promela lets a receive be written as a guard: `:: c ? x ->` is an option that is enabled
@@ -252,6 +348,19 @@ impl LuaGenerator {
             Stmt::Expr(e, _) => Some(format!("_spin_truthy({})", self.expr_to_lua(e))),
             _ => None,
         }
+    }
+
+    /// The proctype name the stager reports in the message.
+    fn rendezvous_owner(&self, _channel: &str) -> String {
+        self.current_proctype
+            .clone()
+            .unwrap_or_else(|| "init".to_string())
+    }
+
+    /// Which proctypes can be on the sending side of this channel, and how many instances each
+    /// has.
+    fn rendezvous_senders(&self, channel: &str) -> Vec<(String, usize)> {
+        self.rendezvous.get(channel).cloned().unwrap_or_default()
     }
 
     /// The field that terminates this body's process.
@@ -609,6 +718,100 @@ impl LuaGenerator {
                         effect, step_var, next
                     ));
                     self.emit_opaque_deps();
+                    self.emit(&format!("    label = \"body:step{}\",", i));
+                }
+                FNode::RdvSend {
+                    channel,
+                    values,
+                    next,
+                } => {
+                    // Stage and stay put. The guard rejects a second stage, so the process blocks
+                    // here until a receiver takes it - which is what a capacity-0 send means.
+                    self.emit(&format!(
+                        "    -- step {}: rendezvous send on {}",
+                        i, channel
+                    ));
+                    self.emit(&format!(
+                        "    guard = function(s) return s.{} == {} and not _spin_chan_staged(s, '{}') end,",
+                        step_var, i, channel
+                    ));
+                    let mut args = vec![
+                        "s".to_string(),
+                        format!("'{}'", channel),
+                        format!("'{}'", self.rendezvous_owner(&channel)),
+                        "_spin_pid".to_string(),
+                        next.to_string(),
+                    ];
+                    args.extend(values);
+                    self.emit(&format!(
+                        "    effect = function(s) _spin_chan_stage({}) end,",
+                        args.join(", ")
+                    ));
+                    // It reads the channel and writes it; it does not touch the program counter,
+                    // because completing the send is the receiver's doing.
+                    let mut deps = self.deps_of(None, &[], &[]);
+                    deps.write_field(channel.clone());
+                    deps.reads.insert(channel.clone());
+                    self.emit_deps(&deps);
+                    self.emit(&format!("    label = \"body:step{}\",", i));
+                }
+                FNode::RdvRecv {
+                    channel,
+                    vars,
+                    next,
+                } => {
+                    self.emit(&format!(
+                        "    -- step {}: rendezvous receive on {}",
+                        i, channel
+                    ));
+                    self.emit(&format!(
+                        "    guard = function(s) return s.{} == {} and _spin_chan_staged(s, '{}') end,",
+                        step_var, i, channel
+                    ));
+                    let mut effect = format!("local _m = _spin_chan_pair(s, '{}'); ", channel);
+                    for (k, var) in vars.iter().enumerate() {
+                        effect.push_str(&format!("{} = _m.values[{}]; ", var, k + 1));
+                    }
+                    effect.push_str(&format!("s.{} = {}; ", step_var, next));
+                    // Release the stager: its continuation travelled in the message, and its
+                    // program counter is the only thing that makes the send complete.
+                    for (prefix, instances) in self.rendezvous_senders(&channel) {
+                        for instance in 0..instances {
+                            let stager = if instances == 1 {
+                                prefix.clone()
+                            } else {
+                                format!("{}{}", prefix, instance)
+                            };
+                            effect.push_str(&format!(
+                                "if _m.owner == '{}' and _m.pid == {} then s._step_{} = _m.cont end; ",
+                                prefix.trim_end_matches('_'),
+                                instance,
+                                stager
+                            ));
+                        }
+                    }
+                    self.emit(&format!("    effect = function(s) {} end,", effect));
+                    let mut deps = self.deps_of(None, &[], &[step_var.as_str()]);
+                    deps.reads.insert(channel.clone());
+                    deps.write_field(channel.clone());
+                    for var in &vars {
+                        if let Some(field) = var.strip_prefix("s.") {
+                            deps.write_field(field.to_string());
+                        }
+                    }
+                    // The stager's counter is written here, which no dependency model of one
+                    // process can see; declared so reduction cannot prune the handshake.
+                    for (prefix, instances) in self.rendezvous_senders(&channel) {
+                        for instance in 0..instances {
+                            let stager = if instances == 1 {
+                                prefix.clone()
+                            } else {
+                                format!("{}{}", prefix, instance)
+                            };
+                            deps.write_field(format!("_step_{}", stager));
+                        }
+                    }
+                    self.emit_deps(&deps);
                     self.emit(&format!("    label = \"body:step{}\",", i));
                 }
                 FNode::Refuse(why) => {

@@ -5,13 +5,13 @@ one claim per model, so ours and pan are like for like.
 
 | outcome | count |
 |---|---|
-| agree | 153 |
+| agree | 162 |
 | false refutation | 0 |
 | false clean | 0 |
 | decline | 0 |
-| refusal | 7 |
+| refusal | 0 |
 | pan unbuildable | 0 |
-| total | 160 |
+| total | 162 |
 
 ## Wrong verdicts
 
@@ -49,7 +49,9 @@ None.
 | `or_guard` | 1 | 0 | 0 |
 | `race_a` | 7 | 0 | 0 |
 | `recv_guard` | 1 | 0 | 0 |
-| `rendezvous` | 0 | 0 | 7 |
+| `rendezvous` | 7 | 0 | 0 |
+| `rendezvous_liveness` | 1 | 0 | 0 |
+| `rendezvous_order` | 1 | 0 | 0 |
 | `send_then_assign` | 7 | 0 | 0 |
 | `seq2_ab` | 7 | 0 | 0 |
 | `seq2_ba` | 7 | 0 | 0 |

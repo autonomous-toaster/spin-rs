@@ -141,6 +141,13 @@ categories below, because this engine answers three ways and only one of them is
 - **Channels**: buffered (`[N]`), arrays (`chan c[N] = [cap] of { t }`), send and receive as
   statements and as guards, `len`/`full`/`empty`/`nfull`/`nempty`. A channel's queue is part of the
   state, so a state always determines its own transitions.
+- **Rendezvous channels** (`[0]`). pan runs the send and the receive as one transition over two
+  processes; this engine moves one process per transition, so the handshake is staged instead: the
+  sender writes the message and its own continuation into the channel and does not advance, and the
+  receiver takes it, binds its variables and writes the sender's continuation into its program
+  counter. The send therefore completes only when the handshake does - which is what makes a claim
+  like `[] ( after -> handshake )` hold, and it does agree with pan. A poll or an eval-receive on a
+  rendezvous channel still refuses.
 - **Proctypes**: several instances (`active [N]`), an `init` block, `provided (expr)`.
 - **Preprocessor**: object-like `#define`, including a macro that names another macro.
 - **Claims**: `[]p` over propositions, `<>p`, `->`, `<->`, and atoms that are expressions -
@@ -153,7 +160,6 @@ These are hard errors. No verdict is produced, so nothing about the model is cla
 
 | construct | why |
 |---|---|
-| rendezvous channel (`chan c = [0] of { t }`) | the send and its receive are one transition over two processes; this engine moves one process per transition |
 | `run P(...)` | a spawned process needs dynamic instances; the transition table is emitted per static instance |
 | `unless` | the handler interleaves with the body, which needs a transition over both. Refused by name |
 | bare `{ ... }` block | not a statement the parser has, so the model fails to parse |
