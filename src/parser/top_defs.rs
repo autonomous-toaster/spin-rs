@@ -28,6 +28,19 @@ pub(crate) fn proctype_def(input: Input) -> IResult<Input, TopLevel> {
         opt(separated_list0(symbol(","), var_decl)),
         ws_char(')'),
     )(input)?;
+    // `provided (expr)` and `priority N` come between the parameter list and the body.
+    let (input, provided) = opt(|i| {
+        let (i, _) = keyword("provided")(i)?;
+        let (i, _) = ws_char('(')(i)?;
+        let (i, e) = expr(i)?;
+        let (i, _) = ws_char(')')(i)?;
+        Ok((i, e))
+    })(input)?;
+    let (input, priority) = opt(|i| {
+        let (i, _) = keyword("priority")(i)?;
+        let (i, n) = int_literal(i)?;
+        Ok((i, n))
+    })(input)?;
     let (input, body) = delimited(ws_char('{'), many0(stmt), ws_char('}'))(input)?;
     let active = active_kw.is_some();
     let pid = active_count;
@@ -36,8 +49,8 @@ pub(crate) fn proctype_def(input: Input) -> IResult<Input, TopLevel> {
         TopLevel::Proctype(ProctypeDef {
             name,
             active,
-            provided: None,
-            priority: None,
+            provided,
+            priority,
             parameters: params.unwrap_or_default(),
             body,
             pid,

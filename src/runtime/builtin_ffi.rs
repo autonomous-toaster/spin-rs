@@ -12,6 +12,7 @@ pub(crate) fn register_all(lua: &mlua::Lua) -> mlua::Result<()> {
     register_timeout(lua)?;
     register_np_(lua)?;
     register_pc_value(lua)?;
+    register_truthy(lua)?;
     register_get_priority(lua)?;
     register_set_priority(lua)?;
     Ok(())
@@ -113,6 +114,27 @@ fn register_np_(lua: &mlua::Lua) -> mlua::Result<()> {
         Ok(true)
     })?;
     lua.globals().set("_spin_np_", f)?;
+    Ok(())
+}
+
+/// Promela truthiness.
+///
+/// A guard is true when its value is non-zero and not `false`/`nil`. Lua's only falsey values are
+/// `false` and `nil`, so `if :: (n) ->` with `n == 0` was enabled in the generated code while pan
+/// treats it as disabled - a false refutation of any model whose claim observes what that branch
+/// does. Every guard, condition and blocking expression goes through here.
+fn register_truthy(lua: &mlua::Lua) -> mlua::Result<()> {
+    let f = lua.create_function(|_lua, v: mlua::Value| match v {
+        mlua::Value::Nil => Ok(false),
+        mlua::Value::Boolean(b) => Ok(b),
+        mlua::Value::Integer(i) => Ok(i != 0),
+        mlua::Value::Number(n) => Ok(n != 0.0),
+        mlua::Value::String(s) => Ok(!s.to_string_lossy().is_empty()),
+        // A table or function has no Promela meaning; treat it as true rather than silently
+        // disabling a transition.
+        _ => Ok(true),
+    })?;
+    lua.globals().set("_spin_truthy", f)?;
     Ok(())
 }
 

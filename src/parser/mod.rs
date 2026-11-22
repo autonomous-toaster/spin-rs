@@ -69,7 +69,18 @@ pub(crate) fn var_decl(input: Input) -> IResult<Input, VarDecl> {
 }
 
 // ─── Statements ─────────────────────────────────────────────────
+/// Parse one statement, and the `->` that may follow it.
+///
+/// Promela separates statements with `->` as often as with `;`: `b = 1 -> a = 1` is ordinary
+/// inside a block, an atomic region and a body. Only some statement parsers absorbed a semicolon
+/// and none absorbed an arrow, so a body written that way failed to parse.
 fn stmt(input: Input) -> IResult<Input, Stmt> {
+    let (input, stmt) = stmt_inner(input)?;
+    let (input, _) = opt(alt((symbol("->"), symbol(";"))))(input)?;
+    Ok((input, stmt))
+}
+
+fn stmt_inner(input: Input) -> IResult<Input, Stmt> {
     let (input, _) = skip_ws(input)?;
     alt((
         if_stmt,

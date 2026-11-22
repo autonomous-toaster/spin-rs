@@ -62,6 +62,8 @@ pub(crate) struct LuaGenerator {
     pub(crate) indent: usize,
     pub(crate) proctype_names: Vec<String>,
     pub(crate) current_proctype: Option<String>,
+    /// The `provided (expr)` condition of the proctype being emitted, if it has one.
+    pub(crate) current_provided: Option<Expression>,
     pub(crate) global_vars: std::collections::HashSet<String>,
     pub(crate) inlines: std::collections::HashMap<String, crate::parser::ast::InlineDef>,
     /// Label step numbers for goto/break/label: label_name -> step_number

@@ -9,6 +9,7 @@ impl LuaGenerator {
             indent: 0,
             proctype_names: Vec::new(),
             current_proctype: None,
+            current_provided: None,
             global_vars: std::collections::HashSet::new(),
             inlines: std::collections::HashMap::new(),
             label_steps: std::collections::HashMap::new(),
@@ -361,6 +362,8 @@ impl LuaGenerator {
         };
         self.proctype_names.push(fn_name.clone());
         self.current_proctype = Some(prefix.clone());
+        // `provided` gates the whole proctype: pan runs it only while the condition holds.
+        self.current_provided = p.provided.clone();
 
         // Pre-pass: collect all labels and assign step numbers
         self.label_steps.clear();
@@ -391,5 +394,6 @@ impl LuaGenerator {
         self.emit("end");
         self.emit("");
         self.current_proctype = None;
+        self.current_provided = None;
     }
 }

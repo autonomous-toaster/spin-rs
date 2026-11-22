@@ -220,6 +220,19 @@ impl LuaGenerator {
         }
     }
 
+    /// The conjunction every guard of this body carries, from `provided (expr)`.
+    ///
+    /// pan runs a proctype only while its `provided` condition holds: the condition gates the
+    /// proctype's first step, and since the body is a step sequence the same condition has to hold
+    /// at every step. Ignoring it made a process that pan never runs contribute states, which
+    /// refuted a model pan proves valid.
+    fn provided_guard(&self) -> String {
+        match &self.current_provided {
+            Some(e) => format!(" and _spin_truthy({})", self.expr_to_lua(e)),
+            None => String::new(),
+        }
+    }
+
     /// The guard a statement supplies when it stands in for a guard.
     ///
     /// Promela lets a receive be written as a guard: `:: c ? x ->` is an option that is enabled
@@ -236,7 +249,7 @@ impl LuaGenerator {
                 "not chan_empty(s, {})",
                 self.channel_to_lua(channel)
             )),
-            Stmt::Expr(e, _) => Some(self.expr_to_lua(e)),
+            Stmt::Expr(e, _) => Some(format!("_spin_truthy({})", self.expr_to_lua(e))),
             _ => None,
         }
     }
@@ -287,7 +300,10 @@ impl LuaGenerator {
                 (String::new(), format!("{} = {}; ", target_expr, v))
             }
             // A blocking expression is a statement in its own right: enabled only while it holds.
-            Stmt::Expr(e, _) => (format!(" and ({})", self.expr_to_lua(e)), String::new()),
+            Stmt::Expr(e, _) => (
+                format!(" and _spin_truthy({})", self.expr_to_lua(e)),
+                String::new(),
+            ),
             Stmt::Assert(e, _) => {
                 let cond = self.expr_to_lua(e);
                 let check = self.assert_failure_effect(&cond, &format!("assert({})", cond));
@@ -357,6 +373,7 @@ impl LuaGenerator {
         } else {
             "_step".to_string()
         };
+        let provided = self.provided_guard();
         let total: usize = exec.iter().map(|s| self.fsize(s)).sum();
         let end = total;
         let mut nodes: Vec<FNode> = Vec::with_capacity(end + 1);
@@ -376,10 +393,15 @@ impl LuaGenerator {
                 // Each option's guard text, in the order the options appear. A condition is an
                 // expression; a statement guard is whatever makes that statement executable, such
                 // as a non-empty channel for a receive. An option with neither is `else`.
+                // Each option's guard text, already a Lua boolean. A condition is a Promela
+                // expression and has to be read with Promela truthiness, where 0 is false; a
+                // statement guard is a boolean already; an option with neither is `else`. The
+                // texts are used both positively and negated (for `else` and for a loop's exit),
+                // so they must agree on what "true" means.
                 let conds: Vec<String> = options
                     .iter()
                     .map(|o| match (&o.condition, &o.stmt_guard) {
-                        (Some(e), _) => self.expr_to_lua(e),
+                        (Some(e), _) => format!("_spin_truthy({})", self.expr_to_lua(e)),
                         (None, Some(g)) => g.clone(),
                         (None, None) => String::new(),
                     })
@@ -408,8 +430,8 @@ impl LuaGenerator {
                     self.emit("    table.insert(transitions, {");
                     self.indent += 1;
                     self.emit(&format!(
-                        "    guard = function(s) return s.{} == {}{} end,",
-                        step_var, i, guard
+                        "    guard = function(s) return s.{} == {}{}{} end,",
+                        step_var, i, guard, provided
                     ));
                     self.emit(&format!(
                         "    effect = function(s) s.{} = {} end,",
@@ -454,8 +476,8 @@ impl LuaGenerator {
                     self.emit("    table.insert(transitions, {");
                     self.indent += 1;
                     self.emit(&format!(
-                        "    guard = function(s) return s.{} == {}{} end,",
-                        step_var, i, guard
+                        "    guard = function(s) return s.{} == {}{}{} end,",
+                        step_var, i, guard, provided
                     ));
                     self.emit(&format!(
                         "    effect = function(s) s.{} = {} end,",
@@ -491,8 +513,8 @@ impl LuaGenerator {
                 FNode::Halt => {
                     self.emit(&format!("    -- step {}: end of body", i));
                     self.emit(&format!(
-                        "    guard = function(s) return s.{} == {} end,",
-                        step_var, i
+                        "    guard = function(s) return s.{} == {}{} end,",
+                        step_var, i, provided
                     ));
                     let done = match self.current_proctype {
                         Some(ref p) => format!("s._done_{} = true", p),
@@ -515,8 +537,8 @@ impl LuaGenerator {
                     };
                     self.emit(&format!("    -- step {}: {}", i, describe_stmt(&stmt)));
                     self.emit(&format!(
-                        "    guard = function(s) return s.{} == {}{} end,",
-                        step_var, i, extra_guard
+                        "    guard = function(s) return s.{} == {}{}{} end,",
+                        step_var, i, extra_guard, provided
                     ));
                     self.emit(&format!("    effect = function(s) {}{} end,", prefix, tail));
                     let is_assert = matches!(stmt, Stmt::Assert(_, _));
@@ -536,8 +558,8 @@ impl LuaGenerator {
                 FNode::Jump(target) => {
                     self.emit(&format!("    -- step {}: jump {}", i, target));
                     self.emit(&format!(
-                        "    guard = function(s) return s.{} == {} end,",
-                        step_var, i
+                        "    guard = function(s) return s.{} == {}{} end,",
+                        step_var, i, provided
                     ));
                     if target == end {
                         let done = self.done_field();
@@ -557,8 +579,8 @@ impl LuaGenerator {
                     match labels.iter().find(|(n, _)| *n == name).map(|(_, s)| *s) {
                         Some(t) => {
                             self.emit(&format!(
-                                "    guard = function(s) return s.{} == {} end,",
-                                step_var, i
+                                "    guard = function(s) return s.{} == {}{} end,",
+                                step_var, i, provided
                             ));
                             self.emit(&format!(
                                 "    effect = function(s) s.{} = {} end,",
@@ -584,8 +606,8 @@ impl LuaGenerator {
                 } => {
                     self.emit(&format!("    -- step {}: fused region", i));
                     self.emit(&format!(
-                        "    guard = function(s) return s.{} == {}{} end,",
-                        step_var, i, guard
+                        "    guard = function(s) return s.{} == {}{}{} end,",
+                        step_var, i, guard, provided
                     ));
                     self.emit(&format!(
                         "    effect = function(s) {}s.{} = {} end,",
