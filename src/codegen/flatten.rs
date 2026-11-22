@@ -51,6 +51,15 @@ enum FNode {
         vars: Vec<String>,
         next: usize,
     },
+    /// The handler of an `unless`: executable while the body is mid-flight, and taking it leaves
+    /// the body for `next`.
+    UnlessEscape {
+        guard: String,
+        effect: String,
+        from: usize,
+        to: usize,
+        next: usize,
+    },
     /// A construct with no encoding yet. Refused rather than reordered or dropped.
     Refuse(&'static str),
 }
@@ -80,6 +89,12 @@ impl LuaGenerator {
                     .map(|g| g.body.iter().map(|b| self.fsize(b)).sum::<usize>())
                     .sum();
                 1 + bodies
+            }
+            // `unless` is the body plus one step for the handler.
+            Stmt::Unless { body, handler, .. } => {
+                let body_size: usize = body.iter().map(|s| self.fsize(s)).sum();
+                let handler_size: usize = handler.iter().map(|s| self.fsize(s)).sum();
+                body_size + handler_size
             }
             // `for` is an init, a selection, the body and the update.
             Stmt::For {
@@ -243,7 +258,37 @@ impl LuaGenerator {
                 self.flayout_stmt(update, upd_at, sel_at, brk, nodes, labels);
             }
             Stmt::Run(_, _, _) => nodes[at] = FNode::Refuse("run"),
-            Stmt::Unless { .. } => nodes[at] = FNode::Refuse("unless"),
+            // `P unless Q`: Q has priority. Every step of the body is disabled exactly where Q is
+            // executable, and one transition takes Q and leaves the body. The alternative encoding
+            // - Q merely enabled alongside the body - explores runs where the body continues past
+            // the escape, which pan does not: a consumer's model refutes under it and holds under
+            // pan.
+            Stmt::Unless { body, handler, .. } => {
+                let body_size: usize = body.iter().map(|s| self.fsize(s)).sum();
+                let body_end = at + body_size;
+                if handler.len() == 1 && is_simple_stmt(&handler[0]) {
+                    self.flayout_seq(body, at, next, brk, nodes, labels);
+                    let (g, e) = self.fstmt_parts(&handler[0]);
+                    let guard = g.trim_start_matches(" and ").to_string();
+                    let guard = if guard.is_empty() {
+                        "true".to_string()
+                    } else {
+                        guard
+                    };
+                    self.preempt.push((at, body_end, guard.clone()));
+                    nodes[body_end] = FNode::UnlessEscape {
+                        guard,
+                        effect: e,
+                        from: at,
+                        to: body_end,
+                        next,
+                    };
+                } else {
+                    nodes[at] = FNode::Refuse(
+                        "an unless handler with more than one statement is not supported",
+                    );
+                }
+            }
             _ => {
                 nodes[at] = FNode::Simple {
                     stmt: s.clone(),
@@ -480,6 +525,7 @@ impl LuaGenerator {
             .current_step
             .clone()
             .unwrap_or_else(|| "_step".to_string());
+        self.preempt.clear();
         let provided = self.provided_guard();
         let total: usize = exec.iter().map(|s| self.fsize(s)).sum();
         let end = total;
@@ -495,6 +541,15 @@ impl LuaGenerator {
         #[allow(clippy::needless_range_loop)]
         for i in 0..nodes.len() {
             let node = std::mem::replace(&mut nodes[i], FNode::Refuse("taken"));
+            // A body step inside an `unless` is disabled exactly where the handler is
+            // executable: pan gives the escape priority, so the body may not move.
+            let preempt: String = self
+                .preempt
+                .iter()
+                .filter(|(from, to, _)| i >= *from && i < *to)
+                .map(|(_, _, g)| format!(" and not ({})", g))
+                .collect();
+            let provided = format!("{}{}", provided, preempt);
             if let FNode::Select { options, exit } = node {
                 self.emit(&format!("    -- step {}: selection", i));
                 // Each option's guard text, in the order the options appear. A condition is an
@@ -812,6 +867,28 @@ impl LuaGenerator {
                         }
                     }
                     self.emit_deps(&deps);
+                    self.emit(&format!("    label = \"body:step{}\",", i));
+                }
+                FNode::UnlessEscape {
+                    guard,
+                    effect,
+                    from,
+                    to,
+                    next,
+                } => {
+                    self.emit(&format!(
+                        "    -- step {}: unless escape for steps {}..{}",
+                        i, from, to
+                    ));
+                    self.emit(&format!(
+                        "    guard = function(s) return s.{} >= {} and s.{} < {} and ({}) end,",
+                        step_var, from, step_var, to, guard
+                    ));
+                    self.emit(&format!(
+                        "    effect = function(s) {}s.{} = {} end,",
+                        effect, step_var, next
+                    ));
+                    self.emit_opaque_deps();
                     self.emit(&format!("    label = \"body:step{}\",", i));
                 }
                 FNode::Refuse(why) => {

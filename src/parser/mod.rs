@@ -82,9 +82,23 @@ pub(crate) fn var_decl(input: Input) -> IResult<Input, VarDecl> {
 /// inside a block, an atomic region and a body. Only some statement parsers absorbed a semicolon
 /// and none absorbed an arrow, so a body written that way failed to parse.
 fn stmt(input: Input) -> IResult<Input, Stmt> {
-    let (input, stmt) = stmt_inner(input)?;
+    let (input, first) = stmt_inner(input)?;
+    // `P unless Q`: Q can end P early. It attaches to a statement rather than standing on its own,
+    // so `do ... od unless (x == 3)` is a loop followed by its escape.
+    if let Ok((rest, _)) = keyword("unless")(input)
+        && let Ok((rest2, handler)) = stmt(rest)
+    {
+        return Ok((
+            rest2,
+            Stmt::Unless {
+                body: vec![first],
+                handler: vec![handler],
+                line: 0,
+            },
+        ));
+    }
     let (input, _) = opt(alt((symbol("->"), symbol(";"))))(input)?;
-    Ok((input, stmt))
+    Ok((input, first))
 }
 
 fn stmt_inner(input: Input) -> IResult<Input, Stmt> {
@@ -629,11 +643,6 @@ pub fn parse(source: &str) -> anyhow::Result<PromelaModel> {
     // A construct the parser does not have produces "N characters left unconsumed", which a caller
     // cannot tell apart from a model of their own that is malformed. The two below are named
     // instead, so the answer says which side the gap is on.
-    if preprocess::contains_keyword(source, "unless") {
-        anyhow::bail!(
-            "unless is not implemented: the handler interleaves with the body, which needs a              transition over both, so a model using it gets no verdict"
-        );
-    }
     let (rest, declarations) =
         many0(top_level)(source).map_err(|e| anyhow::anyhow!("parse error: {:?}", e))?;
     let declarations: Vec<TopLevel> = declarations.into_iter().flatten().collect();

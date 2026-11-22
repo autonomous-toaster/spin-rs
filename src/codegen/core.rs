@@ -14,6 +14,7 @@ impl LuaGenerator {
             current_done: None,
             current_step: None,
             rendezvous: std::collections::BTreeMap::new(),
+            preempt: Vec::new(),
             var_types: std::collections::HashMap::new(),
             global_vars: std::collections::HashSet::new(),
             inlines: std::collections::HashMap::new(),

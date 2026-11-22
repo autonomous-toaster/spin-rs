@@ -71,6 +71,20 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(0),
         source: "/* The escape fires at x == 3, so the loop cannot reach 5. */\nbool stop = false;\nbyte x = 0;\n\nactive proctype P() {\n    do\n    :: x < 5 -> x++\n    od unless (x == 3)\n}\n\nltl p0 { [] ( x <= 4 ) }\n",
     },
+    // Reconstructed from the consumer's description of the pair that brackets what an
+    // escape means: the handler is armed by the first statement of the body, so a correct
+    // encoding leaves before the second statement runs. The control is the same model with
+    // the escape checked only at the loop top, which pan refutes.
+    Construct {
+        name: "unless_midbody",
+        pan: Some(0),
+        source: "byte x = 0;\nactive proctype P() {\n    do :: x < 5 -> x = 1; x = x + 10 od unless (x == 1)\n}\nltl p0 { [] ( x <= 4 ) }\n",
+    },
+    Construct {
+        name: "unless_midbody_toptop",
+        pan: Some(1),
+        source: "byte x = 0;\nactive proctype P() {\n    do :: (x < 5 && x != 1) -> x = 1; x = x + 10 od\n}\nltl p0 { [] ( x <= 4 ) }\n",
+    },
 ];
 
 /// What this engine answered for one construct.
@@ -133,10 +147,11 @@ mod tests {
     fn a_refused_construct_is_refused_by_name() {
         // The README claims these are refused by name rather than by a parse error carrying an
         // offset, which a caller cannot tell apart from a malformed model of their own.
+        // `unless` used to be in this list; it moved to being decided when the escape landed, which
+        // is this table doing what it was built for.
         for (name, needle) in [
             ("priority", "priority is not implemented"),
             ("run", "run is not supported"),
-            ("unless", "unless is not implemented"),
         ] {
             let c = CONSTRUCTS
                 .iter()

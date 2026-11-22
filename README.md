@@ -141,6 +141,12 @@ categories below, because this engine answers three ways and only one of them is
 - **Channels**: buffered (`[N]`), arrays (`chan c[N] = [cap] of { t }`), send and receive as
   statements and as guards, `len`/`full`/`empty`/`nfull`/`nempty`. A channel's queue is part of the
   state, so a state always determines its own transitions.
+- **`P unless Q`**. pan gives the escape priority: once `Q` is executable the body may not take
+  another step. Each body step is therefore disabled exactly where the handler is executable, and
+  one transition takes the handler and leaves the body. The alternative - the handler merely
+  enabled beside the body - explores runs where the body continues past the escape, which pan does
+  not: a consumer's model holds under pan and refutes under that encoding. A handler of more than
+  one statement is refused by name.
 - **Rendezvous channels** (`[0]`). pan runs the send and the receive as one transition over two
   processes; this engine moves one process per transition, so the handshake is staged instead: the
   sender writes the message and its own continuation into the channel and does not advance, and the
@@ -161,7 +167,6 @@ These are hard errors. No verdict is produced, so nothing about the model is cla
 | construct | why |
 |---|---|
 | `run P(...)` | a spawned process needs dynamic instances; the transition table is emitted per static instance |
-| `unless` | the handler interleaves with the body, which needs a transition over both. Refused by name |
 | bare `{ ... }` block | not a statement the parser has, so the model fails to parse |
 
 

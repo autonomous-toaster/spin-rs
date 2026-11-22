@@ -116,53 +116,6 @@ pub fn preprocess(source: &str) -> Result<String, Unsupported> {
     Ok(out)
 }
 
-/// Is `word` present as an identifier outside comments and string literals?
-///
-/// Used to refuse a construct by name. A bare parse error names a character offset, which a caller
-/// cannot tell apart from a malformed model of their own; naming the construct says what to do.
-pub fn contains_keyword(source: &str, word: &str) -> bool {
-    let chars: Vec<char> = source.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        // Skip comments.
-        if chars[i] == '/' && i + 1 < chars.len() && chars[i + 1] == '*' {
-            i += 2;
-            while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '/') {
-                i += 1;
-            }
-            i = (i + 2).min(chars.len());
-            continue;
-        }
-        if chars[i] == '/' && i + 1 < chars.len() && chars[i + 1] == '/' {
-            while i < chars.len() && chars[i] != '\n' {
-                i += 1;
-            }
-            continue;
-        }
-        // Skip string literals.
-        if chars[i] == '"' {
-            i += 1;
-            while i < chars.len() && chars[i] != '"' {
-                i += 1;
-            }
-            i = (i + 1).min(chars.len());
-            continue;
-        }
-        if chars[i].is_alphabetic() || chars[i] == '_' {
-            let start = i;
-            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
-                i += 1;
-            }
-            if chars[start..i].iter().collect::<String>() == word {
-                return true;
-            }
-            continue;
-        }
-        i += 1;
-    }
-    false
-}
-
 /// Replace whole-word occurrences, leaving string literals and comments alone.
 fn replace_word(text: &str, word: &str, value: &str) -> String {
     let mut out = String::with_capacity(text.len());

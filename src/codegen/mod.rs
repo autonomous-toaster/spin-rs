@@ -85,6 +85,12 @@ pub(crate) struct LuaGenerator {
     /// which proctypes can be on the other side, hence this map, filled from the AST before any
     /// body is emitted.
     pub(crate) rendezvous: std::collections::BTreeMap<String, Vec<(String, usize)>>,
+    /// Ranges of a body's steps that an `unless` handler preempts, with the handler's guard.
+    ///
+    /// A body step inside one of these is disabled exactly where the handler is executable: pan's
+    /// `P unless Q` gives Q priority, so the body may not take a step once the escape can fire.
+    /// Cleared per body.
+    pub(crate) preempt: Vec<(usize, usize, String)>,
     /// Declared type of every state field, keyed by the field name the state stores.
     ///
     /// Promela's types are fixed width and assignments wrap, so the value a variable holds is not
