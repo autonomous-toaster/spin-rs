@@ -250,6 +250,7 @@ ltl p0 { [] ( !a ) }
 ltl p1 { [] ( !b ) }
 ltl p2 { [] ( !c ) }
  ";
+    // Four claims share a budget of two: one state each, since a share is at least one.
     let r = run(src, true, 2);
     let claims = ["p0", "p1", "p2"];
     // The invariant: no claim may be absent. Each is either refuted or reported undecided.
@@ -270,10 +271,54 @@ ltl p2 { [] ( !c ) }
         "an exhausted budget must be reported as StateBudget: {:?}",
         r.unverified
     );
+    // The budget is shared out, not pooled: three claims and two states means one state each,
+    // so the run cannot exceed that however much the first claim would like.
     assert!(
-        r.states_explored <= 2,
-        "the budget must bound the whole run, got {}",
+        r.states_explored <= 3,
+        "one share per claim must bound the whole run, got {}",
         r.states_explored
+    );
+    assert!(
+        r.unverified
+            .iter()
+            .filter(|u| u.kind == UnverifiedKind::StateBudget)
+            .all(|u| u.reason.contains("share")),
+        "a starved claim must be told the budget is shared out: {:?}",
+        r.unverified
+    );
+}
+
+#[test]
+fn a_starved_first_claim_cannot_take_the_budget_from_the_others() {
+    // The first claim's reachable space is far larger than its share, and the three claims behind
+    // it are false in the initial state, so one state each decides them. With one pool drawn in
+    // declaration order the first claim took everything and the rest were reported starved without
+    // a verdict; each claim now has its own share, so they are decided.
+    let src = "
+bool a, b, c, d;
+active proctype P1() { d = 1; d = 2; d = 3; d = 4; d = 5; d = 6; d = 7; d = 8 }
+active proctype P2() { a = 1 }
+active proctype P3() { b = 1 }
+active proctype P4() { c = 1 }
+ltl p0 { [] ( !d ) }
+ltl p1 { [] ( a ) }
+ltl p2 { [] ( b ) }
+ltl p3 { [] ( c ) }
+ ";
+    let r = run(src, true, 4);
+    for claim in ["p1", "p2", "p3"] {
+        assert!(
+            r.violations.iter().any(|v| v.property_name == claim),
+            "claim {claim} must be decided from its own share, not starved by the first claim: {:?}",
+            r.unverified
+        );
+    }
+    assert!(
+        r.unverified
+            .iter()
+            .any(|u| u.property_name == "p0" && u.kind == UnverifiedKind::StateBudget),
+        "the first claim needs more than its share and must say so: {:?}",
+        r.unverified
     );
 }
 

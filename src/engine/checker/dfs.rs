@@ -77,11 +77,6 @@ impl<M: Model> Checker<M> {
                 hit_depth_limit = true;
                 continue;
             }
-            if storage.len() >= budget {
-                hit_state_limit = true;
-                break;
-            }
-
             // Check for violations (safety properties / assertions). Model-level checks run on
             // one traversal only: repeating them per claim would report the same deadlock N times.
             if model_checks
@@ -138,6 +133,16 @@ impl<M: Model> Checker<M> {
                         }
                     }
                 }
+            }
+
+            // The budget bounds how much of the state space is *stored*, so it is enforced after
+            // this state has been examined and before its successors are enumerated. It used to be
+            // checked on entry, which meant a budget of one stored the initial state and then
+            // examined nothing: every claim with a share of one state was reported starved even
+            // when the initial state already refuted it.
+            if storage.len() >= budget {
+                hit_state_limit = true;
+                break;
             }
 
             let enabled = self.model.transitions(&state);
@@ -239,6 +244,11 @@ impl<M: Model> Checker<M> {
         if model_checks
             && transitions_count == 0
             && self.model.process_count() > 0
+            // A traversal stopped by its budget has not established that nothing is enabled; it
+            // established that it ran out. Reporting the model as unexplorable because the budget
+            // was one state made a small budget look like a broken model.
+            && !hit_state_limit
+            && !hit_depth_limit
             && !violations.iter().any(|v| v.property_name == "model")
             // A deadlock at the initial state already explains why nothing was explored.
             // Reporting it twice inflated the error count: one blocked model produced two
@@ -307,10 +317,16 @@ impl<M: Model> Checker<M> {
                     None => "model".to_string(),
                 },
                 kind: UnverifiedKind::StateBudget,
-                reason: format!(
-                    "search stopped at the state limit of {} before the state space closed",
-                    budget
-                ),
+                reason: match scope {
+                    Some(_) => format!(
+                        "search stopped at the state limit of {} before the state space closed; that is this claim's share of the run's budget",
+                        budget
+                    ),
+                    None => format!(
+                        "search stopped at the state limit of {} before the state space closed",
+                        budget
+                    ),
+                },
             });
         }
 
