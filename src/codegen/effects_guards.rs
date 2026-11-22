@@ -337,17 +337,30 @@ impl LuaGenerator {
                     ));
                 }
                 Stmt::Send {
-                    channel, target, ..
+                    channel,
+                    target,
+                    args,
+                    ..
                 } => {
-                    let id = match target {
+                    // This used to emit chan_send(chan, id, ...) - a vararg in a non-vararg
+                    // function, and the wrong helper: every model with a send inside a sequenced
+                    // body failed to load with a Lua syntax error. Build the same call the flat
+                    // emitter builds.
+                    let chan = self.channel_to_lua(channel);
+                    let mut values: Vec<String> = vec![match target {
                         SendTarget::Ident(id) => id.clone(),
-                        SendTarget::Value(_) => "expr".to_string(),
-                        SendTarget::Sorted(val) => self.expr_to_lua(val),
-                    };
+                        SendTarget::Value(v) => self.expr_to_lua(v),
+                        SendTarget::Sorted(v) => self.expr_to_lua(v),
+                    }];
+                    values.extend(args.iter().map(|a| self.expr_to_lua(a)));
                     self.emit(&format!(
-                        "    effect = function(s) chan_send({}, {}, ...); s.{} = {} end,",
-                        self.channel_to_lua(channel),
-                        id,
+                        "    guard = function(s) return s.{} == {} and not chan_full({}) end,",
+                        step_var, step, chan
+                    ));
+                    self.emit(&format!(
+                        "    effect = function(s) _spin_chan_send(s, {}, {}); s.{} = {} end,",
+                        chan,
+                        values.join(", "),
                         step_var,
                         next
                     ));

@@ -5,11 +5,11 @@ one claim per model, so ours and pan are like for like.
 
 | outcome | count |
 |---|---|
-| agree | 28 |
-| false refutation | 3 |
+| agree | 31 |
+| false refutation | 4 |
 | false clean | 2 |
 | decline | 0 |
-| refusal | 32 |
+| refusal | 28 |
 | pan unbuildable | 0 |
 | total | 65 |
 
@@ -22,6 +22,7 @@ one claim per model, so ours and pan are like for like.
 | `nested_if_multi__ev_a` | false refutation | Verdict(1) | Some(0) |
 | `atomic_region__impl_ba` | false refutation | Verdict(1) | Some(0) |
 | `dstep_region__impl_ba` | false refutation | Verdict(1) | Some(0) |
+| `send_then_assign__ev_a` | false refutation | Verdict(1) | Some(0) |
 
 ## Per template
 
@@ -40,7 +41,7 @@ one claim per model, so ours and pan are like for like.
 | `loop_and_assert` | 1 | 0 | 0 |
 | `nested_if_multi` | 1 | 3 | 0 |
 | `nested_if_two` | 0 | 0 | 4 |
-| `send_then_assign` | 0 | 0 | 4 |
+| `send_then_assign` | 3 | 1 | 0 |
 | `seq2_ab` | 4 | 0 | 0 |
 | `seq2_ba` | 4 | 0 | 0 |
 | `seq3_bxa` | 4 | 0 | 0 |
