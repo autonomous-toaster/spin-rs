@@ -65,6 +65,26 @@ GIVEN a model that pan accepts and that our search calls an accepting cycle at t
 WHEN the runtime is inspected
 THEN no transition SHALL depend on any state the state table does not carry.
 
+### Requirement: Guards Read As Promela Reads Them
+A guard, selection condition or blocking expression SHALL be true exactly when its value is non-zero and not `false` or `nil`. A stored value SHALL be truncated to its variable's declared type on assignment, and `/` and `%` SHALL truncate toward zero as C does.
+
+The host language's rules are not the model's rules: Lua treats 0 as true, divides in floating point and floors its remainder, and its numbers have no width. Each of those produced a verdict pan disagrees with.
+
+#### Scenario: a zero-valued guard
+GIVEN `byte n = 0` and `if :: (n) -> a = 1 :: else -> skip fi`
+WHEN the claim `[] ( !a )` is checked
+THEN the first branch SHALL be disabled and the claim SHALL hold, as pan holds it.
+
+#### Scenario: an assignment that overflows
+GIVEN `byte x = 255` and `x = x + 1`
+WHEN the state is inspected
+THEN `x` SHALL be 0.
+
+#### Scenario: a negative remainder
+GIVEN `short x = 0 - 7`
+WHEN `x % 2` is evaluated
+THEN the result SHALL be -1, not 1.
+
 ### Requirement: A Loop Blocks At Its Head
 A `do` whose guards are all disabled at its head SHALL block, as pan's invalid end state does, and SHALL NOT fall through to the statement after it. Only a `break` leaves a `do`. A `for` SHALL leave its range for the statement after it, and its body SHALL be a sequence of ordinary steps rather than one atomic region.
 

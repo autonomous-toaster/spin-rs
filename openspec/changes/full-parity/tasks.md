@@ -43,19 +43,36 @@
 
 ## Phase 3: Statement Semantics
 
-- [ ] 3.1 `else` guard resolved against the other guards of its own selection, not against a constant
-- [ ] 3.2 `unless` escape edge: handler taken only when the body cannot move
+- [x] 3.1 `else` guard resolved against the other guards of its own selection, not against a constant.
+      A guard whose condition the parser did not capture is either `else` or a statement standing in
+      for one; only a blocking statement supplies a guard, which is how `:: c ? x ->` is expressed
+- [ ] 3.2 `unless` escape edge: refused today. The handler interleaves with the body, which needs a
+      second step counter per process and a transition over both; the construct is also written as
+      `{ body } unless { handler }`, and a bare block is not a statement the parser has
 - [ ] 3.3 `timeout` enabled only when no process can move
-- [ ] 3.4 `provided` clause enforced (parsed today, referenced nowhere outside the AST)
+- [x] 3.4 `provided` clause enforced: the condition gates every transition of its proctype.
+      It was parsed and referenced nowhere outside the AST, and once the parser accepted it that
+      showed up as a false refutation
 - [ ] 3.5 `d_step` restrictions: no blocking, no nondeterminism, else refuse loudly
 - [ ] 3.6 Deadlock means invalid end state: a state with no transitions is an error only when some
       process is not at a valid end state
 - [ ] 3.7 Fairness survey: whether `fair` or `-f` changes a verdict on any supported model.
       Human review only; never silently ignored
 
+- [ ] 3.8 `run` refused: a spawned process needs dynamic instances, and the transition table is
+      emitted per static instance
+- [ ] 3.9 `priority` parsed and recorded as unimplemented; it is not silently ignored, but it is not
+      enforced either
+- [ ] 3.10 A `{ ... }` block is not a statement: `unless`, and the grouping form on its own, do not parse
+- [x] 3.11 A guard is true when it is non-zero, as Promela says and as Lua does not: 0, `false` and `nil`
+      are false, everything else true. Four probe models were refuted by a `(n)` guard with `n == 0`
+- [x] 3.12 `->` is a statement separator, and `x++`/`x--` are statements; neither parsed
+
 ## Phase 4: Data Surface
 
-- [ ] 4.1 Integer types and wraparound: `bit`, `byte`, `short`, `int`, `unsigned`, `mtype` ranges and overflow
+- [x] 4.1 Integer types and wraparound: every stored value is truncated to its declared type, and
+      `/` and `%` follow C rather than Lua. Four probe models were clean where pan refutes them before
+      this. `unsigned` widths and `mtype` ranges are covered by the same truncation
 - [ ] 4.2 Arrays, including multi-dimensional and indexed writes
 - [ ] 4.3 `typedef` and structured fields in the state
 - [ ] 4.4 Remote references `P[i]:x`, and `_pid`, `_last`, `_nr_pr`
