@@ -141,6 +141,10 @@ categories below, because this engine answers three ways and only one of them is
 - **Channels**: buffered (`[N]`), arrays (`chan c[N] = [cap] of { t }`), send and receive as
   statements and as guards, `len`/`full`/`empty`/`nfull`/`nempty`. A channel's queue is part of the
   state, so a state always determines its own transitions.
+- **`priority N`**. pan runs only the highest-priority *enabled* process, so the filter is applied
+  after enabledness is known: a blocked high-priority process does not hold up a low-priority one.
+  Measured on a consumer's pair - a process that loops forever at priority 2 beside one that sets a
+  flag - the claim holds with the clause and is refuted without it, and both agree with pan.
 - **`P unless Q`**. pan gives the escape priority: once `Q` is executable the body may not take
   another step. Each body step is therefore disabled exactly where the handler is executable, and
   one transition takes the handler and leaves the body. The alternative - the handler merely
@@ -170,7 +174,6 @@ These are hard errors. No verdict is produced, so nothing about the model is cla
 | bare `{ ... }` block | not a statement the parser has, so the model fails to parse |
 
 
-| `priority N` | pan runs only the highest-priority enabled process; ignoring it refuted a model pan accepts, so it is refused instead |
 | typedef records (`r.f`) | structured fields are not in the state |
 | `P@x` (remote variable) | the reference does not resolve |
 | `pc_value(pid)` | it exposes the checker's own statement numbering, which is not comparable with pan's |

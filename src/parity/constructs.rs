@@ -78,12 +78,12 @@ pub const CONSTRUCTS: &[Construct] = &[
     Construct {
         name: "unless_midbody",
         pan: Some(0),
-        source: "byte x = 0;\nactive proctype P() {\n    do :: x < 5 -> x = 1; x = x + 10 od unless (x == 1)\n}\nltl p0 { [] ( x <= 4 ) }\n",
+        source: "byte x = 0;\nactive proctype P() {\n    do :: x < 5 -> x = 1; x = x + 10 od unless (x == 1)\n}\nltl p0 { [] ( x <= 1 ) }\n",
     },
     Construct {
         name: "unless_midbody_toptop",
         pan: Some(1),
-        source: "byte x = 0;\nactive proctype P() {\n    do :: (x < 5 && x != 1) -> x = 1; x = x + 10 od\n}\nltl p0 { [] ( x <= 4 ) }\n",
+        source: "byte x = 0;\nactive proctype P() {\n    do :: (x < 5 && x != 1) -> x = 1; x = x + 10 od\n}\nltl p0 { [] ( x <= 1 ) }\n",
     },
 ];
 
@@ -147,12 +147,9 @@ mod tests {
     fn a_refused_construct_is_refused_by_name() {
         // The README claims these are refused by name rather than by a parse error carrying an
         // offset, which a caller cannot tell apart from a malformed model of their own.
-        // `unless` used to be in this list; it moved to being decided when the escape landed, which
-        // is this table doing what it was built for.
-        for (name, needle) in [
-            ("priority", "priority is not implemented"),
-            ("run", "run is not supported"),
-        ] {
+        // `unless` and `priority` used to be in this list; both moved to being decided when their
+        // encodings landed, which is this table doing what it was built for.
+        for (name, needle) in [("run", "run is not supported")] {
             let c = CONSTRUCTS
                 .iter()
                 .find(|c| c.name == name)

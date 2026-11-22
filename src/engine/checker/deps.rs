@@ -23,6 +23,12 @@ pub struct TransitionDeps {
     pub internal: bool,
     /// True when the emitter could not state the dependencies precisely.
     pub opaque: bool,
+    /// The process this transition belongs to, as the generator names it.
+    ///
+    /// pan's `priority` restricts which processes may move, so the engine has to know which
+    /// process an enabled transition came from; the emitter already wrote this field for its own
+    /// bookkeeping.
+    pub owner: String,
 }
 
 impl Default for TransitionDeps {
@@ -30,6 +36,7 @@ impl Default for TransitionDeps {
         Self {
             reads: Vec::new(),
             writes: Vec::new(),
+            owner: String::new(),
             internal: false,
             opaque: true,
         }
@@ -44,6 +51,7 @@ impl TransitionDeps {
             writes: writes.iter().map(|s| s.to_string()).collect(),
             internal,
             opaque: false,
+            owner: String::new(),
         }
     }
 

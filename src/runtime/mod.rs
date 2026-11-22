@@ -150,6 +150,7 @@ end
                 internal: t.get("internal").unwrap_or(false),
                 // Absent metadata means unknown dependencies, never none.
                 opaque: t.get("opaque").unwrap_or(true),
+                owner: t.get("owner").unwrap_or_default(),
             };
             let guard_fn: mlua::Function = lua_ok(t.get("guard"))?;
             let effect_fn: mlua::Function = lua_ok(t.get("effect"))?;
@@ -215,6 +216,11 @@ pub struct LuaModel {
     /// Reduction asks which of these a claim can observe, so it needs the real field names
     /// (p1_x, t1_done) rather than the Promela identifiers they came from.
     state_fields: Vec<String>,
+    /// Declared `priority` per process owner, for the processes that declare one.
+    ///
+    /// pan runs only the highest-priority *enabled* process, so the filter belongs after
+    /// enabledness is known: a blocked high-priority process does not hold up a low-priority one.
+    priorities: std::collections::HashMap<String, i64>,
     /// The parsed model, kept so a claim's atom can be translated against its globals.
     atom_model: crate::parser::ast::PromelaModel,
     /// Atom text to the Lua expression that decides it, so the product search pays for the
@@ -223,6 +229,11 @@ pub struct LuaModel {
 }
 
 impl LuaModel {
+    /// The declared priority of the process that owns a transition; 0 when it declares none.
+    fn priority_of(&self, owner: &str) -> i64 {
+        self.priorities.get(owner).copied().unwrap_or(0)
+    }
+
     /// Create from a parsed Promela model.
     pub fn from_model(model: &crate::parser::ast::PromelaModel) -> anyhow::Result<Self> {
         let generated = codegen::generate(model);
@@ -286,6 +297,28 @@ impl LuaModel {
             _ => false,
         });
 
+        // Owner name to priority, for the processes that declare one. The owner is the prefix the
+        // generator uses, which carries the instance number when there is more than one.
+        let mut priorities = std::collections::HashMap::new();
+        for decl in &model.declarations {
+            if let crate::parser::ast::TopLevel::Proctype(p) = decl
+                && let Some(priority) = p.priority
+            {
+                let count = if p.active {
+                    p.pid.map(|n| n as usize).unwrap_or(1)
+                } else {
+                    1
+                };
+                if count == 1 {
+                    priorities.insert(p.name.clone(), priority);
+                } else {
+                    for instance in 0..count {
+                        priorities.insert(format!("{}_{}", p.name, instance), priority);
+                    }
+                }
+            }
+        }
+
         let state_fields = match runtime.init_state() {
             Ok(blob) => parse_state_keys(&blob),
             Err(_) => Vec::new(),
@@ -299,6 +332,7 @@ impl LuaModel {
             eval_error: std::cell::RefCell::new(None),
             has_asserts,
             state_fields,
+            priorities,
             atom_model: model.clone(),
             atom_chunks: std::cell::RefCell::new(std::collections::HashMap::new()),
         })
@@ -328,10 +362,27 @@ impl Model for LuaModel {
     fn transitions(&self, state: &StateBlob) -> Vec<Transition<StateBlob>> {
         let runtime = self.runtime.borrow();
         match runtime.enumerate_transitions(&state.0) {
-            Ok(results) => results
-                .into_iter()
-                .map(|t| Transition::new(t.label, StateBlob(t.next_state)).with_deps(t.deps))
-                .collect(),
+            Ok(results) => {
+                let enabled: Vec<Transition<StateBlob>> = results
+                    .into_iter()
+                    .map(|t| Transition::new(t.label, StateBlob(t.next_state)).with_deps(t.deps))
+                    .collect();
+                // pan runs only the highest-priority enabled process. Filtering here rather than
+                // in the generator is what makes a *blocked* high-priority process not hold up a
+                // low-priority one.
+                let top = enabled
+                    .iter()
+                    .map(|t| self.priority_of(&t.deps.owner))
+                    .max()
+                    .unwrap_or(0);
+                if top > 0 {
+                    return enabled
+                        .into_iter()
+                        .filter(|t| self.priority_of(&t.deps.owner) == top)
+                        .collect();
+                }
+                enabled
+            }
             Err(e) => {
                 // Record the failure: an evaluation error is not an empty transition set.
                 log::error!("Failed to enumerate transitions: {}", e);
