@@ -258,6 +258,58 @@ fn two_process_models() -> Vec<Model> {
     out
 }
 
+/// Shapes that each exist because a defect was found by hand and must not come back.
+///
+/// A generator that cannot reproduce a known defect cannot find an unknown one, and these are the
+/// ones the grammar has no axis for: they need two processes, or a construct its templates do not
+/// emit. Each is here because it was wrong once.
+fn fixed_models() -> Vec<Model> {
+    const SHAPES: &[(&str, &str, &str)] = &[
+        // A channel's queue lives in the state. It used to live in the runtime, so reopening an
+        // earlier state saw the messages a later one had left behind and this model - which pan
+        // accepts - was refuted with an "accepting cycle" at trail length 0.
+        (
+            "channel_state",
+            "bool a;\nchan c = [1] of { bit };\nactive proctype P() { c ! 1; a = 1 }",
+            "<> ( a )",
+        ),
+        // A send declares the channel as written, so reduction may not order it freely against a
+        // test of the same channel. Without that this model was clean with reduction on and
+        // refuted with it off.
+        (
+            "channel_por",
+            "chan c = [2] of { bit };\nbit bad = 0;\nactive proctype P() { c ! 1 }\nactive proctype Q() { if :: (len(c) == 0) -> bad = 1 :: else -> skip fi }",
+            "[] ( !bad )",
+        ),
+        // A receive written as a guard, and the capacity of a channel array element.
+        (
+            "recv_guard",
+            "chan c[2] = [1] of { bit };\nbit a = 0, b = 0;\nactive proctype P() { c[0] ! 1 }\nactive proctype Q() { bit x; if :: c[0] ? x -> a = 1 :: else -> skip fi }",
+            "[] ( !a )",
+        ),
+        // A do loop whose guards run out blocks; it does not fall through. pan calls that an
+        // invalid end state, and reporting it as clean would be a false green.
+        (
+            "do_blocks",
+            "byte n = 0;\nactive proctype P() { do :: (n < 3) -> n = n + 1 od; assert(n == 3) }",
+            "",
+        ),
+    ];
+    SHAPES
+        .iter()
+        .map(|(name, body, claim)| Model {
+            name: name.to_string(),
+            source: if claim.is_empty() {
+                format!("{body}\n")
+            } else {
+                format!("{body}\nltl p {{ {claim} }}\n")
+            },
+            template: name,
+            claim: if claim.is_empty() { "model" } else { "p" },
+        })
+        .collect()
+}
+
 /// Every generated model.
 pub fn corpus() -> Vec<Model> {
     let mut out = Vec::new();
@@ -274,6 +326,7 @@ pub fn corpus() -> Vec<Model> {
     }
     out.push(loop_and_assert());
     out.extend(two_process_models());
+    out.extend(fixed_models());
     out
 }
 

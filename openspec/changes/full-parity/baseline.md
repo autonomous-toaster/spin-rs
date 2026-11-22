@@ -5,13 +5,13 @@ one claim per model, so ours and pan are like for like.
 
 | outcome | count |
 |---|---|
-| agree | 121 |
+| agree | 125 |
 | false refutation | 0 |
 | false clean | 0 |
 | decline | 0 |
 | refusal | 6 |
 | pan unbuildable | 0 |
-| total | 127 |
+| total | 131 |
 
 ## Wrong verdicts
 
@@ -24,6 +24,9 @@ None.
 | `assign_then_atomic` | 6 | 0 | 0 |
 | `assign_then_do` | 6 | 0 | 0 |
 | `atomic_region` | 6 | 0 | 0 |
+| `channel_por` | 1 | 0 | 0 |
+| `channel_state` | 1 | 0 | 0 |
+| `do_blocks` | 1 | 0 | 0 |
 | `do_then_assign` | 6 | 0 | 0 |
 | `do_then_do` | 6 | 0 | 0 |
 | `do_two_stmts` | 6 | 0 | 0 |
@@ -38,6 +41,7 @@ None.
 | `nested_if_multi` | 6 | 0 | 0 |
 | `nested_if_two` | 6 | 0 | 0 |
 | `race_a` | 6 | 0 | 0 |
+| `recv_guard` | 1 | 0 | 0 |
 | `rendezvous` | 0 | 0 | 6 |
 | `send_then_assign` | 6 | 0 | 0 |
 | `seq2_ab` | 6 | 0 | 0 |
