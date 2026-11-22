@@ -469,3 +469,20 @@ ltl p0 {{ [] ( !(done_t{n}) || done_t1 ) }}
         eight
     );
 }
+
+#[test]
+fn a_never_claim_is_reported_rather_than_ignored() {
+    // `never { skip }` is a violation in pan: the claim completes immediately. Its transition
+    // function is generated but the claim process is in no state and is dispatched by nothing, so
+    // this used to report "verification successful". A model carrying a claim we do not check must
+    // produce no verdict.
+    let src = "bit a = 0;\nactive proctype P() { a = 1 }\nnever { skip }\n";
+    let r = crate::runtime::verify(src).expect("the model loads");
+    assert!(
+        r.unverified
+            .iter()
+            .any(|u| u.property_name.starts_with("never")),
+        "a never claim must be reported as unchecked: {:?}",
+        r.unverified
+    );
+}

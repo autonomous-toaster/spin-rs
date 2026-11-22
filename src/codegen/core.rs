@@ -397,6 +397,34 @@ impl LuaGenerator {
         self.emit("    local transitions = {}");
         self.emit("");
 
+        if p.priority.is_some() {
+            // pan schedules only the highest-priority enabled process, so a model that has one
+            // means something different to pan than to an engine that ignores it - and ignoring it
+            // produced a refutation of a model pan accepts. Refused rather than approximated.
+            self.emit("    table.insert(transitions, {");
+            self.indent += 1;
+            self.emit(
+                "    guard = function(s) error('priority is not implemented: pan runs only the highest-priority enabled process, so a model with priorities gets no verdict here') end,",
+            );
+            self.emit("    effect = function(s) end,");
+            self.emit(&format!(
+                "    owner = \"{}\", reads = {{}}, writes = {{}}, internal = false, opaque = true,",
+                prefix
+            ));
+            self.emit("    label = \"priority:unsupported\",");
+            self.indent -= 1;
+            self.emit("    })");
+            self.emit("    return transitions");
+            self.indent -= 1;
+            self.emit("end");
+            self.emit("");
+            self.current_proctype = None;
+            self.current_provided = None;
+            self.current_done = None;
+            self.current_step = None;
+            return;
+        }
+
         // Emit transition table based on control flow
         self.emit_body_sequenced(&p.body, 0);
 

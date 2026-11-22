@@ -450,6 +450,25 @@ impl Model for LuaModel {
         &self.ltl_formulas
     }
 
+    /// `never` claims. The claim's transition function is generated, but the claim process has no
+    /// place in the state and is dispatched by nothing, so a model carrying one used to come back
+    /// verified: `never { skip }` is a violation in pan and was a clean run here. Until the claim
+    /// process is modelled, a model that has one gets no verdict rather than a false one.
+    fn unchecked_claims(&self) -> Vec<(String, String)> {
+        self.atom_model
+            .declarations
+            .iter()
+            .filter(|d| matches!(d, crate::parser::ast::TopLevel::NeverClaim(_)))
+            .enumerate()
+            .map(|(i, _)| {
+                (
+                    format!("never_{}", i),
+                    "a never claim is not checked: its process is generated but not part of the state, so this model gets no verdict rather than a false one".to_string(),
+                )
+            })
+            .collect()
+    }
+
     fn state_to_string(&self, state: &Self::State) -> Option<String> {
         Some(state.0.clone())
     }
@@ -647,7 +666,11 @@ fn typed_eval_failure(detail: String) -> anyhow::Error {
 pub fn verify(source: &str) -> anyhow::Result<CheckResult> {
     let model = LuaModel::from_source(source)?;
     let checker = CheckerBuilder::new().model(model).build();
-    let result = checker.check_dfs();
+    // `check()`, not `check_dfs()`: the latter is the bare unreduced traversal and skips
+    // everything the configured entry point adds - reduction, and the claims this engine does not
+    // check. Calling it directly is how `verify` came to disagree with `verify_with_config` on
+    // the same source for the second time.
+    let result = checker.check();
     if let Some(detail) = checker.model().take_error() {
         return Err(typed_eval_failure(detail));
     }

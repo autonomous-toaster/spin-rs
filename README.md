@@ -108,6 +108,92 @@ spin-rs model.pml
 spin-rs --no-por model.pml
 ```
 
+## Compatibility with spin and pan
+
+Nothing here is claimed without a measurement. Verdicts are compared with real `spin`/`pan` on
+two corpora, and the gate fails on a wrong verdict:
+
+- **158 generated models** (`just parity`), built from a grammar of body shapes: statement order,
+  nesting, fusion, loop exit, channels, two-process races, and seven claims per body.
+- **the 78 models spin itself ships** under `Examples/` (`parity_gate --dir <spin>/Examples`).
+  Spin has no test suite; those are the closest thing, and their author wrote pan.
+
+Both currently report **zero wrong verdicts**. That sentence is only meaningful alongside the
+categories below, because this engine answers three ways and only one of them is a verdict:
+
+| outcome | meaning | counts as agreement? |
+|---|---|---|
+| decided | a verdict and an error count, which must equal pan's | that is the comparison |
+| declined | no verdict; a named `UnverifiedKind` says why | never |
+| refused | the model cannot be run at all (hard error) | never |
+
+### Supported, checked against pan
+
+- **Statements**: assignment (with the declared type's truncation), `if :: else fi`,
+  `do :: else od`, `for (i : a .. b)`, `break`, `goto` and labels, `atomic`/`d_step` fused into one
+  transition, `assert`, `printf`, `skip`.
+- **Control flow semantics**: a `do` whose guards run out *blocks* (pan's invalid end state), a
+  `for` leaves its range, and every statement of a body is its own step - a `for` body is not
+  atomic, and neither is anything else.
+- **Types**: `bit`, `bool`, `byte`, `short`, `int`, `unsigned(n)`, `mtype`; values are truncated to
+  the declared type on assignment (`byte x = 255; x = x + 1` leaves 0); `/` and `%` follow C, so
+  `-7 % 2` is -1; a guard is true when it is non-zero, so `(n)` with `n == 0` is false.
+- **Channels**: buffered (`[N]`), arrays (`chan c[N] = [cap] of { t }`), send and receive as
+  statements and as guards, `len`/`full`/`empty`/`nfull`/`nempty`. A channel's queue is part of the
+  state, so a state always determines its own transitions.
+- **Proctypes**: several instances (`active [N]`), an `init` block, `provided (expr)`.
+- **Preprocessor**: object-like `#define`, including a macro that names another macro.
+- **Claims**: `[]p` over propositions, `<>p`, `->`, `<->`, and atoms that are expressions -
+  comparisons, `&&`, `||`, `!` - evaluated against the state. One claim per file is compared with
+  pan in the corpus; several claims are checked in one run here and summed per claim there.
+
+### Refused: the model runs nowhere
+
+These are hard errors. No verdict is produced, so nothing about the model is claimed.
+
+| construct | why |
+|---|---|
+| rendezvous channel (`chan c = [0] of { t }`) | the send and its receive are one transition over two processes; this engine moves one process per transition |
+| `run P(...)` | a spawned process needs dynamic instances; the transition table is emitted per static instance |
+| `unless` | the handler interleaves with the body, which needs a second step counter and a transition over both |
+| bare `{ ... }` block | not a statement the parser has |
+| `priority N` | pan runs only the highest-priority enabled process; ignoring it refuted a model pan accepts, so it is refused instead |
+| typedef records (`r.f`) | structured fields are not in the state |
+| `P@x` (remote variable) | the reference does not resolve |
+| `pc_value(pid)` | it exposes the checker's own statement numbering, which is not comparable with pan's |
+| `#include`, function-like macros, `#if`/`#ifdef` | not implemented, and expanding them wrongly would produce a different model |
+
+### Declined: no verdict, but a named reason
+
+- `[]<>p`, `<>[]p`, nested temporal operators, and `U`/`V`. The translation refuses rather than
+  approximating; `[]<>p` is *not* treated as `[]p`.
+- An atom that names no state variable, reported as `unsupported_property`, and an atom that is not
+  even an expression, reported as `unparsable_formula` naming the fragment. `P[0]:x` (a remote
+  local) lands here.
+- A `never` claim. It is generated, but the claim process is in no state and is dispatched by
+  nothing, so a model carrying one is reported as unchecked - `never { skip }` is a violation in
+  pan and would otherwise come back "verified".
+
+### Where this engine deliberately differs
+
+- **State counts are not comparable and are not a goal.** Claims are checked in separate
+  reduced traversals, so `states_explored` is a sum over claims, and the reduction is a different
+  algorithm from pan's. The contract is the verdict and the error count per claim.
+- **Speed.** Measured by a consumer on a 62-claim plan: about 2.2 ms per state, so 200 000 states
+  per claim is minutes of wall clock. pan's C engine is much faster per state. If a plan needs a
+  budget that large, this engine will be slow whatever the verdict.
+- **`max_states` is shared out.** Each claim gets `max_states / claims` (at least one state), and
+  what a decided claim does not use is handed to the claims behind it. An expensive first claim
+  cannot take the pool. A starved claim reports `states_used` and `budget`, so a caller can size
+  the number from what the run measured instead of guessing.
+
+### Reproducing any of this
+
+```bash
+just parity                                   # generated corpus, fails on a wrong verdict
+cargo run --release --bin parity_gate -- --dir /path/to/Spin/Examples
+```
+
 ### Partial Order Reduction
 
 Reduction is on by default. It emits per-transition read/write sets from the AST, then explores
@@ -119,9 +205,11 @@ Two consequences of doing this per claim, which the field documentation states a
 - **`states_explored` is a sum over per-claim traversals.** A model with two claims may report
   twice the states of a single unreduced pass. It is the same quantity as summing pan's per-claim
   runs, and it is not comparable with the pre-reduction value of the field.
-- **`max_states` bounds the whole run, not each traversal.** Claims are taken in declaration
-  order and each may use whatever budget remains, so an expensive early claim can starve later
-  ones. A starved claim appears in `unverified` with kind `state_budget` naming it.
+- **`max_states` is shared out between the claims.** Each claim gets `max_states / claims`, at
+  least one state, and whatever a *decided* claim does not use is handed to the claims behind it -
+  an undecided claim keeps nothing, so an expensive early claim cannot take the pool. A starved
+  claim appears in `unverified` with kind `state_budget` naming it, and carries `states_used` and
+  `budget` so a caller can size the number from what the run measured rather than guessing.
 
 Liveness claims are checked by the nested DFS, which is never reduced: an accepting cycle can
 consist entirely of invisible transitions, so reducing it would hide the violation.

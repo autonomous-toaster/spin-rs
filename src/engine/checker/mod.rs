@@ -46,6 +46,14 @@ pub trait Model {
         None
     }
 
+    /// Claims the model declares that this engine cannot check at all.
+    ///
+    /// A construct that is emitted and never runs is worse than one that is refused: the model
+    /// comes back verified. Reporting it here means the run says "no verdict" instead.
+    fn unchecked_claims(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
+
     /// Return LTL formulas associated with this model (empty by default).
     fn ltl_formulas(&self) -> &[crate::parser::ast::LtlFormula] {
         &[]
@@ -443,19 +451,33 @@ pub struct Checker<M: Model> {
 }
 
 impl<M: Model> Checker<M> {
+    /// Add the claims this engine does not check, so a run cannot report success without them.
+    fn with_unchecked_claims(&self, mut result: CheckResult) -> CheckResult {
+        for (name, reason) in self.model.unchecked_claims() {
+            result.unverified.push(Unverified::new(
+                name,
+                UnverifiedKind::UnsupportedProperty,
+                reason,
+            ));
+        }
+        result
+    }
+
     /// Run the model checker with the configured search mode.
     pub fn check(&self) -> CheckResult {
         // Reduction needs a per-claim visible set, which a model without claims cannot supply;
         // it is also a DFS technique, so BFS keeps its single unreduced traversal.
-        if self.config.por_enabled
+        let result = if self.config.por_enabled
             && self.config.search_mode == SearchMode::DepthFirst
             && !self.model.reduction_scopes().is_empty()
         {
-            return self.check_dfs_por();
-        }
-        match self.config.search_mode {
-            SearchMode::DepthFirst => self.check_dfs(),
-            SearchMode::BreadthFirst => self.check_bfs(),
-        }
+            self.check_dfs_por()
+        } else {
+            match self.config.search_mode {
+                SearchMode::DepthFirst => self.check_dfs(),
+                SearchMode::BreadthFirst => self.check_bfs(),
+            }
+        };
+        self.with_unchecked_claims(result)
     }
 }
