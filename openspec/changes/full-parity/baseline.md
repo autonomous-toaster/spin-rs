@@ -5,13 +5,13 @@ one claim per model, so ours and pan are like for like.
 
 | outcome | count |
 |---|---|
-| agree | 151 |
+| agree | 153 |
 | false refutation | 0 |
 | false clean | 0 |
 | decline | 0 |
 | refusal | 7 |
 | pan unbuildable | 0 |
-| total | 158 |
+| total | 160 |
 
 ## Wrong verdicts
 
@@ -25,6 +25,8 @@ None.
 | `assign_then_do` | 7 | 0 | 0 |
 | `atomic_region` | 7 | 0 | 0 |
 | `bit_wrap` | 1 | 0 | 0 |
+| `bool_false_init` | 1 | 0 | 0 |
+| `bool_true_assign` | 1 | 0 | 0 |
 | `byte_wrap` | 1 | 0 | 0 |
 | `channel_por` | 1 | 0 | 0 |
 | `channel_state` | 1 | 0 | 0 |

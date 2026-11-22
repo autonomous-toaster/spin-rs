@@ -328,6 +328,20 @@ fn fixed_models() -> Vec<Model> {
             "bool a = 0, b = 0, d = 0;\nactive proctype P() { a = 1; if :: (a == 1 || b == 1) -> d = 1 :: else -> skip fi }",
             "[] ( !d )",
         ),
+        // Promela has no boolean type: `true`/`false` are 1/0. Emitting Lua booleans put one in
+        // the state, so every later read inherited it - `!flag` and `flag == 0` both refuted a
+        // model pan proves - and assigning one raised an argument error at the truncation
+        // boundary.
+        (
+            "bool_false_init",
+            "bool flag = false;\nactive proctype P() { assert(!flag) }",
+            "",
+        ),
+        (
+            "bool_true_assign",
+            "bool flag = false;\nactive proctype P() { flag = true }",
+            "[] ( !flag )",
+        ),
         // An `init` block. Its transition function was emitted and never registered with the
         // dispatcher, so it never ran; the process also wrote `_done` where the state tracks
         // `_done_init`, so every model with an init block ended in a reported deadlock.

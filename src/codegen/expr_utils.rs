@@ -98,7 +98,18 @@ impl LuaGenerator {
         match expr {
             Expression::IntLit(n) => n.to_string(),
             Expression::StringLit(s) => format!("\"{}\"", s),
-            Expression::BoolLit(b) => b.to_string(),
+            // Promela has no boolean type: `true` and `false` are the integers 1 and 0. Emitting
+            // Lua booleans put one in the state, where every later read inherited it - `!flag` and
+            // `flag == 0` both came out wrong, in the direction of refuting a model pan proves -
+            // and assigning one raised "error converting Lua boolean to i64" at the truncation
+            // boundary.
+            Expression::BoolLit(b) => {
+                if *b {
+                    "1".to_string()
+                } else {
+                    "0".to_string()
+                }
+            }
             Expression::Ident(name) => {
                 // `_pid` is the id of the process *whose transition this is*, so it is a constant
                 // of the emitted function rather than a state field. It used to be stored in the

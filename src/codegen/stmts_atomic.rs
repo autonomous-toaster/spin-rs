@@ -79,7 +79,14 @@ impl LuaGenerator {
         match expr {
             Expression::Ident(name) => self.substitute_var(name, subs),
             Expression::IntLit(n) => n.to_string(),
-            Expression::BoolLit(b) => b.to_string(),
+            // See expr_utils: `true`/`false` are `1`/`0` in Promela.
+            Expression::BoolLit(b) => {
+                if *b {
+                    "1".to_string()
+                } else {
+                    "0".to_string()
+                }
+            }
             Expression::ArrayAccess { name, index } => {
                 let idx = self.substitute_expr(index, subs);
                 format!("s.{}[{} + 1]", self.substitute_var(name, subs), idx)

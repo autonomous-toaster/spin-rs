@@ -155,8 +155,8 @@ These are hard errors. No verdict is produced, so nothing about the model is cla
 |---|---|
 | rendezvous channel (`chan c = [0] of { t }`) | the send and its receive are one transition over two processes; this engine moves one process per transition |
 | `run P(...)` | a spawned process needs dynamic instances; the transition table is emitted per static instance |
-| `unless` | the handler interleaves with the body, which needs a second step counter and a transition over both |
-| bare `{ ... }` block | not a statement the parser has |
+| `unless`, and the bare `{ ... }` block it is written with | neither parses: a bare block is not a statement the parser has, and `unless` needs one. The refusal is a parse error naming the offset, not a refusal naming the construct |
+
 | `priority N` | pan runs only the highest-priority enabled process; ignoring it refuted a model pan accepts, so it is refused instead |
 | typedef records (`r.f`) | structured fields are not in the state |
 | `P@x` (remote variable) | the reference does not resolve |

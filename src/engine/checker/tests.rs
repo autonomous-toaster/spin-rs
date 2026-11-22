@@ -550,3 +550,27 @@ ltl p2 { [] ( b ) }
         );
     }
 }
+
+#[test]
+fn a_promela_boolean_literal_is_an_integer() {
+    // Promela has no boolean type: `true` and `false` are 1 and 0. Emitting Lua booleans put one
+    // in the state, where `!flag` and `flag == 0` both read it wrong - refuting a model pan
+    // proves - and `flag = true` raised "error converting Lua boolean to i64".
+    let init = "bool flag = false;\nactive proctype P() { assert(!flag) }\n";
+    let r = crate::runtime::verify(init).expect("the model is expressible");
+    assert_eq!(r.errors, 0, "!false must hold: {:?}", r.violations);
+
+    let compare = "bool flag = false;\nactive proctype P() { assert(flag == 0) }\n";
+    let r = crate::runtime::verify(compare).expect("the model is expressible");
+    assert_eq!(r.errors, 0, "false must equal 0: {:?}", r.violations);
+
+    let assign = "bool flag = false;\nactive proctype P() { flag = true; assert(flag == 1) }\n";
+    let r = crate::runtime::verify(assign).expect("assigning a boolean literal must work");
+    assert_eq!(r.errors, 0, "true must equal 1: {:?}", r.violations);
+
+    // And the direction that would pass if `true` were still a Lua boolean: it is truthy there,
+    // so this would also pass. Both directions together pin that it is the integer 1.
+    let negated = "bool flag = false;\nactive proctype P() { flag = true; assert(!flag) }\n";
+    let r = crate::runtime::verify(negated).expect("the model is expressible");
+    assert_eq!(r.errors, 1, "!true must be refuted: {:?}", r.violations);
+}
