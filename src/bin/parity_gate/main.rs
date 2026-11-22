@@ -257,6 +257,35 @@ fn oracle_available() -> bool {
     matches!(spin, Ok(o) if o.status.success()) && matches!(gcc, Ok(o) if o.status.success())
 }
 
+/// Run a command with a wall-clock limit, killing it if it overruns.
+///
+/// An external corpus contains models that take minutes: with the preprocessor in place models
+/// that used to be refused now actually execute, and an unbounded run of the whole directory never
+/// finished.
+fn run_with_timeout(cmd: &mut Command, dir: &Path, secs: u64) -> Option<std::process::Output> {
+    let mut child = cmd
+        .current_dir(dir)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .ok()?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
 /// pan's error count, or `None` when it cannot build or cannot run the model.
 fn pan_errors(dir: &Path, claim: Option<&str>) -> Option<usize> {
     let built = Command::new("spin")
@@ -286,7 +315,7 @@ fn pan_errors(dir: &Path, claim: Option<&str>) -> Option<usize> {
             cmd.arg("-n");
         }
     }
-    let out = cmd.current_dir(dir).output().ok()?;
+    let out = run_with_timeout(&mut cmd, dir, 120)?;
     parse_errors(&String::from_utf8_lossy(&out.stdout))
 }
 
