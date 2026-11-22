@@ -240,6 +240,11 @@ impl<M: Model> Checker<M> {
             && transitions_count == 0
             && self.model.process_count() > 0
             && !violations.iter().any(|v| v.property_name == "model")
+            // A deadlock at the initial state already explains why nothing was explored.
+            // Reporting it twice inflated the error count: one blocked model produced two
+            // errors where pan reports one, and the second said nothing had been verified
+            // when the search had in fact decided the model.
+            && !violations.iter().any(|v| v.property_name == "deadlock")
         {
             violations.push(Violation {
                 property_name: "model".to_string(),
@@ -554,6 +559,11 @@ impl<M: Model> Checker<M> {
         if transitions_count == 0
             && self.model.process_count() > 0
             && !violations.iter().any(|v| v.property_name == "model")
+            // A deadlock at the initial state already explains why nothing was explored.
+            // Reporting it twice inflated the error count: one blocked model produced two
+            // errors where pan reports one, and the second said nothing had been verified
+            // when the search had in fact decided the model.
+            && !violations.iter().any(|v| v.property_name == "deadlock")
         {
             violations.push(Violation {
                 property_name: "model".to_string(),

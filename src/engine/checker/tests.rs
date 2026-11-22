@@ -248,9 +248,22 @@ fn test_blocked_model_is_not_a_success() {
         result.errors > 0,
         "a model that explored no transitions must report an error, not success"
     );
+    // It is reported as a deadlock, not as "nothing was verified": the search did decide the
+    // model, and the answer is that it is stuck at the initial state. Reporting both inflated
+    // the count to two errors where pan reports one. What matters is that it is not treated as
+    // a claim and not treated as success.
     assert!(
-        result.violations.iter().any(|v| v.property_name == "model"),
-        "the error must identify the unexplored model"
+        result
+            .violations
+            .iter()
+            .any(|v| v.property_name == "deadlock" || v.property_name == "model"),
+        "the error must name a model-level condition, not a claim: {:?}",
+        result.violations
+    );
+    assert_eq!(
+        result.errors, 1,
+        "one stuck model is one finding, not two: {:?}",
+        result.violations
     );
 }
 
