@@ -130,12 +130,10 @@ impl LuaGenerator {
                         // Per-proctype done flag and step counter for guard body
                         lines.push(format!("    state._done_{} = false", prefix));
                         lines.push(format!("    state._step_{} = 0", prefix));
-                        // Program counter for goto/break/label
+                        // Program counter, for the goto/break emitters the never-claim path
+                        // still uses. A flattened body resolves its jumps at generation time and
+                        // does not read it.
                         lines.push(format!("    state._pc_{} = 0", prefix));
-                        // Atomic/d_step step counter
-                        lines.push(format!("    state._atomic_step_{} = 0", prefix));
-                        // Unless step counter
-                        lines.push(format!("    state._unless_step_{} = 0", prefix));
                         // Progress flag for non-progress cycle detection
                         lines.push(format!("    state._progress_{} = false", prefix));
                         // Proctype parameters (prefixed with proctype name for uniqueness)

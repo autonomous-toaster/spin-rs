@@ -161,7 +161,11 @@ impl LuaGenerator {
             Expression::Enabled(pid) => format!("_spin_enabled({})", pid),
             Expression::Timeout => "_spin_timeout()".to_string(),
             Expression::NP_ => "_spin_np_()".to_string(),
-            Expression::PcValue(pid) => format!("_spin_pc_value({})", self.expr_to_lua(pid)),
+            // pan's `pc_value` reports pan's own statement numbering, so a model that branches
+            // on it cannot agree with us by construction. Answering 0 was worse than refusing:
+            // the field it read (`_pc_<number>`) was never the one we wrote (`_pc_<proctype>`),
+            // so every model that asked got a confident zero.
+            Expression::PcValue(_) => "_spin_pc_value_unsupported()".to_string(),
             Expression::Eval(expr) => format!("_spin_eval({})", self.expr_to_lua(expr)),
             Expression::GetPriority(pid) => {
                 format!("_spin_get_priority({})", self.expr_to_lua(pid))

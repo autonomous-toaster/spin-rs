@@ -116,15 +116,20 @@ fn register_np_(lua: &mlua::Lua) -> mlua::Result<()> {
     Ok(())
 }
 
+/// `pc_value(pid)` refuses.
+///
+/// It used to read `_pc_<pid>`, a field that is never written: the generator writes
+/// `_pc_<proctype>`, so every call answered a confident 0 and a model that branched on it was
+/// decided against a number nobody had computed. Refusing is the honest answer, and it will stay
+/// the honest answer even once the field is right, because pan reports its own statement
+/// numbering and no model can expect the two to be equal.
 fn register_pc_value(lua: &mlua::Lua) -> mlua::Result<()> {
-    let f = lua.create_function(|_lua, (state, pid): (mlua::Table, i64)| {
-        let pc_key = format!("_pc_{}", pid);
-        match state.get::<i64>(pc_key.as_str()) {
-            Ok(pc) => Ok(pc),
-            Err(_) => Ok(0),
-        }
+    let f = lua.create_function(|_lua, _: mlua::MultiValue| -> mlua::Result<i64> {
+        Err(mlua::Error::runtime(
+            "pc_value is not supported: it exposes the checker's own statement numbering, which is not comparable with pan's",
+        ))
     })?;
-    lua.globals().set("_spin_pc_value", f)?;
+    lua.globals().set("_spin_pc_value_unsupported", f)?;
     Ok(())
 }
 
