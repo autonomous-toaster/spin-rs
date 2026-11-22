@@ -22,11 +22,16 @@
 - [ ] 2.3 Collapse the five counters into one `_pc_<P>`; derive termination from it
 - [x] 2.4 `atomic` and `d_step` as one fused edge per region
 - [x] 2.5 `goto`, `label`, `break` as edge targets; no control transfer writes the termination flag
-- [ ] 2.6 `for` as init edge, loop-head node and exit edge
+- [x] 2.6 `for` as init edge, loop-head node and exit edge
 - [x] 2.7 Sequencing sweep: the generated corpus measures this. Sequences, an assignment before
       a loop and two sequential loops no longer produce a wrong verdict
 - [x] 2.10 Nested `do/od` as a step
-- [ ] 2.11 `for` loops as steps: refused today, 4 of the refusals
+- [x] 2.11 `for` loops as steps. The construct was wrong in three ways beyond the refusal:
+      it was expanded to an `atomic` region (so an intermediate write was unobservable, which
+      hid a refutation pan finds), it did not absorb a trailing semicolon (so a `for` followed by
+      another statement took the whole proctype down with it), and it accepted only `in` where
+      Promela writes `:`. pan is unambiguous that the body is not atomic, so the loop is laid
+      out as init/condition/update
 - [x] 2.12 `atomic` and `d_step` as ONE fused step
 - [x] 2.13 A nested `if` whose branch is another `if`
 - [ ] 2.8 Remove the shape-specific repairs the CFG makes unnecessary, one at a time, each
@@ -56,6 +61,12 @@
 - [ ] 4.4 Remote references `P[i]:x`, and `_pid`, `_last`, `_nr_pr`
 - [ ] 4.5 Channel surface: rendezvous, sorted send, random receive, poll, eval, `len/empty/full/nempty/nfull`,
       channel arrays
+- [x] 4.6 A state SHALL determine its own transitions. A channel's queue lived in a registry shared
+      by the runtime and keyed by name, so reopening an earlier state saw the messages a later
+      one had left behind: `_spin_chan_send` wrote the registry and mirrored a copy into the
+      state, while `_full`/`_len`/`_empty` read only the registry. Only capacity still comes
+      from the declaration, because capacity is static. This was a soundness hole, not a display
+      bug: it turned a terminating model into an "accepting cycle" at trail length 0
 
 ## Phase 5: Property Surface
 
@@ -65,14 +76,12 @@
 - [ ] 5.4 `never` claims: verdict parity against pan
 - [ ] 5.5 `progress`, `accept` and `end` labels; non-progress cycles
 - [ ] 5.6 Liveness verdict parity on the generated corpus
-- [ ] 5.7 A model that terminates SHALL NOT be reported as an accepting cycle: fixed for every
-      shape except a channel send before the observed write
-- [ ] 2.15 `for (i : 0 .. 0) { b = 1 }; a = 1` still fails to parse, though the same loop without
-      the leading `byte i;` and the trailing statement parses. The colon separator is accepted now
-- [ ] 2.16 `<>` over a model that sends on a channel before the observed write reports an accepting
-      cycle at trail length 0 where pan accepts. Repro:
-      `chan c = [1] of { bit }; active proctype P() { c ! 1; a = 1 }` with `<> ( a )`: `b = 1; a = 1` with
-      `<>(a)` is refuted today and pan accepts it
+- [x] 5.7 A model that terminates SHALL NOT be reported as an accepting cycle. The last case of
+      this was not about termination at all, and the state could not answer for it. See 4.6
+- [x] 2.15 A `for` followed by another statement failed to parse; it was the only statement
+      parser that did not absorb an optional trailing semicolon
+- [x] 2.16 `<>` over a model that sends before the observed write was refuted where pan accepts.
+      The cause was 4.6, not the liveness search
 
 ## Phase 6: Inert Mechanisms
 

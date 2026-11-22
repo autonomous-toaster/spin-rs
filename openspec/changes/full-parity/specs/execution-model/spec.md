@@ -12,6 +12,7 @@
 | T2.7 | Sequencing sweep: statement count x kind x observed-write position against pan |
 | T2.8 | Remove the shape-specific repairs that the CFG makes unnecessary |
 | T2.9 | Delete the old emitters after the new path is green |
+| T4.6 | A state determines its own transitions: a channel queue lives in the state, not in the runtime |
 
 ## ADDED Requirements
 
@@ -48,6 +49,34 @@ THEN the skipped assignment SHALL be unreachable and the labelled statement SHAL
 GIVEN a do loop whose body ends in a break followed by a trailing statement
 WHEN T2.5 has run
 THEN the trailing statement SHALL be reachable exactly after the break and the loop heads SHALL not be.
+
+### Requirement: A State Determines Its Own Transitions
+T4.6 SHALL hold BEFORE any verdict SHALL be trusted. Every input a transition's guard reads SHALL be part of the state that the transition is expanded from, so that expanding the same state twice SHALL yield the same set of transitions.
+
+A channel's queue SHALL be part of the state. Only its capacity MAY be read from the declaration, because capacity is static and a queue is not.
+
+#### Scenario: reopening a state after a send
+GIVEN a model with a buffered channel, a send and a claim on a later write
+WHEN the search reopens the initial state after having taken the send
+THEN the send SHALL be enabled exactly as it was the first time.
+
+#### Scenario: the oracle disagrees about a terminating model
+GIVEN a model that pan accepts and that our search calls an accepting cycle at trail length zero
+WHEN the runtime is inspected
+THEN no transition SHALL depend on any state the state table does not carry.
+
+### Requirement: A Loop Blocks At Its Head
+A `do` whose guards are all disabled at its head SHALL block, as pan's invalid end state does, and SHALL NOT fall through to the statement after it. Only a `break` leaves a `do`. A `for` SHALL leave its range for the statement after it, and its body SHALL be a sequence of ordinary steps rather than one atomic region.
+
+#### Scenario: loop whose guard stops holding
+GIVEN `do :: (n < 3) -> n = n + 1 od` followed by a statement
+WHEN the guard becomes false
+THEN the process SHALL be reported as blocked, matching pan's invalid end state, rather than reaching the statement after the loop.
+
+#### Scenario: two writes inside a for
+GIVEN `for (i : 0 .. 1) { d = 1; b = 1 }` and `[] ( d -> b )`
+WHEN the claim is checked
+THEN the state in which `d` is set and `b` is not SHALL be reachable, and the claim SHALL be refuted as pan refutes it.
 
 ### Requirement: Termination Is Derived
 T2.3 SHALL complete BEFORE T2.9 SHALL run. Termination SHALL be derived ALWAYS from the program counter of its proctype rather than from a flag written by statements.

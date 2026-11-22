@@ -68,29 +68,38 @@ Three defect classes the hand corpus never reached, each hand-confirmed against 
 So the hand corpus was not merely unrepresentative of structure; it was off by a factor of seven on
 the number of wrong verdicts, and it had missed three defect classes entirely.
 
-## What Phase 2 has done so far
+## Where the generated corpus stands
 
-The full CFG is not in. What landed is the part that removes the lies: a body of more than one
-statement is routed through the step machine, which is the one place in the generator that
-sequences correctly, with a trailing `break` so the last step terminates the process. Constructs
-the step machine cannot flatten - a nested `do`, a `for`, a `goto`, an `atomic` region - are now
-**refused** rather than reordered or silently advanced past.
+The CFG is in: a body is laid out as one step per statement, selections jump within one step space,
+and every jump is resolved at generation time. The corpus has grown to 91 models and every one of
+them agrees with pan on verdict and error count.
 
-| outcome | before | after |
+| outcome | at the start of this work | now |
 |---|---|---|
-| agree | 31 | **60** |
-| false refutation | 25 | **1** |
+| agree | 31 | **91** |
+| false refutation | 25 | **0** |
 | false clean | 5 | **0** |
-| refusal | 4 | **4** |
+| decline | 0 | **0** |
+| refusal | 4 | **0** |
+| total | 65 | **91** |
 
-Wrong verdicts: **30 to 1**. The four refusals are one `for` model shape that does not parse;
-everything the step machine refused is now expressed as edges.
+Six silent defects were found and fixed on the way, and every one of them was a mechanism that is
+declared and participates in nothing: the step machine dropped `atomic`/`unless`/`for` statements with
+no effect, `goto` advanced past its target, `verify()` never called the `take_error()` that
+`verify_with_config()` had always called, a channel send inside a sequence emitted a vararg call that
+could not load, `atomic` regions were not fused, and a channel's queue lived in the runtime rather
+than in the state.
 
-Three silent defects were found and fixed on the way, all of the same shape - a mechanism that is
-declared and participates in nothing: the step machine dropped `atomic`/`unless`/`for` statements
-with no effect, `goto` advanced past its target, `verify()` never called the `take_error()` that
-`verify_with_config()` had always called, and a channel send inside a sequence emitted a vararg
-call that could not load.
+The last two are worth stating plainly. A `for` was expanded into an `atomic` region, so two writes
+inside its body looked like one transition; pan disagrees, and a claim that observes the state
+between them is refuted by pan and was accepted by us. And a channel's messages lived in a
+registry keyed by name, which every query consulted instead of the state: reopening an earlier
+state therefore saw the messages a later state had left behind. That is not a display bug, it is
+a state that does not determine its own transitions, and it produced a false refutation of a
+terminating model that pan accepts.
+
+Both were found by asking pan rather than by reading the code, and both now have a corpus entry
+whose coverage is mutation-checked: reintroducing the defect fails the gate.
 
 ## The instrument is part of the problem
 

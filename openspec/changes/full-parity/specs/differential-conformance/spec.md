@@ -45,6 +45,22 @@ GIVEN a previously declined model whose error count happens to be zero
 WHEN T1.2 classifies the run
 THEN the outcome SHALL be decline and not agreement.
 
+### Requirement: Nothing Leaves The Comparison Silently
+A model whose oracle could not be built, and a model we decline, SHALL be named in every report ALWAYS. They are not wrong verdicts, but a corpus that loses models to them is a corpus that looks better than it is.
+
+#### Scenario: oracle fails to build
+GIVEN a model that pan refuses, for instance because two declarations share a name
+WHEN the gate runs
+THEN the model SHALL be listed as not compared, and the total SHALL include it.
+
+### Requirement: Every Defect Class Is Covered
+A defect found by hand SHALL be reachable by the generator BEFORE the fix is called complete, and the coverage SHALL be mutation-checked: reintroducing the defect SHALL make the gate fail.
+
+#### Scenario: a loop body that is not atomic
+GIVEN a `for` whose body writes twice, and a claim that observes the state between the writes
+WHEN the loop is wrongly compiled as one atomic region
+THEN a model in the corpus SHALL be a false clean and the gate SHALL fail.
+
 ### Requirement: Baseline Before Rewrite
 T1.3 SHALL record the baseline BEFORE T2.1 SHALL run, so that the effect of the execution model is measured rather than claimed.
 
