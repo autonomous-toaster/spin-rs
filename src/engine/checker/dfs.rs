@@ -48,7 +48,7 @@ impl<M: Model> Checker<M> {
         let mut hit_depth_limit = false;
         let mut hit_early_stop = false;
         // Claims whose formula the checker could not evaluate. Kept per claim, reported once.
-        let mut unresolved: std::collections::BTreeMap<String, String> =
+        let mut unresolved: std::collections::BTreeMap<String, (UnverifiedKind, String)> =
             std::collections::BTreeMap::new();
 
         // Fairness tracking
@@ -124,12 +124,43 @@ impl<M: Model> Checker<M> {
                             // a comparison as a single opaque atom while the evaluator only
                             // resolves bare names - and pan accepts that model. The claim is
                             // reported as undecided instead.
-                            unresolved.entry(check.prop_name.clone()).or_insert_with(|| {
-                                format!(
-                                    "cannot decide '{}': the formula contains an atom that does not resolve to a state variable (was: '{}')",
-                                    check.prop_name, check.formula
-                                )
-                            });
+                            //
+                            // Two different things are reported as undecided here and they are
+                            // not the same debt. An atom that parses but names nothing the state
+                            // can answer is an unsupported property; an atom that does not even
+                            // parse is a formula the parser mangled, and saying "no variable
+                            // named 'a <'" blames the model for the parser's fault.
+                            let (kind, reason) = match first_unresolved_atom(
+                                &check.formula,
+                                &state_str,
+                                &self.model,
+                                &state,
+                            ) {
+                                Some(atom) if crate::parser::parse_expression(&atom).is_err() => (
+                                    UnverifiedKind::UnparsableFormula,
+                                    format!(
+                                        "'{}' could not be parsed: '{}' is not an expression, so the formula was read as a single atom named after a fragment (was: '{}')",
+                                        check.prop_name, atom, check.formula
+                                    ),
+                                ),
+                                Some(atom) => (
+                                    UnverifiedKind::UnsupportedProperty,
+                                    format!(
+                                        "cannot decide '{}': the atom '{}' names no state variable (was: '{}')",
+                                        check.prop_name, atom, check.formula
+                                    ),
+                                ),
+                                None => (
+                                    UnverifiedKind::UnsupportedProperty,
+                                    format!(
+                                        "cannot decide '{}': the formula contains an atom that does not resolve to a state variable (was: '{}')",
+                                        check.prop_name, check.formula
+                                    ),
+                                ),
+                            };
+                            unresolved
+                                .entry(check.prop_name.clone())
+                                .or_insert_with(|| (kind, reason));
                         }
                     }
                 }
@@ -271,9 +302,7 @@ impl<M: Model> Checker<M> {
 
         let unresolved: Vec<Unverified> = unresolved
             .into_iter()
-            .map(|(property_name, reason)| {
-                Unverified::new(property_name, UnverifiedKind::UnsupportedProperty, reason)
-            })
+            .map(|(property_name, (kind, reason))| Unverified::new(property_name, kind, reason))
             .collect();
 
         let mut result = CheckResult {
@@ -789,6 +818,34 @@ fn is_propositional(formula: &crate::property::LtlFormula) -> bool {
         | crate::property::LtlFormula::Next(_)
         | crate::property::LtlFormula::Until(_, _)
         | crate::property::LtlFormula::Release(_, _) => false,
+    }
+}
+
+/// The first atom of `formula` that neither the state's fields nor the model can decide.
+///
+/// Used only to say *why* a propositional check came back undecided: a fragment the parser
+/// produced and an atom the state does not carry are different debts.
+fn first_unresolved_atom<M: crate::engine::checker::Model>(
+    formula: &crate::property::LtlFormula,
+    state_str: &str,
+    model: &M,
+    state: &M::State,
+) -> Option<String> {
+    use crate::property::LtlFormula as F;
+    match formula {
+        F::Atom(name) => {
+            let resolvable = extract_var_from_state(state_str, name).is_some()
+                || model.eval_atom(state, name).is_some();
+            (!resolvable).then(|| name.clone())
+        }
+        F::True | F::False => None,
+        F::Not(inner) | F::Always(inner) | F::Eventually(inner) | F::Next(inner) => {
+            first_unresolved_atom(inner, state_str, model, state)
+        }
+        F::And(l, r) | F::Or(l, r) | F::Implies(l, r) | F::Until(l, r) | F::Release(l, r) => {
+            first_unresolved_atom(l, state_str, model, state)
+                .or_else(|| first_unresolved_atom(r, state_str, model, state))
+        }
     }
 }
 

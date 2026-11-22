@@ -42,6 +42,7 @@ impl LtlFormula {
         let mut last_or: Option<usize> = None;
         let mut last_and: Option<usize> = None;
         let mut last_implies: Option<usize> = None;
+        let mut last_biimpl: Option<usize> = None;
         let mut last_u: Option<usize> = None;
         let mut last_v: Option<usize> = None;
 
@@ -69,7 +70,16 @@ impl LtlFormula {
                     }
                 }
                 '-' if paren_depth == 0 && i + 1 < bytes.len() && bytes[i + 1] as char == '>' => {
-                    last_implies = Some(i);
+                    // `<->` is a biconditional, not a comparison followed by an implication. The
+                    // `->` scan matched it and split `a <-> b` into `a <` and `b`, so the left
+                    // operand was a fragment the model has no variable for and the claim was
+                    // declined as an unresolved identifier - a fragment the parser itself had
+                    // constructed.
+                    if i > 0 && bytes[i - 1] as char == '<' {
+                        last_biimpl = Some(i - 1);
+                    } else {
+                        last_implies = Some(i);
+                    }
                 }
                 _ => {}
             }
@@ -85,7 +95,21 @@ impl LtlFormula {
             };
         }
 
-        // Rightmost, lowest-precedence first
+        // Rightmost, lowest-precedence first. `<->` binds looser than `->`, and it is desugared
+        // into the conjunction of the two implications rather than given a variant of its own:
+        // every consumer of the formula - the safety evaluator, the atom collector, the
+        // translation to a Büchi automaton - already handles `And` and `Implies`.
+        if let Some(i) = last_biimpl {
+            let left = Self::parse_manual(&s[..i])?;
+            let right = Self::parse_manual(&s[i + 3..])?;
+            return Ok(Some(LtlFormula::And(
+                Box::new(LtlFormula::Implies(
+                    Box::new(left.clone()),
+                    Box::new(right.clone()),
+                )),
+                Box::new(LtlFormula::Implies(Box::new(right), Box::new(left))),
+            )));
+        }
         if let Some(i) = last_or {
             return bin!(Or, i, 2);
         }

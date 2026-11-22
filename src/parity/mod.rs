@@ -159,6 +159,13 @@ const CLAIMS: &[Claim] = &[
         name: "impl_db",
         text: "[] ( d -> b )",
     },
+    // A biconditional. It contains `->`, and the arrow scan matched that: `a <-> b` was split into
+    // `a <` and `b`, so every claim of this shape was declined as naming a fragment the parser had
+    // itself constructed. Every CONCURRENTLY constraint a consumer emits has this shape.
+    Claim {
+        name: "iff_ab",
+        text: "[] ( a <-> b )",
+    },
     // A comparison atom, which is an expression over two fields rather than one name. It used to
     // be undecidable - reported as unchecked, never as a verdict - so no template could exercise
     // it.

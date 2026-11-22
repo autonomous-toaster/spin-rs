@@ -234,3 +234,59 @@ fn test_liveness_violation_is_named_after_its_claim() {
         );
     }
 }
+
+#[test]
+fn a_biconditional_is_not_split_at_its_arrow() {
+    // `<->` contains `->`, and the arrow scan matched it: `a <-> b` was split into `a <` and
+    // `b`, so the left operand was a fragment no model has a variable for and the whole
+    // CONCURRENTLY class of claims was declined instead of decided.
+    let f = LtlFormula::parse("a <-> b").expect("a biconditional must parse");
+    // Desugared into both implications rather than given a variant of its own.
+    assert!(
+        matches!(f, LtlFormula::And(_, _)),
+        "a <-> b is the conjunction of the two implications, got {f:?}"
+    );
+    let atoms = f.collect_atoms();
+    assert!(atoms.contains_key("a"), "{atoms:?}");
+    assert!(atoms.contains_key("b"), "{atoms:?}");
+    assert!(
+        !atoms.keys().any(|k| k.contains('<') || k.contains('>')),
+        "no atom may be an operator fragment: {atoms:?}"
+    );
+}
+
+#[test]
+fn both_directions_of_a_biconditional_are_required() {
+    // b = 1 with a = 0 refutes a <-> b, and that only holds if both implications are kept.
+    let src = "bit a = 0, b = 0;\nactive proctype P() { b = 1 }\nltl p { [] ( b <-> a ) }\n";
+    let r = crate::runtime::verify(src).expect("the model is expressible");
+    assert_eq!(r.errors, 1, "b without a must refute the biconditional");
+    assert!(
+        r.unverified.is_empty(),
+        "the claim must be decided: {:?}",
+        r.unverified
+    );
+}
+
+#[test]
+fn a_formula_fragment_is_reported_as_unparsable_not_as_a_missing_variable() {
+    // Saying "no variable named 'a <'" blames the model for the parser's fault, and the caller
+    // cannot tell a mangled formula from an unsupported atom.
+    let src = "bit a = 0;\nactive proctype P() { a = 1 }\nltl p { [] ( a < ) }\n";
+    let r = crate::runtime::verify(src).expect("the model is expressible");
+    let entry = r
+        .unverified
+        .iter()
+        .find(|u| u.property_name == "p")
+        .expect("the claim must be reported");
+    assert_eq!(
+        entry.kind.as_str(),
+        "unparsable_formula",
+        "a fragment must be reported as unparsable: {entry:?}"
+    );
+    assert!(
+        entry.reason.contains("a <"),
+        "the reason must name the fragment: {}",
+        entry.reason
+    );
+}

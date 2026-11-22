@@ -5,13 +5,13 @@ one claim per model, so ours and pan are like for like.
 
 | outcome | count |
 |---|---|
-| agree | 131 |
+| agree | 151 |
 | false refutation | 0 |
 | false clean | 0 |
 | decline | 0 |
-| refusal | 6 |
+| refusal | 7 |
 | pan unbuildable | 0 |
-| total | 137 |
+| total | 158 |
 
 ## Wrong verdicts
 
@@ -21,35 +21,35 @@ None.
 
 | template | agree | wrong | other |
 |---|---|---|---|
-| `assign_then_atomic` | 6 | 0 | 0 |
-| `assign_then_do` | 6 | 0 | 0 |
-| `atomic_region` | 6 | 0 | 0 |
+| `assign_then_atomic` | 7 | 0 | 0 |
+| `assign_then_do` | 7 | 0 | 0 |
+| `atomic_region` | 7 | 0 | 0 |
 | `bit_wrap` | 1 | 0 | 0 |
 | `byte_wrap` | 1 | 0 | 0 |
 | `channel_por` | 1 | 0 | 0 |
 | `channel_state` | 1 | 0 | 0 |
 | `do_blocks` | 1 | 0 | 0 |
-| `do_then_assign` | 6 | 0 | 0 |
-| `do_then_do` | 6 | 0 | 0 |
-| `do_two_stmts` | 6 | 0 | 0 |
-| `dstep_region` | 6 | 0 | 0 |
-| `for_multi_then_assign` | 6 | 0 | 0 |
-| `for_then_assign` | 6 | 0 | 0 |
-| `for_two_stmts` | 6 | 0 | 0 |
-| `goto_over` | 6 | 0 | 0 |
-| `guard_a` | 6 | 0 | 0 |
-| `if_then_assign` | 6 | 0 | 0 |
+| `do_then_assign` | 7 | 0 | 0 |
+| `do_then_do` | 7 | 0 | 0 |
+| `do_two_stmts` | 7 | 0 | 0 |
+| `dstep_region` | 7 | 0 | 0 |
+| `for_multi_then_assign` | 7 | 0 | 0 |
+| `for_then_assign` | 7 | 0 | 0 |
+| `for_two_stmts` | 7 | 0 | 0 |
+| `goto_over` | 7 | 0 | 0 |
+| `guard_a` | 7 | 0 | 0 |
+| `if_then_assign` | 7 | 0 | 0 |
 | `init_block` | 1 | 0 | 0 |
 | `loop_and_assert` | 1 | 0 | 0 |
 | `mod_negative` | 1 | 0 | 0 |
-| `nested_if_multi` | 6 | 0 | 0 |
-| `nested_if_two` | 6 | 0 | 0 |
+| `nested_if_multi` | 7 | 0 | 0 |
+| `nested_if_two` | 7 | 0 | 0 |
 | `or_guard` | 1 | 0 | 0 |
-| `race_a` | 6 | 0 | 0 |
+| `race_a` | 7 | 0 | 0 |
 | `recv_guard` | 1 | 0 | 0 |
-| `rendezvous` | 0 | 0 | 6 |
-| `send_then_assign` | 6 | 0 | 0 |
-| `seq2_ab` | 6 | 0 | 0 |
-| `seq2_ba` | 6 | 0 | 0 |
-| `seq3_bxa` | 6 | 0 | 0 |
+| `rendezvous` | 0 | 0 | 7 |
+| `send_then_assign` | 7 | 0 | 0 |
+| `seq2_ab` | 7 | 0 | 0 |
+| `seq2_ba` | 7 | 0 | 0 |
+| `seq3_bxa` | 7 | 0 | 0 |
 | `zero_guard` | 1 | 0 | 0 |
