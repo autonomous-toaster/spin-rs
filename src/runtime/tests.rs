@@ -309,8 +309,12 @@ fn test_channel_array_registration() {
 #[test]
 fn test_verify_error_is_typed_and_classifiable() {
     // A caller must be able to classify an error by kind, not by matching message text.
+    // `run` is the construct that still has no encoding inside a body, so it is what fails
+    // loudly now. The nested-if branch used to be the example and is expressible since the
+    // flattening.
     let source = "bool f = 0;\n\
-                  active proctype P() { do :: (1) -> if :: f = 1; f = 0; :: skip; fi; break od }\n\
+                  active proctype P() { f = 1; run Q() }\n\
+                  active proctype Q() { skip }\n\
                   ltl p0 { [] ( !(f) ) }";
 
     let err = super::verify(source).expect_err("must not produce a verdict");

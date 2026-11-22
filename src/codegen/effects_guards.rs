@@ -10,25 +10,19 @@ impl LuaGenerator {
     /// place in this generator that sequences correctly, and a trailing `break` makes the last
     /// step terminate the process instead of leaving it re-enabled forever.
     pub(crate) fn emit_body_sequenced(&mut self, body: &[Stmt], depth: usize) {
-        let mut exec: Vec<Stmt> = body
+        let exec: Vec<Stmt> = body
             .iter()
             .filter(|s| !matches!(s, Stmt::VarDecl(_) | Stmt::VarDecls(_)))
             .cloned()
             .collect();
-        if exec.len() <= 1 {
+        if exec.is_empty() {
             self.emit_stmts(body, depth);
             return;
         }
-        exec.push(Stmt::Break(0));
-        self.emit_guards(
-            "body",
-            &[Guard {
-                condition: None,
-                body: exec,
-                line: 0,
-            }],
-            depth,
-        );
+        // Every body goes through the flattening, including a one-statement body: a lone `if`
+        // whose branch is itself a selection used to be folded into one transition, which ran both
+        // branches atomically and produced a false clean.
+        self.emit_flattened_body(&exec, depth);
     }
 
     pub(crate) fn emit_guards(&mut self, kind: &str, guards: &[Guard], _depth: usize) {

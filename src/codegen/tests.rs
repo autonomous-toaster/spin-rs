@@ -160,18 +160,18 @@ fn test_generate_goto_label() {
     let source = "active proctype P() {\n    goto target;\n    x = 1;\n    target: x = 2;\n}";
     let model = parser::parse(source).unwrap();
     let lua = generate(&model);
-    // A goto inside a body of more than one statement is refused, not emitted: the previous
-    // encoding set _done_P = true in order to jump, which killed the process and left the label
-    // unreachable. Emitting that was a silent wrong, so the step machine refuses until goto has an
-    // edge target (full-parity 2.5).
+    // A goto is now an edge to the label's step, not a termination flag plus an unreachable
+    // label. It resolves, so the refusal diagnostic must not appear.
     assert!(
-        lua.source
-            .contains("goto is not supported as a step inside a sequence"),
-        "goto should be refused inside a sequence: {}",
+        !lua.source.contains("has no label"),
+        "goto should resolve its label: {}",
         lua.source
     );
-    // The program counter the refusal will use still exists.
-    assert!(lua.source.contains("_pc_P"));
+    assert!(
+        lua.source.contains("-- step "),
+        "the body should be laid out as numbered steps: {}",
+        lua.source
+    );
 }
 
 #[test]
@@ -192,8 +192,13 @@ fn test_generate_standalone_break() {
     let source = "active proctype P() {\n    break;\n}";
     let model = parser::parse(source).unwrap();
     let lua = generate(&model);
-    // Should have break transition with _pc
-    assert!(lua.source.contains("break:exit"));
+    // A break is an edge to the end of the body, so it moves the step counter rather than
+    // setting the termination flag through a pc assignment.
+    assert!(
+        lua.source.contains("jump"),
+        "a standalone break should be laid out as a jump: {}",
+        lua.source
+    );
 }
 
 #[test]
@@ -204,9 +209,8 @@ fn test_generate_label_reachable_but_refused() {
     let model = parser::parse(source).unwrap();
     let lua = generate(&model);
     assert!(
-        lua.source
-            .contains("is not supported as a step inside a sequence"),
-        "a label in a sequence should be refused: {}",
+        lua.source.contains("-- step "),
+        "a label should occupy a step so a goto can target it: {}",
         lua.source
     );
 }

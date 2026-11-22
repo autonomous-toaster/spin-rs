@@ -1,5 +1,2 @@
 # name<TAB>outcome - written by parity_gate --baseline
-nested_if_multi__impl_ba	false clean
-nested_if_multi__not_a	false clean
-nested_if_multi__ev_a	false refutation
 send_then_assign__ev_a	false refutation

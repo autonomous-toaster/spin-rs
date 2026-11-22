@@ -55,6 +55,7 @@ mod deps;
 mod effects;
 mod effects_guards;
 mod expr_utils;
+mod flatten;
 pub mod optimize;
 mod stmts;
 mod stmts_atomic;
