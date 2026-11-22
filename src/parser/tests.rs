@@ -378,9 +378,43 @@ init { byte i; for (i in 0 .. 4) { i = i + 1 } }
     assert_eq!(model.declarations.len(), 1);
     match &model.declarations[0] {
         TopLevel::Init(init) => {
-            assert!(init.body.len() >= 2);
-            let has_atomic = init.body.iter().any(|s| matches!(s, Stmt::Atomic(_, _)));
-            assert!(has_atomic, "For loop should be expanded into Atomic block");
+            // A Promela `for` is a loop, not an atomic region: pan makes the states between the
+            // body's statements observable, so expanding it to `atomic` at parse time hid the
+            // interleavings pan explores. It becomes the equivalent init/condition/update.
+            let for_stmt = init
+                .body
+                .iter()
+                .find_map(|s| match s {
+                    Stmt::For {
+                        init,
+                        condition,
+                        update,
+                        body,
+                        ..
+                    } => Some((init, condition, update, body)),
+                    _ => None,
+                })
+                .expect("the for loop must survive as a loop");
+            let (init, condition, update, body) = for_stmt;
+            assert!(
+                matches!(**init, Stmt::Assignment { ref target, .. } if target == "i"),
+                "the loop variable is initialised to the start of the range"
+            );
+            assert!(
+                matches!(
+                    condition,
+                    Expression::BinaryOp {
+                        op: BinaryOp::Le,
+                        ..
+                    }
+                ),
+                "the loop condition is `i <= end`"
+            );
+            assert!(
+                matches!(**update, Stmt::Assignment { ref target, .. } if target == "i"),
+                "the update advances the loop variable"
+            );
+            assert_eq!(body.len(), 1, "the body is kept as its own statement list");
         }
         other => panic!("Expected Init, got {:?}", other),
     }

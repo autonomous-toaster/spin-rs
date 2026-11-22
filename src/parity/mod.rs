@@ -107,6 +107,20 @@ const TEMPLATES: &[Template] = &[
         globals: "",
         body: "byte i; for (i : 0 .. 0) { b = 1 }; a = 1",
     },
+    // A `for` whose body has two statements. The body is not atomic: pan makes the state after
+    // the first write observable, so `[] ( c -> b )` is refuted here. Expanding the loop to an
+    // atomic region at parse time hid exactly that, and the single-iteration template below
+    // could not see it.
+    Template {
+        name: "for_two_stmts",
+        globals: "",
+        body: "byte i; for (i : 0 .. 1) { d = 1; b = 1 }",
+    },
+    Template {
+        name: "for_multi_then_assign",
+        globals: "",
+        body: "byte i; for (i : 0 .. 2) { d = 1 }; b = 1; a = 1",
+    },
     Template {
         name: "goto_over",
         globals: "",
@@ -139,6 +153,12 @@ const CLAIMS: &[Claim] = &[
         name: "not_a",
         text: "[] ( !(a) )",
     },
+    // Observes an intermediate state of a two-statement region: only a region that is genuinely
+    // one transition can hold it.
+    Claim {
+        name: "impl_db",
+        text: "[] ( d -> b )",
+    },
     Claim {
         name: "ev_a",
         text: "<> ( a )",
@@ -146,7 +166,9 @@ const CLAIMS: &[Claim] = &[
 ];
 
 /// Declarations shared by every single-process shape.
-const DECLS: &str = "bool a, b;";
+// `d` rather than `c`: the channel template declares a channel named `c`, and redeclaring it
+// makes pan refuse the model.
+const DECLS: &str = "bool a, b, d;";
 
 fn render(globals: &str, procs: &str, claim: Option<&str>) -> String {
     let mut out = String::new();

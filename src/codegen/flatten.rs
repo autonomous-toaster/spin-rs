@@ -16,8 +16,13 @@ enum FNode {
     /// A statement that runs at one step and continues at `next`.
     Simple { stmt: Stmt, next: usize },
     /// A selection: one transition per option, each jumping to the branch it chose.
+    ///
+    /// `exit` is where the selection goes when no option is enabled. Only `for` has one: when its
+    /// range is exhausted it continues after the loop. An `if` or a `do` with no enabled guard
+    /// blocks, which is what pan calls an invalid end state.
     Select {
         options: Vec<(Option<Expression>, usize)>,
+        exit: Option<usize>,
     },
     /// An unconditional jump.
     Jump(usize),
@@ -46,6 +51,13 @@ impl LuaGenerator {
                     .map(|g| g.body.iter().map(|b| self.fsize(b)).sum::<usize>())
                     .sum();
                 1 + bodies
+            }
+            // `for` is an init, a selection, the body and the update.
+            Stmt::For {
+                init, update, body, ..
+            } => {
+                let bodies: usize = body.iter().map(|b| self.fsize(b)).sum();
+                self.fsize(init) + 1 + bodies + self.fsize(update)
             }
             _ => 1,
         }
@@ -94,6 +106,7 @@ impl LuaGenerator {
             // break leaves it for `next`.
             Stmt::If(gs) | Stmt::Do(gs) => {
                 let is_loop = matches!(s, Stmt::Do(_));
+                let _ = is_loop;
                 let mut cursor = at + 1;
                 let mut options = Vec::new();
                 for g in gs {
@@ -102,7 +115,13 @@ impl LuaGenerator {
                     cursor = self.flayout_seq(&g.body, start, body_cont, body_brk, nodes, labels);
                     options.push((g.condition.clone(), start));
                 }
-                nodes[at] = FNode::Select { options };
+                // Neither an `if` nor a `do` has an implicit exit: pan reports "invalid end state"
+                // for a process sitting at a loop head whose guards are all false, so a `do` that is
+                // meant to finish leaves through `break`. Only `for` falls out of its range.
+                nodes[at] = FNode::Select {
+                    options,
+                    exit: None,
+                };
             }
             Stmt::Break(_) => nodes[at] = FNode::Jump(brk),
             Stmt::Goto(l, _) => nodes[at] = FNode::Goto(l.clone()),
@@ -136,7 +155,29 @@ impl LuaGenerator {
                     );
                 }
             }
-            Stmt::For { .. } => nodes[at] = FNode::Refuse("for"),
+            // pan runs a `for` as an ordinary loop - init, then one body per iteration with the
+            // update in between - not as an atomic region. Expanding it to `atomic` at parse time
+            // made `for (i : 0 .. 3) { x = i; y = i }` unable to reach x != y, which pan reaches
+            // and refutes.
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+                ..
+            } => {
+                let sel_at = at + self.fsize(init);
+                let body_at = sel_at + 1;
+                let upd_at = body_at + body.iter().map(|b| self.fsize(b)).sum::<usize>();
+                nodes[sel_at] = FNode::Select {
+                    options: vec![(Some(condition.clone()), body_at)],
+                    exit: Some(next),
+                };
+                self.flayout_stmt(init, at, sel_at, brk, nodes, labels);
+                // A break in the body leaves the loop, so it targets `next` rather than `brk`.
+                self.flayout_seq(body, body_at, upd_at, next, nodes, labels);
+                self.flayout_stmt(update, upd_at, sel_at, brk, nodes, labels);
+            }
             Stmt::Run(_, _, _) => nodes[at] = FNode::Refuse("run"),
             Stmt::Unless { .. } => nodes[at] = FNode::Refuse("unless"),
             _ => {
@@ -278,7 +319,7 @@ impl LuaGenerator {
         #[allow(clippy::needless_range_loop)]
         for i in 0..nodes.len() {
             let node = std::mem::replace(&mut nodes[i], FNode::Refuse("taken"));
-            if let FNode::Select { options } = node {
+            if let FNode::Select { options, exit } = node {
                 self.emit(&format!("    -- step {}: selection", i));
                 let conds: Vec<String> = options
                     .iter()
@@ -332,6 +373,48 @@ impl LuaGenerator {
                             let d = self.deps_of(Some(e), &[], &[step_var.as_str()]);
                             self.emit_deps(&d);
                         }
+                        None => self.emit_step_deps(&step_var, None),
+                    }
+                    self.emit(&format!("    label = \"body:step{}\",", i));
+                    self.indent -= 1;
+                    self.emit("    })");
+                }
+                // A loop ends when none of its guards is enabled: pan reaches the exit, it does
+                // not block. The transition is the negation of every option guard, so it is
+                // enabled exactly where the selection has nothing to choose.
+                if let Some(target) = exit {
+                    let live: Vec<String> =
+                        conds.iter().filter(|s| !s.is_empty()).cloned().collect();
+                    let guard = if live.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" and not (({}))", live.join(") or ("))
+                    };
+                    self.emit("    table.insert(transitions, {");
+                    self.indent += 1;
+                    self.emit(&format!(
+                        "    guard = function(s) return s.{} == {}{} end,",
+                        step_var, i, guard
+                    ));
+                    self.emit(&format!(
+                        "    effect = function(s) s.{} = {} end,",
+                        step_var, target
+                    ));
+                    let mut deps: Option<super::deps::Deps> = None;
+                    for (cond, _) in &options {
+                        if let Some(e) = cond {
+                            deps = Some(match deps {
+                                None => self.deps_of(Some(e), &[], &[step_var.as_str()]),
+                                Some(mut d) => {
+                                    let d2 = self.deps_of(Some(e), &[], &[step_var.as_str()]);
+                                    d.merge(&d2);
+                                    d
+                                }
+                            });
+                        }
+                    }
+                    match deps {
+                        Some(d) => self.emit_deps(&d),
                         None => self.emit_step_deps(&step_var, None),
                     }
                     self.emit(&format!("    label = \"body:step{}\",", i));

@@ -167,6 +167,20 @@ fn report(rows: &[Row]) {
     }
     println!("  {:<18} {}", "total", rows.len());
 
+    // An unbuildable pan and a decline are both models that were not compared. They are not
+    // wrong verdicts, but a corpus that quietly loses models to them is a corpus that looks
+    // better than it is, so they are named.
+    let unmeasured: Vec<&Row> = rows
+        .iter()
+        .filter(|r| matches!(r.outcome, Outcome::PanUnbuildable | Outcome::Decline))
+        .collect();
+    if !unmeasured.is_empty() {
+        println!("\nnot compared:");
+        for r in unmeasured {
+            println!("  {:<45} {}", r.name, r.outcome.label());
+        }
+    }
+
     let wrong: Vec<&Row> = rows.iter().filter(|r| r.outcome.is_wrong()).collect();
     if wrong.is_empty() {
         println!("\nno wrong verdicts");

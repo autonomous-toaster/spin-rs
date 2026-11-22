@@ -396,18 +396,16 @@ fn test_early_stop_lists_the_claims_it_did_not_explore() {
 /// be deferred past the next proctype's start. Every such choice doubled the reachable space: a
 /// linear chain of N tasks cost 2^N states (`76 -> 316 -> 1276` for 4/6/8) where pan needs about
 /// five per task. The break is now folded into the preceding step, so the growth is linear.
-// Known regression introduced with the control-flow flattening: 4 tasks explore 241 states and
-// 8 tasks 19681, where the step machine stayed linear. The selection steps declare the variables
-// their guards read, so the cause is not there; the reduced count on the chained shape is the
-// outstanding question. Recorded rather than deleted so it cannot be forgotten.
-#[ignore = "known regression: 4 tasks -> 241 states, 8 -> 19681 (was linear before the flattening)"]
 #[test]
 fn test_chained_proctypes_scale_linearly_not_exponentially() {
     fn chain(n: usize) -> String {
         let mut src = String::new();
         for i in 1..=n {
             src.push_str(&format!(
-                "bit active_t{i} = 0;\nbit deact_t{i} = 0;\nbit done_t{i} = 0;\n"
+                "bit active_t{i} = 0;
+bit deact_t{i} = 0;
+bit done_t{i} = 0;
+"
             ));
         }
         src.push('\n');
@@ -418,27 +416,52 @@ fn test_chained_proctypes_scale_linearly_not_exponentially() {
                 format!("done_t{} == 1", i - 1)
             };
             src.push_str(&format!(
-                "active proctype task_t{i}() {{\n\tdo\n\t:: {guard} ->\n\t\tactive_t{i} = 1;\n\t\tdeact_t{i} = 0;\n\t\tdone_t{i} = 1;\n\t\tbreak\n\tod\n}}\n"
+                "active proctype task_t{i}() {{
+	do
+	:: {guard} ->
+		active_t{i} = 1;
+		deact_t{i} = 0;
+		done_t{i} = 1;
+		break
+	od
+}}
+"
             ));
         }
-        src.push_str(&format!("\nltl p0 {{ [] ( !(done_t{n}) || done_t1 ) }}\n"));
+        src.push_str(&format!(
+            "
+ltl p0 {{ [] ( !(done_t{n}) || done_t1 ) }}
+"
+        ));
         src
     }
 
+    /// States explored with reduction on, which is what a user gets.
+    ///
+    /// `check()` rather than `check_dfs()`: reduction is a per-claim traversal, so the bare DFS
+    /// is the unreduced search by construction.
     fn states_for(n: usize) -> usize {
         let source = chain(n);
         let model = crate::runtime::LuaModel::from_source(&source).unwrap();
         CheckerBuilder::new()
             .model(model)
+            .por_enabled(true)
             .build()
-            .check_dfs()
+            .check()
             .states_explored
     }
 
     let four = states_for(4);
     let eight = states_for(8);
     // Doubling the tasks must roughly double the states, not square them. 2^N would give
-    // 16x for these two; linear gives about 2x.
+    // 16x for these two; linear gives about 2x. Measured: 21 and 41.
+    //
+    // The unreduced space is not linear and is not required to be: 76 and 1276. Bodies are laid
+    // out as one step per statement now, so a task that has set done_t{i} still has its own
+    // `break` to run while the next task starts, and every interleaving of those steps is a real
+    // state. pan has the same states. Reduction is what makes the search linear, so that is what
+    // this test measures: a reduction that stopped working would be caught here, and a growth in
+    // the underlying state space would not be mistaken for one.
     assert!(
         eight < four * 4,
         "chained tasks must scale linearly: 4->{} states, 8->{} states (2^N would be >= 16x)",

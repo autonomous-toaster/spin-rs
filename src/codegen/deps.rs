@@ -60,6 +60,15 @@ impl Deps {
         self.writes.insert(field.into());
         self
     }
+
+    /// Fold another declaration into this one.
+    ///
+    /// A transition whose guard is the negation of several other guards reads everything any of
+    /// them reads, so its declaration is their union.
+    pub(crate) fn merge(&mut self, other: &Deps) {
+        self.reads.extend(other.reads.iter().cloned());
+        self.writes.extend(other.writes.iter().cloned());
+    }
 }
 
 /// Is this transition invisible to every property and independent of every other process?

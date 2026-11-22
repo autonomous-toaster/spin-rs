@@ -469,7 +469,11 @@ fn for_stmt(input: Input) -> IResult<Input, Stmt> {
     let (input, _) = ws_char('(')(input)?;
 
     // Try Promela-style first, then C-style
-    alt((for_promela_style, for_c_style))(input)
+    let (input, stmt) = alt((for_promela_style, for_c_style))(input)?;
+    // Every other statement parser absorbs an optional trailing semicolon; without this one a
+    // `for` followed by another statement made the whole proctype fail to parse.
+    let (input, _) = opt(symbol(";"))(input)?;
+    Ok((input, stmt))
 }
 
 /// Parse Promela-style `for (var : start .. end) { body }` and expand at parse time.
@@ -484,20 +488,39 @@ fn for_promela_style(input: Input) -> IResult<Input, Stmt> {
     let (input, end_val) = int_literal(input)?;
     let (input, _) = ws_char(')')(input)?;
     let (input, body) = delimited(ws_char('{'), many0(stmt), ws_char('}'))(input)?;
-    // Expand at parse time: i = start; body; i = start+1; body; ...; i = end; body;
-    let mut expanded = Vec::new();
-    for val in start_val..=end_val {
-        let assign = Stmt::Assignment {
+    // `for (i : a .. b) body` is a loop, not an atomic region: pan executes the body's statements
+    // as ordinary steps, so a state between two of them is reachable and observable. Expanding it
+    // to `atomic` made `for (i : 0 .. 3) { x = i; y = i }` unable to reach x != y, which pan
+    // reaches and refutes. It becomes the equivalent init/condition/update, which the code
+    // generator already knows how to flatten.
+    let var = || Box::new(Expression::Ident(var_name.clone()));
+    let assign = |value: Expression| {
+        Box::new(Stmt::Assignment {
             target: var_name.clone(),
             index: None,
             field: None,
-            value: Box::new(Expression::IntLit(val)),
+            value: Box::new(value),
             line: 0,
-        };
-        expanded.push(assign);
-        expanded.extend(body.clone());
-    }
-    Ok((input, Stmt::Atomic(expanded, 0)))
+        })
+    };
+    Ok((
+        input,
+        Stmt::For {
+            init: assign(Expression::IntLit(start_val)),
+            condition: Expression::BinaryOp {
+                op: BinaryOp::Le,
+                left: var(),
+                right: Box::new(Expression::IntLit(end_val)),
+            },
+            update: assign(Expression::BinaryOp {
+                op: BinaryOp::Add,
+                left: var(),
+                right: Box::new(Expression::IntLit(1)),
+            }),
+            body,
+            line: 0,
+        },
+    ))
 }
 
 /// Parse C-style: for (init; condition; update) { body }

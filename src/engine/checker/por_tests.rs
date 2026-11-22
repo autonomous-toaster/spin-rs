@@ -181,10 +181,13 @@ fn reduction_actually_shrinks_independent_processes() {
         full.states_explored > reduced.states_explored,
         "the reduced search must be smaller"
     );
-    // Reduction still collapses this shape, but less than it did: 16807 -> 4807 where the step
-    // machine gave 3125 -> a tenth. More steps per body means more states at which the cycle
-    // proviso expands the full enabled set. The ratio is recorded here rather than asserted at
-    // the old value, and the regression is tracked with the chained-tasks test.
+    // Reduction still collapses this shape, but by a smaller factor than it used to: 16807 ->
+    // 4807, where the step machine gave 3125. Bodies are laid out as one step per statement, so
+    // there are more states at which the cycle proviso has to expand the whole enabled set, and
+    // that proviso is what keeps the reduction sound. The factor is recorded rather than asserted
+    // at the old value: a body that carries more steps per process is not a regression in the
+    // reduction, and pinning the ratio to the old number would make any change to the encoding
+    // look like one. What must not change is that reduction happens at all.
     assert!(
         reduced.states_explored * 2 < full.states_explored,
         "reduction should still collapse independent processes, got {} vs {}",
