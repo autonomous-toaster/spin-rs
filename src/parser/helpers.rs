@@ -1,6 +1,6 @@
 //! Parser helpers: whitespace skipping, keyword/identifier detection.
 
-use nom::{IResult, bytes::complete::tag, character::complete::char};
+use nom::{IResult, bytes::complete::tag, bytes::complete::take_while, character::complete::char};
 
 use super::Input;
 
@@ -45,6 +45,31 @@ pub(crate) fn skip_ws(input: Input) -> IResult<Input, ()> {
     Ok((&input[pos..], ()))
 }
 
+/// The end of a declaration: a `;`, or the end of the line.
+///
+/// Promela's own examples write both. `bool b[2]` followed by a comment and `bool client_busy[N]`
+/// followed by another declaration are in spin's Examples tree, and requiring the semicolon turned
+/// each of them into "N characters left unconsumed at top level" - a parse error on a model spin
+/// accepts. A terminator is still required: one of the two, or the declaration is not one.
+pub(crate) fn decl_end(input: Input) -> IResult<Input, ()> {
+    if let Ok((rest, _)) = symbol(";")(input) {
+        return Ok((rest, ()));
+    }
+    // A declaration immediately before the closing brace of a body: `{ byte q }`.
+    if let Ok((rest, _)) = skip_ws(input)
+        && rest.starts_with('}')
+    {
+        return Ok((rest, ()));
+    }
+    let (rest, _) = take_while(|c: char| c == ' ' || c == '\t' || c == '\r')(input)?;
+    match rest.strip_prefix('\n') {
+        Some(after) => Ok((after, ())),
+        None => Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Char,
+        ))),
+    }
+}
 pub(crate) fn symbol(s: &'static str) -> impl Fn(Input) -> IResult<Input, Input> {
     move |input: Input| {
         let (input, _) = skip_ws(input)?;

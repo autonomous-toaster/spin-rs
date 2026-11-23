@@ -173,6 +173,44 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(1),
         source: "chan c = [0] of { bit };\nbyte got = 0;\nactive proctype Receiver() { c ?? 1; got = 1 }\nltl p0 { <> ( got == 1 ) }\n",
     },
+    // mtype constants are numbered from 1 in *reverse* declaration order - measured with pan, four
+    // assertions per list - so `free` is 2 in a two-name list. Numbering from 0 in declaration
+    // order put every constant one below spin's and turned this assert inside out.
+    Construct {
+        name: "mtype_values",
+        pan: Some(1),
+        source: "mtype = { free, idle };\nbyte x = 0;\nactive proctype P() { x = free; assert(x == 1) }\n",
+    },
+    // A claim comparing against an mtype constant. The atom is parsed from a string long after the
+    // AST walk that rewrites mtype names in bodies, so it compared against a field that does not
+    // exist, read false, and refuted a claim pan accepts.
+    Construct {
+        name: "mtype_atom",
+        pan: Some(0),
+        source: "mtype = { free, idle };\nbyte x = 0;\nactive proctype P() { x = free }\nltl p0 { <> ( x == free ) }\n",
+    },
+    // `show mtype x = idle;` declares a display variable; skipping it would leave a model with
+    // nothing to assign to.
+    Construct {
+        name: "show_declaration",
+        pan: Some(0),
+        source: "mtype = { free, idle };\nshow mtype h_state = idle;\nactive proctype P() { h_state = free }\nltl p0 { <> ( h_state == free ) }\n",
+    },
+    // A declaration ended by a newline instead of a semicolon, which spin accepts and its own
+    // examples use.
+    Construct {
+        name: "decl_newline",
+        pan: Some(0),
+        source: "bool b[2]\nactive proctype P() { b[1] = 1 }\nltl p0 { <> ( b[1] == 1 ) }\n",
+    },
+    // A claim over a *local* variable: the state has no copy of it, so the atom is declined rather
+    // than read as false. pan answers 0 for reasons this engine cannot reproduce - a verdict it
+    // will not claim is the honest outcome, and the row keeps pan's number beside it.
+    Construct {
+        name: "claim_over_local",
+        pan: Some(0),
+        source: "active proctype P() { byte q; q = 1 }\nltl p0 { <> ( q == 1 ) }\n",
+    },
     // An inline whose parameters are a channel and a value. The argument has to be substituted as
     // an *expression*: a bare name target stayed the parameter name, and the runtime rejected it
     // with "chan_send: expected integer values".

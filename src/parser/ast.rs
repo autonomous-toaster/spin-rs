@@ -427,7 +427,12 @@ impl PromelaModel {
         }
     }
 
-    fn resolve_mtype_in_expr(
+    /// Replace mtype names with their values inside one expression.
+    ///
+    /// Public because a claim's atom is a *string* parsed later, separately from the AST walk that
+    /// rewrites bodies; without the same rewrite there, a comparison against an mtype constant read
+    /// a nil field as false, which refuted a liveness claim pan accepts.
+    pub(crate) fn resolve_mtype_in_expr(
         expr: &mut Expression,
         mtype_names: &std::collections::HashMap<String, i64>,
     ) {

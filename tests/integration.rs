@@ -664,10 +664,13 @@ mod tests {
     fn test_mtype_declaration_and_comparison() {
         // Mtype declaration and comparison
         let promela = r#"
+            // spin numbers mtype constants from 1 in reverse declaration order: with
+            // { ready, busy }, busy is 1 and ready is 2. This test used to assert state == 0,
+            // which is what this engine answered before the numbering was measured against pan.
             mtype = { ready, busy };
             mtype state = ready;
             active proctype P() {
-                assert(state == 0);
+                assert(state == 2);
                 assert(state != 1);
             }
         "#;

@@ -127,9 +127,19 @@ fn stmt_inner(input: Input) -> IResult<Input, Stmt> {
 }
 
 fn var_decl_stmt(input: Input) -> IResult<Input, Stmt> {
-    let (input, decl) = var_decl(input)?;
-    let (input, _) = opt(symbol(";"))(input)?;
-    Ok((input, Stmt::VarDecl(decl)))
+    // `byte a, b;` declares two variables, which is how spin's own examples write it inside a body;
+    // parsing one name left the comma unconsumed and the whole proctype failed.
+    // `var_decl_list` already consumes the terminator; calling `decl_end` again here made every
+    // declaration inside a body fail, which took the whole proctype down with it.
+    let (input, decls) = var_decl_list(input)?;
+    Ok((
+        input,
+        if decls.len() == 1 {
+            Stmt::VarDecl(decls.into_iter().next().expect("checked length"))
+        } else {
+            Stmt::VarDecls(decls)
+        },
+    ))
 }
 
 /// `x++`, `x--`, `++x`, `--x`: an increment written as a statement.
@@ -697,12 +707,18 @@ pub fn parse(source: &str) -> anyhow::Result<PromelaModel> {
         ));
     }
 
-    // Collect mtype names and assign sequential IDs
+    // Collect mtype names and assign IDs the way spin does: from 1, in *reverse* declaration order.
+    //
+    // Both halves were measured with pan 6.5.2 rather than read anywhere. `mtype = { a, b, c }` gives
+    // a = 3, b = 2, c = 1 - spin builds its mtype list by prepending, so the last name declared gets
+    // the lowest value. Starting at 0 instead put every constant one below spin's, which refuted a
+    // model that asserted a numeric value of an mtype constant, and made the first constant
+    // indistinguishable from an uninitialised mtype variable.
     let mut mtype_names = std::collections::HashMap::new();
-    let mut next_id = 0i64;
+    let mut next_id = 1i64;
     for decl in &declarations {
         if let TopLevel::MtypeDecl { names, .. } = decl {
-            for name in names {
+            for name in names.iter().rev() {
                 if !mtype_names.contains_key(name) {
                     mtype_names.insert(name.clone(), next_id);
                     next_id += 1;

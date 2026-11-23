@@ -269,6 +269,7 @@ pub(crate) fn top_level(input: Input) -> IResult<Input, Vec<TopLevel>> {
         map(inline_def, |i| vec![i]),
         map(preprocessor, |p| vec![p]),
         map(c_code_block, |c| vec![c]),
+        show_decl,
         map(chan_decl, |c| vec![c]),
         map(chan_array_decl, |ca| vec![ca]),
         map(mtype_decl, |m| vec![m]),
@@ -338,6 +339,30 @@ pub(crate) fn var_decl_list(input: Input) -> IResult<Input, Vec<VarDecl>> {
             },
         ),
     )(input)?;
-    let (input, _) = symbol(";")(input)?;
+    // A declaration may be ended by a newline instead of a semicolon; spin's own examples do both.
+    let (input, _) = decl_end(input)?;
     Ok((input, decls))
+}
+
+/// `show mtype h_state = idle;` and `show x;` - a display variable.
+///
+/// It declares a variable, so it is parsed as one rather than skipped: skipping it would leave a
+/// model that assigns to the name with nothing to assign to, which is worse than the parse error it
+/// would have replaced.
+pub(crate) fn show_decl(input: Input) -> IResult<Input, Vec<TopLevel>> {
+    let (input, _) = keyword("show")(input)?;
+    let (input, _) = opt(keyword("mtype"))(input)?;
+    let (input, name) = ident(input)?;
+    let (input, init) = opt(preceded(symbol("="), expr))(input)?;
+    let (input, _) = decl_end(input)?;
+    Ok((
+        input,
+        vec![TopLevel::GlobalVar(VarDecl {
+            var_type: VarType::Byte,
+            name,
+            array_size: None,
+            init: init.map(Box::new),
+            line: 0,
+        })],
+    ))
 }

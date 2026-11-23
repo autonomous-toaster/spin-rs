@@ -230,11 +230,20 @@ impl LuaGenerator {
                     }
                 }
                 TopLevel::MtypeDecl { names, .. } => {
-                    // Emit mtype mapping table for printm support
+                    // The mapping is built from the *assigned* values, not from the position in the
+                    // list: they are the same thing today, and that is exactly how a printing table
+                    // drifts from the numbers that are actually in the state.
+                    // Built from the *assigned* values, not from the position in the list: they are
+                    // the same thing today, and that is exactly how a printing table drifts from the
+                    // numbers that are actually in the state.
                     let mapping: Vec<String> = names
                         .iter()
-                        .enumerate()
-                        .map(|(i, n)| format!("[{}] = \"{}\"", i, n))
+                        .filter_map(|n| {
+                            model
+                                .mtype_names
+                                .get(n)
+                                .map(|v| format!("[{}] = \"{}\"", v, n))
+                        })
                         .collect();
                     lines.push(format!(
                         "    state._mtype_map = {{ {} }}",

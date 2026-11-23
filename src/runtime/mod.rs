@@ -233,6 +233,39 @@ pub struct LuaModel {
 }
 
 impl LuaModel {
+    /// Does every name this atom mentions exist in the state or in the model?
+    ///
+    /// An atom compiled against a bare state reads a missing field as nil, and nil compares false - so
+    /// a claim about a *local* variable, which the state has no copy of, was refuted rather than left
+    /// undecided. pan answers 0 for such a claim, because it resolves the name to something else
+    /// entirely; neither answer is a verdict this engine can stand behind, and the honest outcome is
+    /// to decline it by naming the atom.
+    fn atom_names_resolve(&self, expr: &crate::parser::ast::Expression, state: &StateBlob) -> bool {
+        use crate::parser::ast::{Expression as E, TopLevel};
+        let mut ok = true;
+        crate::codegen::walk_expr(expr, &mut |e| {
+            if !ok {
+                return;
+            }
+            let E::Ident(name) = e else { return };
+            if self.atom_model.mtype_names.contains_key(name) {
+                return;
+            }
+            if crate::engine::checker::dfs::extract_var_from_state(&state.0, name).is_some() {
+                return;
+            }
+            let declared = self.atom_model.declarations.iter().any(|d| match d {
+                TopLevel::GlobalVar(v) => v.name == *name,
+                TopLevel::ChanDecl { name: n, .. } => n == name,
+                TopLevel::ChannelArray { name: n, .. } => n == name,
+                _ => false,
+            });
+            if !declared {
+                ok = false;
+            }
+        });
+        ok
+    }
     /// The declared priority of the process that owns a transition; 0 when it declares none.
     fn priority_of(&self, owner: &str) -> i64 {
         self.priorities.get(owner).copied().unwrap_or(0)
@@ -582,13 +615,34 @@ impl Model for LuaModel {
             match cache.get(atom) {
                 Some(c) => c.clone(),
                 None => {
-                    let expr = crate::parser::parse_expression(atom).ok()?;
+                    let mut expr = crate::parser::parse_expression(atom).ok()?;
+                    // An atom is a string parsed here, so it never went through the AST walk that
+                    // rewrites mtype names into their values in bodies. Without it, a comparison
+                    // against an mtype constant read a field that does not exist and answered false,
+                    // which refuted a liveness claim pan accepts.
+                    if !self.atom_model.mtype_names.is_empty() {
+                        crate::parser::ast::PromelaModel::resolve_mtype_in_expr(
+                            &mut expr,
+                            &self.atom_model.mtype_names,
+                        );
+                    }
+                    // A name the state does not carry is *unresolved*, not false: reading a missing
+                    // field as false refuted claims about local variables, which the state has no
+                    // copy of. The empty string is the cache's way of remembering that answer, so
+                    // later calls for the same atom do not re-ask.
+                    if !self.atom_names_resolve(&expr, state) {
+                        cache.insert(atom.to_string(), String::new());
+                        return None;
+                    }
                     let lua = crate::codegen::expression_to_lua(&self.atom_model, &expr);
                     cache.insert(atom.to_string(), lua.clone());
                     lua
                 }
             }
         };
+        if chunk.is_empty() {
+            return None;
+        }
         let runtime = self.runtime.borrow();
         match runtime.eval_bool_in_state(&chunk, &state.0) {
             Ok(v) => Some(v),
