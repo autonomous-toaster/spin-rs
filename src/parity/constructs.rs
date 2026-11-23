@@ -173,6 +173,20 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(1),
         source: "chan c = [0] of { bit };\nbyte got = 0;\nactive proctype Receiver() { c ?? 1; got = 1 }\nltl p0 { <> ( got == 1 ) }\n",
     },
+    // A proctype that declares parameters, started by `active`: pan binds every parameter to zero,
+    // which is measurable rather than assumed. `run` still refuses, so a process whose arguments
+    // come from a call has no verdict here yet.
+    Construct {
+        name: "active_proctype_parameter",
+        pan: Some(0),
+        source: "active proctype P(byte n) { assert(n == 0) }\n",
+    },
+    // The control: the same parameter is not 1, so the assertion is refuted.
+    Construct {
+        name: "active_proctype_parameter_refutes",
+        pan: Some(1),
+        source: "active proctype P(byte n) { assert(n == 1) }\n",
+    },
     // An increment as a guard: `:: i++`, which is how spin's own ex_1a.pml writes a loop body.
     // The guard-position heuristic read `i` as a condition and left `++` for the `od`.
     Construct {

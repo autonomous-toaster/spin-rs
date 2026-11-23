@@ -198,7 +198,7 @@ These are hard errors. No verdict is produced, so nothing about the model is cla
 | a call to a function this engine does not define | it would fail at run time with a nil global; after inline expansion any remaining call is unknown |
 | `provided (expr)` | the gate agrees with pan on minimal models and hides a deadlock on spin's own `pathfinder.pml` (pan 1, this engine 0 from 6 states where dropping the clause gives 25 and agreement); a clause that hides a deadlock is a wrong verdict |
 | `timeout` | it is true only when no other process can move, and a guard emitted for one process cannot ask that; the branch used to be emitted as permanently false, which decided models against pan |
-| a proctype that declares parameters | the arguments are bound by `run`, or set to zero for an `active` process, and neither is in the state; a channel parameter used to crash at run time rather than refuse |
+| `run P(args)` on a parameterised proctype | an `active` process's parameters are bound to zero, as pan binds them; a call has to bind its arguments at the moment the child starts, which needs dynamic instances |
 | a send or receive whose value count differs from the declared field count of its channel | pan rejects it at run time, so there is no verdict to match; binding the first field and dropping the rest decided 0 where pan reports 1 |
 | a poll or eval-receive on a rendezvous channel | the stage/release encoding pairs a send with a plain receive; a polling receive inspects rather than pairs |
 | a `never` claim whose body assigns, sends or receives | that is a program, not a monitor |

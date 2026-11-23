@@ -283,15 +283,11 @@ impl LuaModel {
         // body then reads unbound names - a channel parameter produced
         // "channel 'inp' not found in the declaration" at run time, which is a crash, and a crash is
         // neither a verdict nor a refusal.
-        if let Some(p) = model.declarations.iter().find_map(|d| match d {
-            crate::parser::ast::TopLevel::Proctype(p) if !p.parameters.is_empty() => Some(p),
-            _ => None,
-        }) {
-            anyhow::bail!(
-                "proctype '{}' declares parameters, which are not bound into the state yet; a process started by run or active would need its arguments there",
-                p.name
-            );
-        }
+        // A proctype's parameters are bound into the state under the instance prefix, as pan binds
+        // them: an `active` process starts with every parameter zero, which is measurable -
+        // `active proctype P(byte n) { assert(n == 0) }` is pan 0 and `assert(n == 1)` is pan 1. A
+        // process started by `run` needs its arguments bound at the call, and `run` still refuses by
+        // name, so nothing here is guessed.
         // An inline is a macro: expand every call into the body it names before anything is laid out,
         // so the step machine never sees a call. This has to happen here rather than per statement,
         // because a call inside a guard, an atomic region or another inline would otherwise reach an
