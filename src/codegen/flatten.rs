@@ -63,6 +63,9 @@ enum FNode {
         to: usize,
         next: usize,
     },
+    /// A step that is never enabled: the process blocks here. Used where pan blocks rather than
+    /// refuses, so that the model is decided instead of declined.
+    Blocked(&'static str),
     /// A construct with no encoding yet. Refused rather than reordered or dropped.
     Refuse(&'static str),
 }
@@ -223,10 +226,19 @@ impl LuaGenerator {
                 target: RecvTarget::RandomMatch(_),
                 ..
             } => nodes[at] = FNode::Refuse("a random receive of a value is not implemented"),
-            // A poll or eval receive on a capacity-0 channel inspects a staged message instead of
-            // taking one, and the stage/release encoding has no inspect-only half. Refused by name.
-            // (v0.5.7 called this fall-through a wrong verdict; the pan 0 belonged to `c ?? 1`, and
-            // for `c ? [1]` pan reports 1 as this engine did.)
+            // A poll receive on a capacity-0 channel has no queue to inspect, and pan does not pair it
+            // with a waiting sender either: measured, `c ? [1]` beside a sender leaves the claim about
+            // the following statement refuted (pan 1, plain and -a), so the receiver waits. A step that
+            // is never enabled says that, and the model is decided.
+            Stmt::Recv {
+                channel,
+                target: RecvTarget::Poll(_),
+                ..
+            } if self.rendezvous.contains_key(&self.channel_name(channel)) => {
+                nodes[at] = FNode::Blocked("a poll receive waits on a channel of capacity zero")
+            }
+            // An eval receive on a capacity-0 channel would have to inspect a staged message instead
+            // of taking one, and the stage/release encoding has no inspect-only half. Refused by name.
             Stmt::Recv {
                 channel, target, ..
             } if self.rendezvous.contains_key(&self.channel_name(channel))
@@ -889,6 +901,13 @@ impl LuaGenerator {
                         "    effect = function(s) {}s.{} = {} end,",
                         effect, step_var, next
                     ));
+                    self.emit_opaque_deps();
+                    self.emit(&format!("    label = \"body:step{}\",", i));
+                }
+                FNode::Blocked(why) => {
+                    self.emit(&format!("    -- step {}: blocked, {}", i, why));
+                    self.emit("    guard = function(s) return false end,");
+                    self.emit("    effect = function(s) end,");
                     self.emit_opaque_deps();
                     self.emit(&format!("    label = \"body:step{}\",", i));
                 }

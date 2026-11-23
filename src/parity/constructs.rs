@@ -152,6 +152,14 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(0),
         source: "bool a = true;\nbool b = false;\nactive proctype P() { b = a; assert(b == 1) }\n",
     },
+    // A poll receive on a capacity-0 channel: pan does not pair it with a waiting sender, so the
+    // receiver waits and the claim about the following statement is refuted. Written with the
+    // eval-receive spelling because that is the construct, not the consumer's `??` row.
+    Construct {
+        name: "poll_receive_waits",
+        pan: Some(1),
+        source: "chan c = [0] of { bit };\nbit got = 0;\nactive proctype Sender() { c ! 1 }\nactive proctype Receiver() { c ? [1]; got = 1 }\nltl p0 { <> ( got ) }\n",
+    },
     // The consumer's two random-receive rows, verbatim. Both need `pan -a`: without it pan reports 0
     // for both files, so a table built from plain pan records the same expectation twice and the pair
     // stops discriminating.
