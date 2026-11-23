@@ -194,19 +194,17 @@ mod tests {
         // offset, which a caller cannot tell apart from a malformed model of their own.
         // `unless` and `priority` used to be in this list; both moved to being decided when their
         // encodings landed, which is this table doing what it was built for.
-        for (name, needle) in [("run", "run is not supported")] {
-            let c = CONSTRUCTS
-                .iter()
-                .find(|c| c.name == name)
-                .unwrap_or_else(|| panic!("{name} must be in the table"));
-            let err = crate::runtime::verify(c.source)
-                .err()
-                .map(|e| e.to_string())
-                .unwrap_or_default();
-            assert!(
-                err.contains(needle),
-                "{name} must be refused with '{needle}', got: {err}"
-            );
-        }
+        let c = CONSTRUCTS
+            .iter()
+            .find(|c| c.name == "run")
+            .expect("run must be in the table");
+        let err = crate::runtime::verify(c.source)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(
+            err.contains("run is not supported"),
+            "run must be refused by name, got: {err}"
+        );
     }
 }

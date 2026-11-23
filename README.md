@@ -179,10 +179,11 @@ These are hard errors. No verdict is produced, so nothing about the model is cla
 
 | construct | why |
 |---|---|
-| `run P(...)` | a spawned process needs dynamic instances; the transition table is emitted per static instance |
+| `run P(...)` | a spawned process needs dynamic instances; the transition table is emitted per static instance, and there is no measured pan answer to encode against |
+| a multi-statement `unless` handler | the handler would need its own program counter, since it can be suspended mid-way |
+| a poll or eval-receive on a rendezvous channel | the stage/release encoding pairs a send with a plain receive; a polling receive inspects rather than pairs |
+| a `never` claim whose body assigns, sends or receives | that is a program, not a monitor |
 | bare `{ ... }` block | not a statement the parser has, so the model fails to parse |
-
-
 | typedef records (`r.f`) | structured fields are not in the state |
 | `P@x` (remote variable) | the reference does not resolve |
 | `pc_value(pid)` | it exposes the checker's own statement numbering, which is not comparable with pan's |

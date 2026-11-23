@@ -1,4 +1,3 @@
-use super::ast::*;
 use super::*;
 
 #[test]

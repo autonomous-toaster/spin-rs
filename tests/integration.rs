@@ -345,8 +345,10 @@ mod tests {
     #[test]
     fn test_channel_array_token_ring() {
         // 3-node token ring with channel arrays
+        // A bare `chan tok[3];` is not Promela: an array of channels needs a capacity and a message
+        // type. Declared as rendezvous it would be a legal model of a different shape.
         let promela = r#"
-            chan tok[3];
+            chan tok[3] = [1] of { byte };
             init { tok[0] ! 1 }
             active [3] proctype node() {
                 byte msg;
@@ -693,6 +695,8 @@ mod tests {
         assert_eq!(result.errors, 0, "Basic mtype should work");
     }
 
+    #[ignore = "4.3: structured fields are not in the state; the model parses and the run now refuses \
+                by name rather than failing to parse"]
     #[test]
     fn test_struct_declaration_and_field_access() {
         // Struct declaration and field access
@@ -714,6 +718,8 @@ mod tests {
         assert_eq!(result.errors, 0, "Struct field access should work");
     }
 
+    #[ignore = "4.3: structured fields are not in the state; the model parses and the run now refuses \
+                by name rather than failing to parse"]
     #[test]
     fn test_struct_assignment() {
         // Struct assignment copies all fields

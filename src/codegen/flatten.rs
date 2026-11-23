@@ -197,6 +197,16 @@ impl LuaGenerator {
                     next,
                 }
             }
+            // A receive that binds several variables would need the message as a table; the
+            // runtime hands back one value. Refused rather than binding the first and dropping the
+            // rest.
+            Stmt::Recv {
+                target: RecvTarget::VarList(v),
+                ..
+            } if v.len() > 1 => {
+                nodes[at] =
+                    FNode::Refuse("a receive that binds more than one variable is not supported")
+            }
             Stmt::Break(_) => nodes[at] = FNode::Jump(brk),
             Stmt::Goto(l, _) => nodes[at] = FNode::Goto(l.clone()),
             Stmt::Label(name, _) => {
@@ -484,27 +494,56 @@ impl LuaGenerator {
                 channel, target, ..
             } => {
                 let chan = self.channel_to_lua(channel);
-                let vars = match target {
-                    RecvTarget::VarList(v) => v
-                        .iter()
-                        .map(|v| {
-                            let name = if self.global_vars.contains(v.as_str()) {
-                                v.clone()
-                            } else if let Some(ref p) = self.current_proctype {
-                                format!("{}_{}", p, v)
-                            } else {
-                                v.clone()
-                            };
-                            format!("s.{}", name)
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    _ => return (String::new(), String::new()),
+                let field = |v: &str| {
+                    if self.global_vars.contains(v) {
+                        v.to_string()
+                    } else if let Some(ref p) = self.current_proctype {
+                        format!("{}_{}", p, v)
+                    } else {
+                        v.to_string()
+                    }
                 };
-                (
-                    format!(" and not chan_empty(s, {})", chan),
-                    format!("_spin_chan_recv(s, {}, {}); ", chan, vars),
-                )
+                // `_spin_chan_recv` *returns* the message; the old emission passed the target as a
+                // third argument and dropped the return value, so `c ? x` left x untouched - a silent
+                // wrong in the direction of any assertion about what was received.
+                match target {
+                    RecvTarget::VarList(v) if v.len() == 1 => (
+                        format!(" and not chan_empty(s, {})", chan),
+                        format!(
+                            "local _v = _spin_chan_recv(s, {}); s.{} = _v; ",
+                            chan,
+                            field(&v[0])
+                        ),
+                    ),
+                    RecvTarget::Random(v) if v.len() == 1 => (
+                        format!(" and not chan_empty(s, {})", chan),
+                        format!(
+                            "local _v = _spin_chan_recv(s, {}); s.{} = _v; ",
+                            chan,
+                            field(&v[0])
+                        ),
+                    ),
+                    // A poll inspects the head without taking it, so it has a guard and no effect.
+                    RecvTarget::Poll(e) => (
+                        format!(
+                            " and _spin_chan_poll(s, {}, {}) ~= nil",
+                            chan,
+                            self.expr_to_lua(e)
+                        ),
+                        String::new(),
+                    ),
+                    // An eval-receive inspects the head; it is the statement emitter's job to take
+                    // the message, and a bare `c ? [v]` as a step takes nothing.
+                    RecvTarget::Eval(e) => (
+                        format!(
+                            " and _spin_chan_poll(s, {}, {}) ~= nil",
+                            chan,
+                            self.expr_to_lua(e)
+                        ),
+                        String::new(),
+                    ),
+                    _ => (String::new(), String::new()),
+                }
             }
             _ => (String::new(), String::new()),
         }

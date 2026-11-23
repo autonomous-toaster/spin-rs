@@ -132,6 +132,8 @@ pub(crate) fn ltl_formula(input: Input) -> IResult<Input, TopLevel> {
     let (input, _) = ws_char('{')(input)?;
     let (input, formula) = nom::bytes::complete::take_while(|c: char| c != '}')(input)?;
     let (input, _) = ws_char('}')(input)?;
+    // spin accepts a terminating semicolon, and models in the wild carry it.
+    let (input, _) = opt(symbol(";"))(input)?;
     Ok((
         input,
         TopLevel::Ltl(LtlFormula {
@@ -296,7 +298,9 @@ pub(crate) fn typedef_decl(input: Input) -> IResult<Input, TopLevel> {
     let (input, _) = keyword("typedef")(input)?;
     let (input, name) = ident(input)?;
     let (input, _) = ws_char('{')(input)?;
-    let (input, fields) = many0(var_decl)(input)?;
+    // A struct's fields are declarations terminated by semicolons; `var_decl` does not consume the
+    // terminator itself, so without this only a single field would parse.
+    let (input, fields) = many0(nom::sequence::terminated(var_decl, opt(symbol(";"))))(input)?;
     let (input, _) = ws_char('}')(input)?;
     let (input, _) = opt(symbol(";"))(input)?;
     Ok((

@@ -1,11 +1,15 @@
-use super::*;
-use crate::parser;
-
+#[test]
 fn test_expr_bool_lit() {
+    // Promela has no boolean type: `true` is the integer 1. This test had lost its `#[test]`
+    // attribute and had not run since; its assertion also predated the fix, so it would have failed.
     let source = "active proctype P() { bit flag; flag = true; }";
     let model = crate::parser::parse(source).unwrap();
     let lua = crate::codegen::generate(&model);
-    assert!(lua.source.contains("true") || lua.source.contains("s.flag"));
+    assert!(
+        lua.source.contains("_spin_wrap(1, false, 1)"),
+        "true is the integer 1, not a Lua boolean: {}",
+        lua.source
+    );
 }
 
 #[test]
@@ -53,7 +57,7 @@ fn test_expr_nfull_nempty() {
     let result = crate::parser::parse(source);
     if let Ok(model) = result {
         let lua = crate::codegen::generate(&model);
-        assert!(lua.source.is_empty() == false);
+        assert!(!lua.source.is_empty());
     }
 }
 
@@ -93,7 +97,7 @@ fn test_emit_unless_variant() {
     let source = "active proctype P() {\n    do\n    :: (x < 5) -> x = x + 1\n    :: else -> break\n    od\n}";
     let model = crate::parser::parse(source).unwrap();
     let lua = crate::codegen::generate(&model);
-    assert!(lua.source.is_empty() == false);
+    assert!(!lua.source.is_empty());
 }
 
 #[test]

@@ -298,7 +298,7 @@ mod tests {
         let mut exact = ExactStore::new();
         let mut hc = HashCompactStore::new(1024);
 
-        let states = vec!["a", "b", "c", "d", "e"];
+        let states = ["a", "b", "c", "d", "e"];
         for (i, s) in states.iter().enumerate() {
             let hash = i as u64;
             assert_eq!(

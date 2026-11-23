@@ -366,10 +366,10 @@ fn claim_names(src: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in src.lines() {
         let line = line.trim();
-        if let Some(rest) = line.strip_prefix("ltl ") {
-            if let Some(name) = rest.split_whitespace().next() {
-                out.push(name.to_string());
-            }
+        if let Some(rest) = line.strip_prefix("ltl ")
+            && let Some(name) = rest.split_whitespace().next()
+        {
+            out.push(name.to_string());
         }
     }
     out
