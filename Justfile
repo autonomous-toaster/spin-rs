@@ -104,6 +104,11 @@ machete:
 # Uses --features integration so the coverage matches what CI produces (cargo:test artifact).
 # --missing skip: functions absent from lcov (gateway.rs, registry.rs, session.rs, main.rs
 # are excluded via --ignore-filename-regex) are skipped rather than penalised as 0%.
+# KNOWN RED, not a regression: measured with the same pipeline on v0.4.1 and on HEAD, 59 of 564
+# functions exceeded the threshold before the parity work and 73 of 659 after. The code that grew is
+# the flattener and the emitters. Raising the threshold would be gaming the metric; the honest options
+# are to simplify the largest functions, to test the offenders, or to drop the gate and say so. Until
+# one is chosen, just ci is not green, and this comment is why.
 crap:
     #!/usr/bin/env bash
     # Run offline unit tests only — no integration or e2e features.
