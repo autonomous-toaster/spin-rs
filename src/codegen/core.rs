@@ -68,14 +68,7 @@ impl LuaGenerator {
         self.emit("-- Runtime: mlua 5.4");
         self.emit("");
         self.emit("-- Channel operations (Rust FFI)");
-        self.emit("local chan_send = _spin_chan_send");
-        self.emit("local chan_recv = _spin_chan_recv");
-        self.emit("local chan_len = _spin_chan_len");
-        self.emit("local chan_full = _spin_chan_full");
-        self.emit("local chan_empty = _spin_chan_empty");
-        self.emit("local assert = _spin_assert");
-        self.emit("local printf = _spin_printf");
-        self.emit("local state_hash = _spin_state_hash");
+        self.emit(super::ALIASES);
         self.emit("");
 
         self.emit("-- State initialization");

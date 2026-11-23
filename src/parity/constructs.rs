@@ -173,6 +173,21 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(1),
         source: "chan c = [0] of { bit };\nbyte got = 0;\nactive proctype Receiver() { c ?? 1; got = 1 }\nltl p0 { <> ( got == 1 ) }\n",
     },
+    // A claim whose atom calls `len()` on a channel. The atom is compiled as its own chunk
+    // against a bare state, so it resolved `chan_len` through aliases the generated model
+    // defines for itself and found nil: the claim was declined while the same expression
+    // inside a body worked. A rendezvous channel has length 0, so the implication is false.
+    Construct {
+        name: "len_atom_in_claim",
+        pan: Some(1),
+        source: "chan q;\nltl p0 { [] ( (len(q) < 2) -> (len(q) > 0) ) }\n",
+    },
+    // The control: with capacity 1 the same predicate holds however much is queued.
+    Construct {
+        name: "len_atom_holds",
+        pan: Some(0),
+        source: "chan q = [1] of { byte };\nbyte d = 0;\nactive proctype P() { q ! 1; d = 1 }\nltl p0 { [] ( len(q) <= 1 ) }\n",
+    },
     // A handler whose guard only becomes true *after* the body's second step, so the escape
     // boundary is tested at a later step than the first. pan refutes: the handler preempts
     // mid-body and sets y = 9. A counter off by one at this boundary would miss it and

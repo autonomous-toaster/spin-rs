@@ -92,8 +92,12 @@ end
     /// The state is rebuilt from the blob exactly as `enumerate_transitions` does, so the
     /// expression sees the state the caller asked about and nothing else.
     pub fn eval_bool_in_state(&self, chunk: &str, state_blob: &str) -> anyhow::Result<bool> {
+        // The aliases the generated model defines for itself, from the same constant it uses: an
+        // atom like `len(q) < 2` is compiled as its own chunk, and without them it called a nil
+        // global and the claim was declined.
         let source = format!(
-            "do local s = {{}}; {}; return (({}) and true or false) end",
+            "do local s = {{}}; {}; {}; return (({}) and true or false) end",
+            crate::codegen::ALIASES,
             state_literal(state_blob),
             chunk
         );
@@ -236,6 +240,20 @@ impl LuaModel {
 
     /// Create from a parsed Promela model.
     pub fn from_model(model: &crate::parser::ast::PromelaModel) -> anyhow::Result<Self> {
+        // A proctype that declares parameters has no encoding yet: the arguments are bound when
+        // `run` instantiates it, or set to zero for an `active` one, and neither is in the state. The
+        // body then reads unbound names - a channel parameter produced
+        // "channel 'inp' not found in the declaration" at run time, which is a crash, and a crash is
+        // neither a verdict nor a refusal.
+        if let Some(p) = model.declarations.iter().find_map(|d| match d {
+            crate::parser::ast::TopLevel::Proctype(p) if !p.parameters.is_empty() => Some(p),
+            _ => None,
+        }) {
+            anyhow::bail!(
+                "proctype '{}' declares parameters, which are not bound into the state yet; a process started by run or active would need its arguments there",
+                p.name
+            );
+        }
         let generated = codegen::generate(model);
         let mut runtime = LuaRuntime::new()?;
         let mut ltl_formulas = Vec::new();

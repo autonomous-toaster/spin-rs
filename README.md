@@ -191,6 +191,7 @@ These are hard errors. No verdict is produced, so nothing about the model is cla
 | construct | why |
 |---|---|
 | `run P(...)` | a spawned process needs dynamic instances; the transition table is emitted per static instance, and there is no measured pan answer to encode against |
+| a proctype that declares parameters | the arguments are bound by `run`, or set to zero for an `active` process, and neither is in the state; a channel parameter used to crash at run time rather than refuse |
 | a send or receive whose value count differs from the declared field count of its channel | pan rejects it at run time, so there is no verdict to match; binding the first field and dropping the rest decided 0 where pan reports 1 |
 | a poll or eval-receive on a rendezvous channel | the stage/release encoding pairs a send with a plain receive; a polling receive inspects rather than pairs |
 | a `never` claim whose body assigns, sends or receives | that is a program, not a monitor |

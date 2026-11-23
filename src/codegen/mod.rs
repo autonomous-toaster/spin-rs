@@ -57,6 +57,18 @@ pub fn generate_with_opt(model: &PromelaModel, opt: &optimize::OptLevel) -> Gene
     g.finish()
 }
 
+/// The aliases every generated chunk may use, and the prelude of an atom evaluation.
+///
+/// Kept in one place because they were in two: an atom is compiled as its own chunk against a bare
+/// state, so `len(q) < 2` in a claim called `chan_len` and found nil, while the same expression in
+/// a body resolved through the generated model's aliases. Two definitions of the same names is how
+/// that happens.
+pub(crate) const ALIASES: &str = "local chan_send = _spin_chan_send; \
+     local chan_recv = _spin_chan_recv; local chan_len = _spin_chan_len; \
+     local chan_full = _spin_chan_full; local chan_empty = _spin_chan_empty; \
+     local assert = _spin_assert; local printf = _spin_printf; \
+     local state_hash = _spin_state_hash; ";
+
 pub(crate) struct LuaGenerator {
     pub(crate) source: String,
     pub(crate) indent: usize,
