@@ -18,6 +18,7 @@ impl LuaGenerator {
             preempt: Vec::new(),
             var_types: std::collections::HashMap::new(),
             global_vars: std::collections::HashSet::new(),
+            state_var: "s".to_string(),
             inlines: std::collections::HashMap::new(),
             label_steps: std::collections::HashMap::new(),
             do_exit_stack: Vec::new(),
@@ -98,7 +99,10 @@ impl LuaGenerator {
                             lines.push(format!("    state.{} = {}", v.name, default));
                         }
                     } else if let Some(init_expr) = &v.init {
+                        // The initialiser is evaluated in the layout, whose table is `state`.
+                        let saved = std::mem::replace(&mut self.state_var, "state".to_string());
                         let init_str = self.expr_to_lua(init_expr);
+                        self.state_var = saved;
                         lines.push(format!("    state.{} = {}", v.name, init_str));
                     } else if let VarType::Named(type_name) = &v.var_type {
                         // Struct type: emit as nested table with fields

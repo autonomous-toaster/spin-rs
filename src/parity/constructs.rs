@@ -173,6 +173,29 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(1),
         source: "chan c = [0] of { bit };\nbyte got = 0;\nactive proctype Receiver() { c ?? 1; got = 1 }\nltl p0 { <> ( got == 1 ) }\n",
     },
+    // A multi-declarator inside a body: `byte o, i;`. The statement parser took one name and left
+    // the comma, which took the whole proctype down with it - while the same declaration at top
+    // level parsed, because it went through a different production.
+    Construct {
+        name: "multi_declarator_body",
+        pan: Some(0),
+        source: "active proctype P() { byte o, i; o = 1; assert(o == 1) }\n",
+    },
+    // An mtype-initialised local: the initialiser is evaluated in the state layout, where the
+    // table is `state` and not `s`, and where mtype names had not been rewritten to numbers.
+    // It produced `state.P_x = s.a`, failed the initial state, and the model explored nothing and
+    // reported success.
+    Construct {
+        name: "mtype_initialised_local",
+        pan: Some(1),
+        source: "mtype = { a, b, c };\nactive proctype P() { mtype x = a; assert(x == 1) }\n",
+    },
+    // The control: `c` is 1, so the same assertion holds.
+    Construct {
+        name: "mtype_initialised_local_holds",
+        pan: Some(0),
+        source: "mtype = { a, b, c };\nactive proctype P() { mtype x = c; assert(x == 1) }\n",
+    },
     // `provided` gated a proctype's every step and agreed with pan on the minimal shapes - and then
     // hid a deadlock on spin's own pathfinder.pml: pan 1, ours 0, from 6 states instead of 12.
     // Dropping the clause gave 25 states and agreement, so the gate is too strong in combination

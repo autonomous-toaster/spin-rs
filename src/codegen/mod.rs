@@ -113,6 +113,13 @@ pub(crate) struct LuaGenerator {
     /// the value the expression produced.
     pub(crate) var_types: std::collections::HashMap<String, VarType>,
     pub(crate) global_vars: std::collections::HashSet<String>,
+    /// The name an emitted expression indexes for state fields.
+    ///
+    /// Transitions are wrapped in a function of `s`, so it is `s` there. The state layout is not: it
+    /// builds a local table called `state`, and emitting `s.` inside it produced `state.P_x = s.a` -
+    /// an index of a nil global, which failed the whole initial state and, before that failure was
+    /// reported, made the model explore nothing and pass.
+    pub(crate) state_var: String,
     pub(crate) inlines: std::collections::HashMap<String, crate::parser::ast::InlineDef>,
     /// Label step numbers for goto/break/label: label_name -> step_number
     pub(crate) label_steps: std::collections::HashMap<String, usize>,

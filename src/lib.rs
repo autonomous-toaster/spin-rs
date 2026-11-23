@@ -157,6 +157,16 @@ pub fn verify(source: &str) -> anyhow::Result<CheckResult> {
             crate::engine::checker::VerifyError::EvalFailed { detail },
         ));
     }
+    // A run that explored nothing is not a verdict, whatever claims the model carries. Both
+    // entry points above can reach it - a state layout that fails, an initial state that cannot be
+    // built - and every one of those used to be reported as "no errors". A refusal is the only
+    // classification that no caller can count as satisfied.
+    if result.states_explored == 0 && checker.model().process_count() > 0 {
+        anyhow::bail!(
+            "no state was explored, so nothing was checked; the model declares {} process(es)",
+            checker.model().process_count()
+        );
+    }
     Ok(result)
 }
 
@@ -194,6 +204,16 @@ pub fn verify_with_config(source: &str, config: &CheckerConfig) -> anyhow::Resul
         return Err(anyhow::Error::new(
             crate::engine::checker::VerifyError::EvalFailed { detail },
         ));
+    }
+    // A run that explored nothing is not a verdict, whatever claims the model carries. Both
+    // entry points above can reach it - a state layout that fails, an initial state that cannot be
+    // built - and every one of those used to be reported as "no errors". A refusal is the only
+    // classification that no caller can count as satisfied.
+    if result.states_explored == 0 && checker.model().process_count() > 0 {
+        anyhow::bail!(
+            "no state was explored, so nothing was checked; the model declares {} process(es)",
+            checker.model().process_count()
+        );
     }
     Ok(result)
 }

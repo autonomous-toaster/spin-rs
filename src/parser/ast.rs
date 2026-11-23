@@ -414,6 +414,24 @@ impl PromelaModel {
                         Self::resolve_mtype_in_expr(arg, mtype_names);
                     }
                 }
+                // A local's initialiser is where an mtype constant is most often written
+                // (`mtype x = a`), and it was not walked: the constant survived into the state layout
+                // as a name, which indexed a nil field.
+                Stmt::VarDecl(d) => {
+                    if let Some(init) = &mut d.init {
+                        Self::resolve_mtype_in_expr(init, mtype_names);
+                    }
+                }
+                Stmt::VarDecls(ds) => {
+                    for d in ds.iter_mut() {
+                        if let Some(init) = &mut d.init {
+                            Self::resolve_mtype_in_expr(init, mtype_names);
+                        }
+                    }
+                }
+                Stmt::Block(body, _) => {
+                    Self::resolve_mtype_in_stmts(body, mtype_names);
+                }
                 Stmt::For {
                     condition, body, ..
                 } => {

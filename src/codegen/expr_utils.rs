@@ -120,13 +120,13 @@ impl LuaGenerator {
                 if name == "_pid" {
                     "_spin_pid".to_string()
                 } else if self.global_vars.contains(name.as_str()) {
-                    // Global variables are stored unprefixed in the state
-                    format!("s.{}", name)
+                    // Global variables are stored unprefixed in the state.
+                    format!("{}.{}", self.state_var, name)
                 } else if let Some(ref pname) = self.current_proctype {
                     // Prefix local variables with current proctype name
                     format!("s.{}_{}", pname, name)
                 } else {
-                    format!("s.{}", name)
+                    format!("{}.{}", self.state_var, name)
                 }
             }
             Expression::ArrayAccess { name, index } => {
@@ -134,11 +134,11 @@ impl LuaGenerator {
                 // Add 1 to the index: flag[i] -> s.flag[i + 1]
                 let idx_str = self.expr_to_lua(index);
                 if self.global_vars.contains(name.as_str()) {
-                    format!("s.{}[{} + 1]", name, idx_str)
+                    format!("{}.{}[{} + 1]", self.state_var, name, idx_str)
                 } else if let Some(ref pname) = self.current_proctype {
-                    format!("s.{}_{}[{} + 1]", pname, name, idx_str)
+                    format!("{}.{}_{}[{} + 1]", self.state_var, pname, name, idx_str)
                 } else {
-                    format!("s.{}[{} + 1]", name, idx_str)
+                    format!("{}.{}[{} + 1]", self.state_var, name, idx_str)
                 }
             }
             Expression::UnaryOp { op, expr: e } => self.unary_to_lua(op, e),
