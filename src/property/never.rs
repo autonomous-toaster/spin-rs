@@ -120,8 +120,18 @@ impl Layout {
     }
 
     /// Guard text of a branch: its condition, or the first statement when that is a guard.
-    fn branch_guard(body: &[Stmt]) -> Result<Option<String>, String> {
-        match body.first() {
+    /// The parser reports a guard written as `:: (x == 7) -> body` as the branch's *condition*, and
+    /// one written as `:: c ? x -> body` as a body whose first statement is the guard. Both spellings
+    /// occur, so both are read - but the condition comes first, because reading only the body dropped
+    /// the guard and made every option always enabled. That refuted a claim pan accepts wherever an
+    /// accept-labelled state was named by a branch no reachable state can satisfy.
+    fn branch_guard(g: &crate::parser::ast::Guard) -> Result<Option<String>, String> {
+        if let Some(cond) = &g.condition {
+            return Ok(Some(render(cond).ok_or_else(|| {
+                "an expression this engine cannot render".to_string()
+            })?));
+        }
+        match g.body.first() {
             Some(Stmt::Expr(e, _)) => {
                 Ok(Some(render(e).ok_or_else(|| {
                     "an expression this engine cannot render".to_string()
@@ -186,7 +196,7 @@ impl Layout {
                     let start = cursor;
                     let (body_cont, body_brk) = if is_loop { (at, next) } else { (next, brk) };
                     cursor = self.seq(&g.body, start, body_cont, body_brk)?;
-                    options.push((Self::branch_guard(&g.body)?, start));
+                    options.push((Self::branch_guard(g)?, start));
                 }
                 self.nodes[at] = CNode::Select { options };
             }

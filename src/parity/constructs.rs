@@ -125,6 +125,11 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(0),
         source: "/* The accept state is unreachable, so there is no accepting cycle: pan -a reports 0. */\nbyte x = 0;\nactive proctype P() { x = 1 }\nnever { do :: (0) -> skip od; accept_x: skip }\n",
     },
+    Construct {
+        name: "never_accept_unreachable_branch",
+        pan: Some(0),
+        source: "/* An accept-labelled state named only by a branch no reachable state can satisfy. pan -a 0:\n   the edge exists, so a translation that reads a branch body instead of its condition makes the\n   accept state reachable and refutes a claim pan accepts. */\nbyte x = 0;\nactive proctype P() { x = 1 }\nnever {\nT0:\n    do\n    :: (x == 7) -> goto accept_x\n    :: (1)     -> goto T0\n    od;\naccept_x:\n    skip\n}\n",
+    },
 ];
 
 /// What this engine answered for one construct.
