@@ -173,6 +173,27 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(1),
         source: "chan c = [0] of { bit };\nbyte got = 0;\nactive proctype Receiver() { c ?? 1; got = 1 }\nltl p0 { <> ( got == 1 ) }\n",
     },
+    // An inline whose parameters are a channel and a value. The argument has to be substituted as
+    // an *expression*: a bare name target stayed the parameter name, and the runtime rejected it
+    // with "chan_send: expected integer values".
+    Construct {
+        name: "inline_send_argument",
+        pan: Some(0),
+        source: "inline snd(c, v) { c ! v }\nchan ch = [1] of { byte };\nbyte got = 0;\nactive proctype P() { snd(ch, 7); ch ? got }\nltl p0 { <> ( got == 7 ) }\n",
+    },
+    // A parameter used as an assignment target, which is the case a textual macro exists for.
+    Construct {
+        name: "inline_lvalue",
+        pan: Some(0),
+        source: "inline set(x) { x = 1 }\nbyte y = 0;\nactive proctype P() { set(y) }\nltl p0 { <> ( y == 1 ) }\n",
+    },
+    // A receive inside an inline used as a guard, so the call sits where a guard expression is
+    // expected rather than where a statement is.
+    Construct {
+        name: "inline_guard",
+        pan: Some(0),
+        source: "inline take(c) { c ? 1 }\nchan ch = [1] of { byte };\nbyte done = 0;\nactive proctype P() { ch ! 1; if :: take(ch) -> done = 1 :: else -> skip fi }\nltl p0 { <> ( done == 1 ) }\n",
+    },
     // `timeout` is true only when no other process can move. The guard emitted for it returns
     // false unconditionally, so the branch was dead and this model - which pan accepts, because
     // the only statement left is the timeout branch - was refuted here. Refused by name now:

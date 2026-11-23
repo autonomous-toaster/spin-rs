@@ -254,6 +254,16 @@ impl LuaModel {
                 p.name
             );
         }
+        // An inline is a macro: expand every call into the body it names before anything is laid out,
+        // so the step machine never sees a call. This has to happen here rather than per statement,
+        // because a call inside a guard, an atomic region or another inline would otherwise reach an
+        // arm the layout does not have - which is how it used to become a call to a nil Lua global.
+        let expanded = codegen::inline::expand(model).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let model = &expanded;
+        // The shape check runs on the *expanded* model. It ran on the original until an inline body
+        // carrying `timeout` slipped past it and the model was decided by a guard that is always
+        // false; a check that inspects a different model than the emitter is the same defect it is
+        // meant to catch.
         if let Some(why) = codegen::model_shape_refusal(model) {
             anyhow::bail!("{}", why);
         }

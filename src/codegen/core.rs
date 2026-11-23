@@ -394,7 +394,10 @@ impl LuaGenerator {
                 }
                 TopLevel::Inline(i) => {
                     self.emit(&format!(
-                        "-- inline: {}({}) (expansion deferred)",
+                        // Expanded into every call before layout; the definition is listed so a reader
+                        // of the generated code can find it. It used to say "expansion deferred", which
+                        // stopped being true when the expansion moved to the model.
+                        "-- inline: {}({}) (expanded at every call, before layout)",
                         i.name,
                         i.parameters.join(", ")
                     ));

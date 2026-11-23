@@ -129,6 +129,9 @@ categories below, because this engine answers three ways and only one of them is
 
 ### Supported, checked against pan
 
+- **`inline`**: a call is expanded into the body it names, with the arguments substituted wherever the
+  parameters appear - as an expression, as a channel, or as an assignment target. Nested calls are
+  expanded too; a call cycle is refused by name.
 - **Statements**: assignment (with the declared type's truncation), `if :: else fi`,
   `do :: else od`, `for (i : a .. b)`, `break`, `goto` and labels, `atomic`/`d_step` fused into one
   transition, `assert`, `printf`, `skip`.
@@ -192,7 +195,6 @@ These are hard errors. No verdict is produced, so nothing about the model is cla
 |---|---|
 | `run P(...)` | a spawned process needs dynamic instances; the transition table is emitted per static instance, and there is no measured pan answer to encode against |
 | `timeout` | it is true only when no other process can move, and a guard emitted for one process cannot ask that; the branch used to be emitted as permanently false, which decided models against pan |
-| an inline call | the step machine emits a call to a name nothing defines, which fails at run time; expansion is not written yet |
 | a proctype that declares parameters | the arguments are bound by `run`, or set to zero for an `active` process, and neither is in the state; a channel parameter used to crash at run time rather than refuse |
 | a send or receive whose value count differs from the declared field count of its channel | pan rejects it at run time, so there is no verdict to match; binding the first field and dropping the rest decided 0 where pan reports 1 |
 | a poll or eval-receive on a rendezvous channel | the stage/release encoding pairs a send with a plain receive; a polling receive inspects rather than pairs |

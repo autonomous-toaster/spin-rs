@@ -131,6 +131,7 @@ mod flatten;
 mod flatten_rdv;
 mod flatten_refuse;
 mod flatten_unless;
+pub(crate) mod inline;
 pub mod optimize;
 mod stmts;
 mod stmts_atomic;
@@ -268,31 +269,16 @@ fn stmt_exprs<'a>(
 /// it; and an inline call emitted by the step machine became a call to a Lua global that nothing
 /// defines.
 pub(crate) fn model_shape_refusal(model: &crate::parser::ast::PromelaModel) -> Option<String> {
-    use crate::parser::ast::{Expression as E, Stmt, TopLevel};
-    let inlines: Vec<String> = model
-        .declarations
-        .iter()
-        .filter_map(|d| match d {
-            TopLevel::Inline(i) => Some(i.name.clone()),
-            _ => None,
-        })
-        .collect();
-    for p in model.declarations.iter().filter_map(|d| match d {
-        TopLevel::Proctype(p) => Some(p),
+    use crate::parser::ast::{Expression as E, TopLevel};
+    for (name, body) in model.declarations.iter().filter_map(|d| match d {
+        TopLevel::Proctype(p) => Some((p.name.clone(), &p.body)),
+        TopLevel::Init(i) => Some(("init".to_string(), &i.body)),
         _ => None,
     }) {
+        let p = &name;
         let mut found: Option<String> = None;
-        walk_stmts(&p.body, &mut |s| {
+        walk_stmts(body, &mut |s| {
             if found.is_some() {
-                return;
-            }
-            if let Stmt::Expr(E::FuncCall { name, .. }, _) = s
-                && inlines.iter().any(|i| i == name)
-            {
-                found = Some(format!(
-                    "the inline '{}' is called in proctype '{}' and is not expanded by the step machine yet",
-                    name, p.name
-                ));
                 return;
             }
             let mut es = Vec::new();
@@ -306,8 +292,8 @@ pub(crate) fn model_shape_refusal(model: &crate::parser::ast::PromelaModel) -> O
                 });
                 if timed_out {
                     found = Some(format!(
-                        "timeout is not implemented: it is true only when no other process can move, and a guard here cannot ask that; proctype '{}'",
-                        p.name
+                        "timeout is not implemented: it is true only when no other process can move, and a guard here cannot ask that; in '{}'",
+                        p
                     ));
                     return;
                 }

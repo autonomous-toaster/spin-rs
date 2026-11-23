@@ -1,6 +1,6 @@
 [package]
 name = "spin-rs"
-version = "0.5.18"
+version = "0.5.19"
 edition = "2024"
 description = "A Rust-native Promela model checker with Lua runtime"
 license = "WTFPL"

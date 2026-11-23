@@ -35,7 +35,7 @@ pub enum TopLevel {
     CCode(String, usize),
     /// Embedded C state (variable declarations via Lua)
     CState(Vec<VarDecl>, usize),
-    /// Inline macro definition (expansion deferred)
+    /// Inline macro definition: expanded into every call before layout (see `codegen::inline`)
     Inline(InlineDef),
     /// Channel array declaration: `chan name[N];`
     ChannelArray {
