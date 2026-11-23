@@ -141,6 +141,184 @@ mod tests;
 #[cfg(test)]
 mod expr_tests;
 
+/// Walk every statement of a body, children included, calling `f` on each.
+///
+/// Used to answer model-level questions - does any statement use `timeout`, does any call an inline -
+/// before anything is generated. A per-statement hook would answer them at emission time and could be
+/// bypassed by a statement that reaches an arm the hook does not know about; this cannot.
+pub(crate) fn walk_stmts<'a>(
+    body: &'a [crate::parser::ast::Stmt],
+    f: &mut dyn FnMut(&'a crate::parser::ast::Stmt),
+) {
+    use crate::parser::ast::Stmt;
+    for s in body {
+        f(s);
+        match s {
+            Stmt::If(gs) | Stmt::Do(gs) => {
+                for g in gs {
+                    walk_stmts(&g.body, f);
+                }
+            }
+            Stmt::Atomic(b, _) | Stmt::DStep(b, _) | Stmt::Block(b, _) => walk_stmts(b, f),
+            Stmt::Unless { body, handler, .. } => {
+                walk_stmts(body, f);
+                walk_stmts(handler, f);
+            }
+            Stmt::For {
+                init, update, body, ..
+            } => {
+                walk_stmts(std::slice::from_ref(init.as_ref()), f);
+                walk_stmts(std::slice::from_ref(update.as_ref()), f);
+                walk_stmts(body, f);
+            }
+            _ => {}
+        }
+    }
+}
+/// Walk an expression, children included.
+pub(crate) fn walk_expr<'a>(
+    e: &'a crate::parser::ast::Expression,
+    f: &mut dyn FnMut(&'a crate::parser::ast::Expression),
+) {
+    use crate::parser::ast::Expression as E;
+    f(e);
+    match e {
+        E::ArrayAccess { index, .. } => walk_expr(index, f),
+        E::RecordAccess { record, .. } => walk_expr(record, f),
+        E::UnaryOp { expr, .. } => walk_expr(expr, f),
+        E::BinaryOp { left, right, .. } => {
+            walk_expr(left, f);
+            walk_expr(right, f);
+        }
+        E::FuncCall { args, .. } => {
+            for a in args {
+                walk_expr(a, f);
+            }
+        }
+        E::ChannelSend { target, .. } => walk_expr(target, f),
+        E::ChannelPoll { condition, .. } => walk_expr(condition, f),
+        E::PcValue(x) | E::Eval(x) | E::GetPriority(x) => walk_expr(x, f),
+        E::SetPriority { pid, value } => {
+            walk_expr(pid, f);
+            walk_expr(value, f);
+        }
+        E::RemoteRef { pid, .. } => walk_expr(pid, f),
+        _ => {}
+    }
+}
+
+/// Every expression a statement mentions, in the order they appear.
+fn stmt_exprs<'a>(
+    s: &'a crate::parser::ast::Stmt,
+    out: &mut Vec<&'a crate::parser::ast::Expression>,
+) {
+    use crate::parser::ast::{RecvTarget, SendTarget, Stmt};
+    let mut push = |e: &'a crate::parser::ast::Expression| out.push(e);
+    match s {
+        Stmt::Assignment { value, index, .. } => {
+            push(value);
+            if let Some(i) = index {
+                push(i);
+            }
+        }
+        Stmt::Assert(e, _) | Stmt::Expr(e, _) => push(e),
+        Stmt::Printf(_, args, _) => args.iter().for_each(push),
+        Stmt::Send {
+            channel,
+            target,
+            args,
+            ..
+        } => {
+            push(channel);
+            match target {
+                SendTarget::Value(v) | SendTarget::Sorted(v) => push(v),
+                SendTarget::Ident(_) => {}
+            }
+            args.iter().for_each(push);
+        }
+        Stmt::Recv {
+            channel, target, ..
+        } => {
+            push(channel);
+            match target {
+                RecvTarget::Eval(e) | RecvTarget::Poll(e) => push(e),
+                RecvTarget::RandomMatch(es) => es.iter().for_each(push),
+                RecvTarget::VarList(_) | RecvTarget::Random(_) => {}
+            }
+        }
+        Stmt::Run(_, args, _) => args.iter().for_each(push),
+        Stmt::For { condition, .. } => push(condition),
+        // A guard is where `timeout` is normally written. Walking bodies alone missed it, which is
+        // how the first version of this check let the shape through.
+        Stmt::If(gs) | Stmt::Do(gs) => {
+            for g in gs {
+                if let Some(c) = &g.condition {
+                    push(c);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Does any statement of this body reach a `timeout`, or call a named inline?
+///
+/// Both are answered before anything is generated: `_spin_timeout` returns false unconditionally
+/// today, so a `timeout` branch is dead and a model that needed it was refuted where pan accepts
+/// it; and an inline call emitted by the step machine became a call to a Lua global that nothing
+/// defines.
+pub(crate) fn model_shape_refusal(model: &crate::parser::ast::PromelaModel) -> Option<String> {
+    use crate::parser::ast::{Expression as E, Stmt, TopLevel};
+    let inlines: Vec<String> = model
+        .declarations
+        .iter()
+        .filter_map(|d| match d {
+            TopLevel::Inline(i) => Some(i.name.clone()),
+            _ => None,
+        })
+        .collect();
+    for p in model.declarations.iter().filter_map(|d| match d {
+        TopLevel::Proctype(p) => Some(p),
+        _ => None,
+    }) {
+        let mut found: Option<String> = None;
+        walk_stmts(&p.body, &mut |s| {
+            if found.is_some() {
+                return;
+            }
+            if let Stmt::Expr(E::FuncCall { name, .. }, _) = s
+                && inlines.iter().any(|i| i == name)
+            {
+                found = Some(format!(
+                    "the inline '{}' is called in proctype '{}' and is not expanded by the step machine yet",
+                    name, p.name
+                ));
+                return;
+            }
+            let mut es = Vec::new();
+            stmt_exprs(s, &mut es);
+            for e in es {
+                let mut timed_out = false;
+                walk_expr(e, &mut |x| {
+                    if matches!(x, E::Timeout) {
+                        timed_out = true;
+                    }
+                });
+                if timed_out {
+                    found = Some(format!(
+                        "timeout is not implemented: it is true only when no other process can move, and a guard here cannot ask that; proctype '{}'",
+                        p.name
+                    ));
+                    return;
+                }
+            }
+        });
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
 /// Does this body contain an `unless`? Only then does the second counter have a reader.
 pub(crate) fn stmts_have_unless(body: &[crate::parser::ast::Stmt]) -> bool {
     use crate::parser::ast::Stmt;

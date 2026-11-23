@@ -254,6 +254,9 @@ impl LuaModel {
                 p.name
             );
         }
+        if let Some(why) = codegen::model_shape_refusal(model) {
+            anyhow::bail!("{}", why);
+        }
         let generated = codegen::generate(model);
         let mut runtime = LuaRuntime::new()?;
         let mut ltl_formulas = Vec::new();

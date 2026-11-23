@@ -173,6 +173,22 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(1),
         source: "chan c = [0] of { bit };\nbyte got = 0;\nactive proctype Receiver() { c ?? 1; got = 1 }\nltl p0 { <> ( got == 1 ) }\n",
     },
+    // `timeout` is true only when no other process can move. The guard emitted for it returns
+    // false unconditionally, so the branch was dead and this model - which pan accepts, because
+    // the only statement left is the timeout branch - was refuted here. Refused by name now:
+    // a dead branch that decides the model is a wrong verdict, which is worse than a refusal.
+    Construct {
+        name: "timeout_branch",
+        pan: Some(0),
+        source: "byte x = 0;\nactive proctype P() { do :: timeout -> break od; x = 1 }\nltl p0 { <> ( x == 1 ) }\n",
+    },
+    // An inline call: the step machine emitted a call to a Lua global nothing defines, so this
+    // failed at run time with `attempt to call a nil value`. Neither a verdict nor a refusal.
+    Construct {
+        name: "inline_call",
+        pan: Some(0),
+        source: "inline step(x) { y = x }\nbyte y = 0;\nactive proctype P() { step(1) }\nltl p0 { <> ( y == 1 ) }\n",
+    },
     // A two-field message received into two variables. The message was always stored as a table
     // in the state; the receive handed back one value and the multi-variable shape was refused,
     // so a round trip through a structured message had no verdict at all.
