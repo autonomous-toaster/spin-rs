@@ -113,6 +113,16 @@ What does tell:
 
 The count keeps the job it can do: any model whose count *moves* during 3.8a is a regression, and the
 166-model corpus is the instrument for that direction.
+
+Three checks, in this order, when the table lands:
+
+1. the read-back assert at the initial state - fails loudly, and it is the only one that can see a table that
+   exists but is empty;
+2. the middle wrap row (`byte i = 250; i = i + 10; assert(i == 260)`, pan 1) - fails loudly, and it is what
+   notices a rewrite that drops a truncation;
+3. `ex_3c.pml`'s state count - fails *quietly*, which is the only one of the three that history says we would
+   miss: it is reduced-model territory, and a table that changes what is independent is exactly the change
+   that made it wrong once before.
 - Reduction sharpens: `_pc_` writes are already classified internal, so more of every
   transition becomes invisible to POR.
 
