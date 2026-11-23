@@ -348,9 +348,16 @@ impl<'a, M: Model> PropertyChecker<'a, M> {
                         if prop == "true" || prop == "false" {
                             continue;
                         }
-                        if crate::engine::checker::dfs::extract_var_from_state(&blob, prop)
-                            .is_none()
-                        {
+                        // Resolvable means what the product search means by it: a field of
+                        // the state, or an expression the model itself can decide. Accepting
+                        // only fields made every liveness claim that compares a value undecided -
+                        // `<> ( x == 1 )` was declined while `[] ( x == 1 )` was decided, on the
+                        // same model, by the same atom.
+                        let resolvable =
+                            crate::engine::checker::dfs::extract_var_from_state(&blob, prop)
+                                .is_some()
+                                || self.model.eval_atom(init, prop).is_some();
+                        if !resolvable {
                             anyhow::bail!(
                                 "unknown atomic proposition '{}' in property '{}': it is not a \
                                  variable in the initial state",

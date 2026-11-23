@@ -288,6 +288,11 @@ impl<M: Model> Checker<M> {
             // errors where pan reports one, and the second said nothing had been verified
             // when the search had in fact decided the model.
             && !violations.iter().any(|v| v.property_name == "deadlock")
+            // A claim decides a model that explores nothing, exactly as it decides one that
+            // deadlocks: pan reports 0 for a stuck model under `[](x == 0)` and 1 under
+            // `[](x == 1)`, never a model-level error. Reporting one for a model whose claims
+            // all hold refutes a plan whose constraints are satisfied.
+            && !self.model.has_claims()
         {
             violations.push(Violation {
                 property_name: "model".to_string(),

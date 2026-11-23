@@ -65,6 +65,16 @@ pub trait Model {
         &[]
     }
 
+    /// Does the model carry any claim at all - an ltl formula or a `never` automaton?
+    ///
+    /// This is not a detail of the checker: pan's own summary prints
+    /// "invalid end states - (disabled by never claim)", and a model it does not count as an
+    /// invalid end state must not count here either. Whether a claim is present decides it,
+    /// not which claim.
+    fn has_claims(&self) -> bool {
+        !self.ltl_formulas().is_empty() || !self.never_claims().is_empty()
+    }
+
     /// Serialize a state to a string for invariant checking (None if not supported).
     fn state_to_string(&self, _state: &Self::State) -> Option<String> {
         None

@@ -134,7 +134,11 @@ categories below, because this engine answers three ways and only one of them is
   transition, `assert`, `printf`, `skip`.
 - **Control flow semantics**: a `do` whose guards run out *blocks* (pan's invalid end state), a
   `for` leaves its range, and every statement of a body is its own step - a `for` body is not
-  atomic, and neither is anything else.
+  atomic, and neither is anything else. Invalid end states count only when the model carries no
+  claim, which is what pan's own summary says: `invalid end states - (disabled by never claim)`.
+  A stuck model under a claim is therefore answered by the claim - `[] ( x == 0 )` holds and
+  `[] ( x == 1 )` is refuted on the same model - and a model that explores nothing is not an
+  error of its own once a claim is present.
 - **Types**: `bit`, `bool`, `byte`, `short`, `int`, `unsigned(n)`, `mtype`; values are truncated to
   the declared type on assignment (`byte x = 255; x = x + 1` leaves 0); `/` and `%` follow C, so
   `-7 % 2` is -1; a guard is true when it is non-zero, so `(n)` with `n == 0` is false.
@@ -172,7 +176,8 @@ categories below, because this engine answers three ways and only one of them is
 - **Proctypes**: several instances (`active [N]`), an `init` block, `provided (expr)`.
 - **Preprocessor**: object-like `#define`, including a macro that names another macro.
 - **Claims**: `[]p` over propositions, `<>p`, `->`, `<->`, and atoms that are expressions -
-  comparisons, `&&`, `||`, `!` - evaluated against the state. One claim per file is compared with
+  comparisons, `&&`, `||`, `!` - evaluated against each state, in a safety claim and in a
+  liveness claim alike. One claim per file is compared with
   pan in the corpus; several claims are checked in one run here and summed per claim there.
 
 ### Refused: the model runs nowhere

@@ -402,6 +402,15 @@ impl Model for LuaModel {
         hasher.finish()
     }
 
+    fn has_claims(&self) -> bool {
+        !self.ltl_formulas.is_empty()
+            || self
+                .atom_model
+                .declarations
+                .iter()
+                .any(|d| matches!(d, crate::parser::ast::TopLevel::NeverClaim(_)))
+    }
+
     fn check_violation(&self, state: &StateBlob) -> Option<String> {
         // A failed assertion is recorded in the state by the generated effect. Checked before
         // the claim gate below, because a claim disables deadlock detection (pan does the same)
@@ -409,11 +418,15 @@ impl Model for LuaModel {
         if let Some(what) = parse_assert_failure(&state.0) {
             return Some(format!("assertion violated: {}", what));
         }
-        // With an LTL property present, real spin disables invalid-end-state checking
-        // ("invalid end states - (disabled by never claim)") because the claim decides
-        // termination. Reporting a deadlock here would disagree with spin on any model
+        // With any claim present, real spin disables invalid-end-state checking - its own
+        // summary prints "invalid end states - (disabled by never claim)" - because the claim
+        // decides termination. Reporting a deadlock here would disagree with spin on any model
         // whose processes legitimately block awaiting a guard that never fires.
-        if !self.ltl_formulas.is_empty() {
+        //
+        // A `never` claim counts as much as an `ltl` one. Checking only the ltl list left the
+        // automaton case reporting a deadlock pan does not: measured on a process that blocks
+        // at once under `never { (x == 5) }`, pan reports 0.
+        if self.has_claims() {
             return None;
         }
         // Deadlock detection: no transitions but active processes remain

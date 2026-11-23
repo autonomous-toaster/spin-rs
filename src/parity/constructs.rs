@@ -180,6 +180,42 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(1),
         source: "byte x = 0;\nbyte y = 0;\nactive proctype P() { { x = 1; y = 2 } unless { (x == 1); y = 9 } }\nltl p0 { [] ( y <= 2 ) }\n",
     },
+    // A model that blocks at once, under a claim. pan's summary says "invalid end states -
+    // (disabled by never claim)", so its answer is the claim's, not the model's: 0 here and 1 on
+    // the [] ( x == 1 ) variant below. Reporting a model-level error refutes a plan whose
+    // constraints all hold, which is what a consumer's guard saw.
+    Construct {
+        name: "deadlock_under_claim",
+        pan: Some(0),
+        source: "chan c = [0] of { bit };\nbyte x = 0;\n\nactive proctype P() {\n    c ? x\n}\n\nltl p0 { [] ( x == 0 ) }\n",
+    },
+    // x is never assigned at all, so the claim that it is 1 is refuted on the first state, and
+    // the model also blocks - the count is 1 for the claim, and the deadlock must not make it 2.
+    Construct {
+        name: "deadlock_claim_refuted",
+        pan: Some(1),
+        source: "chan c = [0] of { bit };\nbyte x = 0;\n\nactive proctype P() {\n    c ? x\n}\n\nltl p0 { [] ( x == 1 ) }\n",
+    },
+    // No claim: now the invalid end state *is* the error, and pan reports one.
+    Construct {
+        name: "deadlock_no_claim",
+        pan: Some(1),
+        source: "chan c = [0] of { bit };\nbyte x = 0;\n\nactive proctype P() {\n    c ? x\n}\n",
+    },
+    // A comparison atom in a *liveness* claim. The safety path decided this atom from the state;
+    // the liveness path asked the initial state for a field named "x == 1" and declined.
+    Construct {
+        name: "liveness_comparison_atom",
+        pan: Some(0),
+        source: "byte x = 0;\n\nactive proctype P() {\n    x = 1\n}\n\nltl p0 { <> ( x == 1 ) }\n",
+    },
+    // The same shape where the claim is false forever: pan finds the accepting cycle in the one
+    // reachable state, so the answer is 1 - and it is the claim's 1, not a deadlock's.
+    Construct {
+        name: "stuck_liveness_refuted",
+        pan: Some(1),
+        source: "chan c = [0] of { bit };\nbyte x = 0;\n\nactive proctype P() {\n    c ? x\n}\n\nltl p0 { <> ( x == 1 ) }\n",
+    },
 ];
 
 /// What this engine answered for one construct.
@@ -236,6 +272,12 @@ mod tests {
             "the table must decide at least one construct, or it is not measuring verdicts"
         );
         assert_eq!(decided + undecided, CONSTRUCTS.len());
+        eprintln!(
+            "CONSTRUCT-COUNT rows={} decided={} undecided={}",
+            CONSTRUCTS.len(),
+            decided,
+            undecided
+        );
     }
 
     #[test]

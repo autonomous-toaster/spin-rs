@@ -373,6 +373,37 @@ fn fixed_models() -> Vec<Model> {
             "byte n = 0;\nactive proctype P() { do :: (n < 3) -> n = n + 1 od; assert(n == 3) }",
             "",
         ),
+        // A model that blocks at once, under a claim. pan disables invalid end states whenever
+        // a never claim is present (its summary prints exactly that), so the claim decides: 0
+        // here. Reporting the deadlock as a violation of the model refuted a plan whose
+        // constraints all held, and the count looked right because it was 1 either way.
+        (
+            "stuck_under_claim",
+            "chan c = [0] of { bit };\nbyte x = 0;\nactive proctype P() { c ? x }",
+            "[] ( x == 0 )",
+        ),
+        // The same stuck model with a claim its first state refutes: 1 for the claim. A deadlock
+        // reported beside it would make the count 2.
+        (
+            "stuck_claim_refuted",
+            "chan c = [0] of { bit };\nbyte x = 0;\nactive proctype P() { c ? x }",
+            "[] ( x == 1 )",
+        ),
+        // A comparison atom in a liveness claim. The safety path decides these from the state;
+        // the liveness path looked for a *field* named "x == 1" in the initial state and
+        // declined, so every liveness claim that compared a value cost a verdict.
+        (
+            "liveness_comparison",
+            "byte x = 0;\nactive proctype P() { x = 1 }",
+            "<> ( x == 1 )",
+        ),
+        // The same shape where the claim never comes true: pan finds the accepting cycle in the
+        // one reachable state, so the answer is 1 and it is the claim's.
+        (
+            "stuck_liveness",
+            "chan c = [0] of { bit };\nbyte x = 0;\nactive proctype P() { c ? x }",
+            "<> ( x == 1 )",
+        ),
     ];
     SHAPES
         .iter()
