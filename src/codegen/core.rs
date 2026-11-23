@@ -355,17 +355,11 @@ impl LuaGenerator {
                     self.emit("end");
                     self.emit("");
                 }
-                TopLevel::NeverClaim(n) => {
-                    self.emit("-- never claim");
-                    self.emit("function _spin_transitions_never(state)");
-                    self.indent += 1;
-                    self.emit("    local transitions = {}");
-                    self.emit_stmts(&n.body, 0);
-                    self.emit("    return transitions");
-                    self.indent -= 1;
-                    self.emit("end");
-                    self.emit("");
-                }
+                // A `never` claim is not a process: it is a monitor over states, translated into an
+                // automaton and run by the product search (see `property::never`). It used to be
+                // emitted here as a transition table that nothing dispatched, which is why a model
+                // carrying a claim came back verified.
+                TopLevel::NeverClaim(_) => {}
                 TopLevel::Ltl(l) => {
                     self.emit(&format!(
                         "-- LTL: {} = {}",

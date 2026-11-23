@@ -501,22 +501,16 @@ impl Model for LuaModel {
         &self.ltl_formulas
     }
 
-    /// `never` claims. The claim's transition function is generated, but the claim process has no
-    /// place in the state and is dispatched by nothing, so a model carrying one used to come back
-    /// verified: `never { skip }` is a violation in pan and was a clean run here. Until the claim
-    /// process is modelled, a model that has one gets no verdict rather than a false one.
-    fn unchecked_claims(&self) -> Vec<(String, String)> {
+    fn never_claims(&self) -> Vec<(String, crate::parser::ast::NeverClaim)> {
         self.atom_model
             .declarations
             .iter()
-            .filter(|d| matches!(d, crate::parser::ast::TopLevel::NeverClaim(_)))
-            .enumerate()
-            .map(|(i, _)| {
-                (
-                    format!("never_{}", i),
-                    "a never claim is not checked: its process is generated but not part of the state, so this model gets no verdict rather than a false one".to_string(),
-                )
+            .filter_map(|d| match d {
+                crate::parser::ast::TopLevel::NeverClaim(c) => Some(c.clone()),
+                _ => None,
             })
+            .enumerate()
+            .map(|(i, c)| (format!("never_{}", i), c))
             .collect()
     }
 

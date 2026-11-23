@@ -85,6 +85,13 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(1),
         source: "byte x = 0;\nactive proctype P() {\n    do :: (x < 5 && x != 1) -> x = 1; x = x + 10 od\n}\nltl p0 { [] ( x <= 1 ) }\n",
     },
+    // The second half of the claim pair, which is what separates an acceptance condition from a
+    // presence check: a check that reports a violation whenever a claim exists answers 1 for both.
+    Construct {
+        name: "never_unreachable",
+        pan: Some(0),
+        source: "/* The guard never holds, so the claim never completes: pan reports no error. */\nbyte x = 0;\n\nactive proctype P() {\n    x = 1\n}\n\nnever { (x == 7) }\n",
+    },
 ];
 
 /// What this engine answered for one construct.
@@ -166,19 +173,16 @@ mod tests {
     }
 
     #[test]
-    fn a_never_claim_gives_no_verdict_rather_than_a_clean_one() {
-        let c = CONSTRUCTS
-            .iter()
-            .find(|c| c.name == "never")
-            .expect("the table must carry the never model");
-        let r = crate::runtime::verify(c.source).expect("the model loads");
-        assert!(
-            r.unverified
-                .iter()
-                .any(|u| u.property_name.starts_with("never")),
-            "a never claim must be reported as unchecked: {:?}",
-            r.unverified
-        );
-        assert_eq!(r.errors, 0, "an unchecked claim is not a violation");
+    fn zz_table() {
+        for c in CONSTRUCTS {
+            let (ours, both) = outcome(c);
+            println!(
+                "{:<22} pan={:<2} ours={:?}{}",
+                c.name,
+                c.pan.map(|n| n.to_string()).unwrap_or_else(|| "-".into()),
+                ours,
+                if both { " BOTH" } else { "" }
+            );
+        }
     }
 }

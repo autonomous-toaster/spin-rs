@@ -11,6 +11,7 @@ use crate::engine::checker::{Model, Violation};
 
 pub mod buchi;
 pub mod ltl2ba;
+pub mod never;
 
 /// LTL formula representation.
 #[derive(Debug, Clone)]
@@ -383,6 +384,35 @@ impl<'a, M: Model> PropertyChecker<'a, M> {
     pub fn check_safety(&self) -> anyhow::Result<Vec<Violation>> {
         Ok(vec![])
     }
+}
+
+/// Run a `never` claim's automaton against a model, returning the first violation.
+///
+/// The claim is the bad behaviour itself, so unlike an LTL property there is no negation here: an
+/// accepting cycle of the claim's automaton *is* the violation.
+pub fn check_claim<M>(
+    model: &M,
+    automaton: &crate::property::ltl2ba::BuchiAutomaton,
+    name: &str,
+) -> anyhow::Result<Option<Violation>>
+where
+    M: crate::engine::checker::Model,
+{
+    use crate::property::ltl2ba::{NestedDFS, ProductState};
+
+    let init_states = model.init_states();
+    if init_states.is_empty() {
+        return Ok(None);
+    }
+    for init_state in init_states {
+        let init_hash = model.hash(&init_state);
+        let init_product = ProductState::new(init_state.clone(), automaton.initial, init_hash);
+        let mut dfs = NestedDFS::new().with_name(name);
+        if let Some(violation) = dfs.check::<M>(model, automaton, init_product) {
+            return Ok(Some(violation));
+        }
+    }
+    Ok(None)
 }
 
 /// Convenience: verify an LTL property on Promela source.

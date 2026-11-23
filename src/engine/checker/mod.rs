@@ -47,10 +47,15 @@ pub trait Model {
         None
     }
 
-    /// Claims the model declares that this engine cannot check at all.
+    /// `never` claims the model declares, by name.
     ///
-    /// A construct that is emitted and never runs is worse than one that is refused: the model
-    /// comes back verified. Reporting it here means the run says "no verdict" instead.
+    /// They are checked by the product search, not by the transition table: a claim is a monitor
+    /// over states, so it is an automaton rather than a process with a program counter.
+    fn never_claims(&self) -> Vec<(String, crate::parser::ast::NeverClaim)> {
+        Vec::new()
+    }
+
+    /// Claims the model declares that this engine cannot check at all.
     fn unchecked_claims(&self) -> Vec<(String, String)> {
         Vec::new()
     }

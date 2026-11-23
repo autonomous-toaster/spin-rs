@@ -98,13 +98,16 @@ fn test_emit_unless_variant() {
 
 #[test]
 fn test_generate_never_claim() {
-    // Test never claim codegen generates transitions
-    // Use a simple never claim body without labels
+    // A claim is a monitor, not a process: it is translated into an automaton and run by the
+    // product search, so no transition table is emitted for it. Emitting one that nothing
+    // dispatched is how a model carrying a claim came back verified.
     let source = "never { do :: (x == 0) -> skip od }";
     let model = crate::parser::parse(source).unwrap();
     let lua = crate::codegen::generate(&model);
-    assert!(lua.source.contains("_spin_transitions_never"));
-    assert!(lua.source.contains("transitions"));
+    assert!(
+        !lua.source.contains("_spin_transitions_never"),
+        "a never claim must not be emitted as a transition table"
+    );
 }
 
 #[test]

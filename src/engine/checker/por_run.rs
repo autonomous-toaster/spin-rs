@@ -165,6 +165,7 @@ impl<M: Model> Checker<M> {
         // reduced, because an accepting cycle can consist of invisible transitions. It runs
         // whether or not an early stop produced a refutation: skipping it cost a consumer the
         // verdict on a liveness claim pan refutes, and saved 2% of the run.
+        self.check_never_claims(&mut result);
         self.check_ltl_properties(&mut result);
         result
     }

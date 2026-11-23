@@ -373,6 +373,7 @@ impl<M: Model> Checker<M> {
         // flag on saved 9 seconds out of 415 while losing that verdict. The flag stops each
         // traversal, which is where the saving is; it does not get to cost a claim its verdict.
         if scope.is_none() {
+            self.check_never_claims(&mut result);
             self.check_ltl_properties(&mut result);
         }
 
@@ -407,6 +408,42 @@ impl<M: Model> Checker<M> {
 
     /// Check LTL properties using PropertyChecker (nested DFS).
     /// Skips []expr formulas that were already checked as safety properties during DFS.
+    /// Check the model's `never` claims with the product search.
+    ///
+    /// A claim is a monitor over states, so it is an automaton rather than a process: the claim's
+    /// body becomes the automaton whose completion is the violation, and the existing nested DFS
+    /// runs it against the model exactly as it runs an LTL formula.
+    pub(super) fn check_never_claims(&self, result: &mut CheckResult) {
+        for (name, claim) in self.model.never_claims() {
+            match crate::property::never::claim_to_buchi(&claim) {
+                Ok(automaton) => {
+                    match crate::property::check_claim(&self.model, &automaton, &name) {
+                        Ok(Some(v)) => {
+                            result.violations.push(v);
+                            result.errors += 1;
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            result.unverified.push(Unverified::new(
+                                name,
+                                UnverifiedKind::UnsupportedProperty,
+                                format!("the claim could not be checked: {e}"),
+                            ));
+                        }
+                    }
+                }
+                Err(why) => {
+                    // A claim shape this engine cannot encode gets no verdict, never a clean one.
+                    result.unverified.push(Unverified::new(
+                        name,
+                        UnverifiedKind::UnsupportedProperty,
+                        format!("this never claim is not supported: {why}"),
+                    ));
+                }
+            }
+        }
+    }
+
     pub(super) fn check_ltl_properties(&self, result: &mut CheckResult) {
         let formulas = self.model.ltl_formulas();
         if formulas.is_empty() {

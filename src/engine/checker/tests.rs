@@ -471,23 +471,6 @@ ltl p0 {{ [] ( !(done_t{n}) || done_t1 ) }}
 }
 
 #[test]
-fn a_never_claim_is_reported_rather_than_ignored() {
-    // `never { skip }` is a violation in pan: the claim completes immediately. Its transition
-    // function is generated but the claim process is in no state and is dispatched by nothing, so
-    // this used to report "verification successful". A model carrying a claim we do not check must
-    // produce no verdict.
-    let src = "bit a = 0;\nactive proctype P() { a = 1 }\nnever { skip }\n";
-    let r = crate::runtime::verify(src).expect("the model loads");
-    assert!(
-        r.unverified
-            .iter()
-            .any(|u| u.property_name.starts_with("never")),
-        "a never claim must be reported as unchecked: {:?}",
-        r.unverified
-    );
-}
-
-#[test]
 fn an_early_stop_still_gives_liveness_claims_a_verdict() {
     // With `stop_at_first_violation` the liveness pass used to be skipped, and the claims it would
     // have examined were absent from the result - which reads as satisfied. A consumer measured
@@ -575,4 +558,51 @@ fn a_promela_boolean_literal_is_an_integer() {
     let negated = "bool flag = false;\nactive proctype P() { flag = true; assert(!flag) }\n";
     let r = crate::runtime::verify(negated).expect("the model is expressible");
     assert_eq!(r.errors, 1, "!true must be refuted: {:?}", r.violations);
+}
+
+#[test]
+fn a_never_claim_is_decided_by_its_automaton() {
+    // Two models written by a consumer, differing only in the claim body. A check that reports a
+    // violation whenever a claim is *present* answers 1 for both; an acceptance condition answers 1
+    // and 0, and pan says exactly that.
+    let fires = "byte x = 0;\nactive proctype P() { x = 1 }\nnever { skip }\n";
+    let a = crate::runtime::verify(fires).expect("the model is expressible");
+    assert_eq!(
+        a.errors, 1,
+        "a claim that completes is a violation: {:?}",
+        a.unverified
+    );
+    assert!(
+        a.unverified.is_empty(),
+        "and it is a verdict, not a decline: {:?}",
+        a.unverified
+    );
+
+    let never_reached = "byte x = 0;\nactive proctype P() { x = 1 }\nnever { (x == 7) }\n";
+    let b = crate::runtime::verify(never_reached).expect("the model is expressible");
+    assert_eq!(
+        b.errors, 0,
+        "a claim whose guard never holds is not a violation"
+    );
+    assert!(
+        b.unverified.is_empty(),
+        "and it is a verdict: {:?}",
+        b.unverified
+    );
+}
+
+#[test]
+fn a_never_claim_outside_the_supported_shape_gets_no_verdict() {
+    // `accept` labels need acceptance cycles rather than completion. Refused by name rather than
+    // answered with a plausible wrong verdict.
+    let src = "byte x = 0;\nactive proctype P() { x = 1 }\nnever { x = 2 }\n";
+    let r = crate::runtime::verify(src).expect("the model is expressible");
+    assert!(
+        r.unverified
+            .iter()
+            .any(|u| u.reason.contains("never claim is not supported")),
+        "an unsupported claim must be reported, not answered: {:?}",
+        r.unverified
+    );
+    assert_eq!(r.errors, 0, "no verdict is not a violation");
 }
