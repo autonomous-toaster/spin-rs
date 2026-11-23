@@ -206,7 +206,12 @@ impl Default for CheckerConfig {
     fn default() -> Self {
         Self {
             max_states: 1_000_000,
-            max_depth: 100_000,
+            // Depth is not the same kind of limit as the state count. A million states is a
+            // wall-clock problem; a hundred thousand steps is a model that cannot finish, and any
+            // model with `active [N]` and a loop reaches it - spin's own petersonN does, at depth
+            // 100 000, and pan has no such ceiling. Raised to a million, which no depth-first stack
+            // this engine can hold will reach before the state count stops it first.
+            max_depth: 1_000_000,
             storage_mode: StorageMode::Exact,
             search_mode: SearchMode::DepthFirst,
             por_enabled: true,

@@ -55,8 +55,12 @@ pub struct Cli {
     #[arg(long, default_value = "1000000")]
     pub max_states: usize,
 
-    /// Maximum search depth
-    #[arg(long, default_value = "100000")]
+    /// Maximum search depth.
+    ///
+    /// A million, not a hundred thousand: any model with `active [N]` and a loop reaches a hundred
+    /// thousand steps - spin's own petersonN does - and pan has no such ceiling. A million states is
+    /// a wall-clock problem; a hundred thousand steps is a model that cannot finish.
+    #[arg(long, default_value = "1000000")]
     pub max_depth: usize,
 
     /// Enable partial order reduction (on by default; kept for explicitness)
@@ -506,7 +510,20 @@ fn print_result(result: &CheckResult) {
             result.unverified.len()
         );
         for u in result.unverified.iter().take(5) {
-            println!("  Property: {}", u.property_name);
+            // The dimension first, in the tag a caller classifies on: three unverified entries at the
+            // top of a plan are easy to skim past, and "depth 100000" beside a plan name is not.
+            let dimension = match u.kind {
+                crate::engine::checker::UnverifiedKind::StateBudget => "states",
+                crate::engine::checker::UnverifiedKind::DepthBudget => "depth",
+                _ => "no budget",
+            };
+            match u.budget {
+                Some(limit) => println!(
+                    "  Property: {}  [{}: {} of {}]",
+                    u.property_name, dimension, u.states_used, limit
+                ),
+                None => println!("  Property: {}  [{}]", u.property_name, dimension),
+            }
             println!("  Reason:   {}", u.reason);
         }
         if result.unverified.len() > 5 {
