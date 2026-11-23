@@ -143,8 +143,8 @@ categories below, because this engine answers three ways and only one of them is
   the declared type on assignment (`byte x = 255; x = x + 1` leaves 0); `/` and `%` follow C, so
   `-7 % 2` is -1; a guard is true when it is non-zero, so `(n)` with `n == 0` is false.
 - **Channels**: buffered (`[N]`), arrays (`chan c[N] = [cap] of { t }`), multi-field messages
-  (`chan c = [2] of { byte, byte }`, sent as `c ! a, b`), send and receive as statements and as
-  guards, `len`/`full`/`empty`/`nfull`/`nempty`. A channel's queue is part of the state, so a state
+  (`chan c = [2] of { byte, byte }`, sent as `c ! a, b` and received into `c ? a, b` in declaration
+  order), send and receive as statements and as guards, `len`/`full`/`empty`/`nfull`/`nempty`. A channel's queue is part of the state, so a state
   always determines its own transitions. A receive that names a value tests the **head** only
   (`c ? 2` blocks with 1 at the head even when a 2 is queued behind it), where `c ?? 2` **searches**
   from the head and takes the first match - measured against pan with two messages in the queue,

@@ -157,6 +157,7 @@ pub(crate) fn register_all(lua: &mlua::Lua, channels: Registry) -> mlua::Result<
     register_chan_empty(lua, Arc::clone(&channels))?;
     register_chan_send_sorted(lua, Arc::clone(&channels))?;
     register_chan_recv_random(lua, Arc::clone(&channels))?;
+    register_chan_recv_all(lua, Arc::clone(&channels))?;
     register_chan_poll(lua, Arc::clone(&channels))?;
     register_chan_recv_eval(lua, Arc::clone(&channels))?;
     register_chan_has_match(lua, Arc::clone(&channels))?;
@@ -346,6 +347,30 @@ fn register_chan_recv(lua: &mlua::Lua, _channels: Registry) -> mlua::Result<()> 
     Ok(())
 }
 
+/// Take the head message as a table of its fields.
+///
+/// `_spin_chan_recv` hands back one integer, which is all a one-variable receive needs. A
+/// multi-field message is stored as a table in the state already, so a receive that binds several
+/// variables only had to stop being refused: the message was never lost, it was just not handed
+/// out.
+fn register_chan_recv_all(lua: &mlua::Lua, _channels: Registry) -> mlua::Result<()> {
+    let f = lua.create_function(move |lua, args: mlua::MultiValue| {
+        let (state, name, _) = state_and_name(args, "chan_recv_all")?;
+        let mut queue = messages_of(&state, &name)?;
+        if queue.is_empty() {
+            return Err(mlua::Error::runtime("channel empty"));
+        }
+        let msg = queue.remove(0);
+        write_messages(lua, &state, &name, &queue)?;
+        let table = lua.create_table()?;
+        for (i, value) in msg.iter().enumerate() {
+            table.set(i + 1, *value)?;
+        }
+        Ok(mlua::Value::Table(table))
+    })?;
+    lua.globals().set("_spin_chan_recv_all", f)?;
+    Ok(())
+}
 fn register_chan_recv_random(lua: &mlua::Lua, _channels: Registry) -> mlua::Result<()> {
     let f = lua.create_function(move |lua, args: mlua::MultiValue| {
         do_recv(lua, args, "chan_recv_random", |q| {

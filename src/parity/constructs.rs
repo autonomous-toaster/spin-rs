@@ -173,6 +173,20 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(1),
         source: "chan c = [0] of { bit };\nbyte got = 0;\nactive proctype Receiver() { c ?? 1; got = 1 }\nltl p0 { <> ( got == 1 ) }\n",
     },
+    // A two-field message received into two variables. The message was always stored as a table
+    // in the state; the receive handed back one value and the multi-variable shape was refused,
+    // so a round trip through a structured message had no verdict at all.
+    Construct {
+        name: "multi_field_roundtrip",
+        pan: Some(0),
+        source: "chan c = [2] of { byte, byte };\nbyte a = 0;\nbyte b = 0;\nactive proctype P() { c ! 1, 7; c ? a, b; assert(b == 7) }\n",
+    },
+    // The control: the fields are bound in declaration order, so the first one is 1, not 7.
+    Construct {
+        name: "multi_field_order",
+        pan: Some(1),
+        source: "chan c = [2] of { byte, byte };\nbyte a = 0;\nbyte b = 0;\nactive proctype P() { c ! 1, 7; c ? a, b; assert(a == 7) }\n",
+    },
     // A claim whose atom calls `len()` on a channel. The atom is compiled as its own chunk
     // against a bare state, so it resolved `chan_len` through aliases the generated model
     // defines for itself and found nil: the claim was declined while the same expression

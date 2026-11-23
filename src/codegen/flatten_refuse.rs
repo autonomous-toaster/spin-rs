@@ -48,6 +48,42 @@ impl LuaGenerator {
         self.arity_refusal(channel, count).map(FNode::Refuse)
     }
 
+    /// The node a send or receive gets when its shape alone settles that it has no encoding.
+    ///
+    /// Ordered: arity first, because a model whose value count does not match its channel has no
+    /// verdict whatever else is true of it.
+    pub(crate) fn shape_refuse(&self, s: &Stmt) -> Option<FNode> {
+        if let Some(node) = self.arity_refuse(s) {
+            return Some(node);
+        }
+        let Stmt::Recv {
+            channel, target, ..
+        } = s
+        else {
+            return None;
+        };
+        if !self.rendezvous.contains_key(&self.channel_name(channel)) {
+            return None;
+        }
+        match target {
+            // A poll receive on a capacity-0 channel has no queue to inspect, and pan does not
+            // pair it with a waiting sender either: measured, `c ? [1]` beside a sender leaves
+            // the following claim refuted (pan 1, plain and -a), so the receiver waits. A step
+            // that is never enabled says that, and the model is decided.
+            RecvTarget::Poll(_) => Some(FNode::Blocked(
+                "a poll receive waits on a channel of capacity zero",
+            )),
+            // A plain receive is what the handshake pairs with, and so is a random receive that
+            // names values: one stager in flight makes the match a test of the staged message.
+            RecvTarget::VarList(_) | RecvTarget::RandomMatch(_) => None,
+            // An eval receive would have to inspect a staged message instead of taking one, and
+            // the stage/release encoding has no inspect-only half.
+            _ => Some(FNode::Refuse(
+                "a poll or eval receive on a rendezvous channel is not implemented",
+            )),
+        }
+    }
+
     /// Emit a step that refuses by name.
     pub(crate) fn emit_refuse_step(&mut self, i: usize, why: &str) {
         self.emit(&format!("    -- step {}: refused, {}", i, why));

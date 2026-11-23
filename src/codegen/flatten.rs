@@ -165,7 +165,7 @@ impl LuaGenerator {
     ) {
         // Arity settles before any encoding: a model whose send or receive does not match its
         // channel's declaration has no verdict pan would give, only a run-time rejection.
-        if let Some(node) = self.arity_refuse(s) {
+        if let Some(node) = self.shape_refuse(s) {
             nodes[at] = node;
             return;
         }
@@ -235,38 +235,6 @@ impl LuaGenerator {
                     matches: exprs.iter().map(|e| self.expr_to_lua(e)).collect(),
                     next,
                 }
-            }
-            // A poll receive on a capacity-0 channel has no queue to inspect, and pan does not pair it
-            // with a waiting sender either: measured, `c ? [1]` beside a sender leaves the claim about
-            // the following statement refuted (pan 1, plain and -a), so the receiver waits. A step that
-            // is never enabled says that, and the model is decided.
-            Stmt::Recv {
-                channel,
-                target: RecvTarget::Poll(_),
-                ..
-            } if self.rendezvous.contains_key(&self.channel_name(channel)) => {
-                nodes[at] = FNode::Blocked("a poll receive waits on a channel of capacity zero")
-            }
-            // An eval receive on a capacity-0 channel would have to inspect a staged message instead
-            // of taking one, and the stage/release encoding has no inspect-only half. Refused by name.
-            Stmt::Recv {
-                channel, target, ..
-            } if self.rendezvous.contains_key(&self.channel_name(channel))
-                && !matches!(target, RecvTarget::VarList(_)) =>
-            {
-                nodes[at] = FNode::Refuse(
-                    "a poll or eval receive on a rendezvous channel is not implemented",
-                )
-            }
-            // A receive that binds several variables would need the message as a table; the
-            // runtime hands back one value. Refused rather than binding the first and dropping the
-            // rest.
-            Stmt::Recv {
-                target: RecvTarget::VarList(v),
-                ..
-            } if v.len() > 1 => {
-                nodes[at] =
-                    FNode::Refuse("a receive that binds more than one variable is not supported")
             }
             // A bare block is a sequence: lay the statements out in place, so the block costs no
             // step and its statements interleave with the surrounding body exactly as if the braces
@@ -605,6 +573,22 @@ impl LuaGenerator {
                         v.to_string()
                     }
                 };
+                // A receive that binds several fields takes the head message as a table: the message
+                // always was one, so nothing had to be invented, only handed out. The arity check
+                // above has already established that the count matches the channel's declaration.
+                let bind_fields = |vars: &[String]| {
+                    (
+                        format!(" and not chan_empty(s, {})", chan),
+                        format!(
+                            "local _m = _spin_chan_recv_all(s, {}); {}\n",
+                            chan,
+                            vars.iter()
+                                .enumerate()
+                                .map(|(i, name)| format!("s.{} = _m[{}]; ", field(name), i + 1))
+                                .collect::<String>()
+                        ),
+                    )
+                };
                 // `_spin_chan_recv` *returns* the message; the old emission passed the target as a
                 // third argument and dropped the return value, so `c ? x` left x untouched - a silent
                 // wrong in the direction of any assertion about what was received.
@@ -617,6 +601,12 @@ impl LuaGenerator {
                             field(&v[0])
                         ),
                     ),
+                    // A receive that binds several fields takes the head message as a table: the
+                    // message always was one, so nothing had to be invented, only handed out. The
+                    // arity check above has already established that the count matches the
+                    // channel's declaration.
+                    RecvTarget::VarList(v) if v.len() > 1 => bind_fields(v),
+                    RecvTarget::Random(v) if v.len() > 1 => bind_fields(v),
                     RecvTarget::Random(v) if v.len() == 1 => (
                         format!(" and not chan_empty(s, {})", chan),
                         format!(
