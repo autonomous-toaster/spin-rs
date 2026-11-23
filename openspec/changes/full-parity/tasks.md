@@ -39,6 +39,10 @@
 - [ ] 3.6 Define deadlock as pan's invalid end state
 - [ ] 3.7 Survey fairness against pan
 - [ ] 3.8 Refuse run pending a measured answer
+- [ ] 3.8a Put a process table in the state whose initial contents are the static instances
+- [ ] 3.8b Allocate a pid from that table for `run`, binding its arguments at the call
+- [ ] 3.8c Derive `_nr_pr` from the table rather than keeping a counter beside it
+- [ ] 3.8d Check that every emitted arithmetic write to a declared field goes through `_spin_wrap`
 - [x] 3.9 Filter the enabled set to the highest-priority process
 - [x] 3.10 Parse a bare block
 - [x] 3.11 Read a guard with Promela truthiness

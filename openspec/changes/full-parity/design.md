@@ -91,6 +91,25 @@ hard-coded `guard = true`.
   be kept out of a guard.
 - The trailing-`break` fold: `break` is an edge and needs no fold.
 - `nonflat`: refused today; a multi-statement nested branch is just edges.
+
+## The oracle for the process table (3.8a)
+
+A state count is a regression oracle, not a presence oracle. Measured with pan: one byte field that is
+never written gives 3 states, and adding a second unwritten byte field gives 3 as well - the field is
+dropped from the state vector and the reachable set does not move. So "the count did not move, therefore the
+table is not in the state" does not follow; the count also does not move when the table is present and only
+initialised at layout, which is exactly what 3.8a is.
+
+What does tell:
+
+1. the field check in `codegen::field_check` - a read of a field the layout does not declare fails by name,
+   which is a presence test that needs no count;
+2. a read-back model whose claim observes the table's *contents*, e.g. `assert(_nr_pr == 1)` in the initial
+   state with the number derived from the table. Absent or empty, the assertion refutes; present and right,
+   it holds. That is also the step-3c oracle, so it is not throwaway.
+
+The count keeps the job it can do: any model whose count *moves* during 3.8a is a regression, and the
+166-model corpus is the instrument for that direction.
 - Reduction sharpens: `_pc_` writes are already classified internal, so more of every
   transition becomes invisible to POR.
 
