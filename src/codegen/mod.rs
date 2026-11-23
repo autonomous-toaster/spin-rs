@@ -151,6 +151,8 @@ mod stmts;
 mod stmts_atomic;
 
 #[cfg(test)]
+mod field_check;
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
