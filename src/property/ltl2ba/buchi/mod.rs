@@ -466,6 +466,12 @@ pub fn to_buchi_not(formula: &LtlFormula) -> Result<BuchiAutomaton, LtlError> {
             Ok(next_holds(name, !must_be_true))
         }
 
+        // Every spelling of the unwrapped form declines - `a == 1 ->`, `a == 0 ->`, and one whose
+        // antecedent becomes true only later - measured three ways here and independently by a
+        // consumer. An earlier release note claimed one of the three decided; that was a grep which
+        // matched `errors: 0` and not the "Inconclusive" line under it, and there is no such case.
+        // Nothing about this decline depends on anything outside the property.
+        //
         // `a -> <>b` written without an outer box. Measured with pan rather than reasoned about:
         // for a model where `a` only becomes true later, pan accepts both the unboxed form and the
         // boxed one differently - unboxed 0, boxed 1 - so pan evaluates an unboxed formula at the
