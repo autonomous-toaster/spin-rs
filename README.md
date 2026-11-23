@@ -141,13 +141,15 @@ categories below, because this engine answers three ways and only one of them is
 - **Channels**: buffered (`[N]`), arrays (`chan c[N] = [cap] of { t }`), send and receive as
   statements and as guards, `len`/`full`/`empty`/`nfull`/`nempty`. A channel's queue is part of the
   state, so a state always determines its own transitions.
-- **`never` claims**, when the body is a sequence of guards - the shape a hand-written monitor has.
-  The claim is translated into an automaton and run by the same product search as an LTL formula,
-  with completion as the violation. A claim with an `accept` label needs acceptance *cycles* rather
-  than completion and is refused by name, as is a claim that assigns or sends.
-  Measured on a consumer's pair: `never { skip }` refutes (pan 1) and `never { (x == 7) }`, whose
-  guard never holds, does not (pan 0). A check that reported a violation whenever a claim exists
-  would answer 1 for both.
+- **`never` claims**, for a monitor body: guards, `assert`, `skip`, labels, `goto`, `do`/`od`,
+  `if`/`fi`, `atomic`. The claim becomes an automaton run by the same product search as an LTL
+  formula. A run is a violation when the claim completes, when an `assert` inside it fails, or when
+  it can cycle through an `accept`-labelled state - the verdict is the one `pan -a` gives, because
+  pan needs that flag to look for acceptance cycles and this engine always looks. A claim that
+  assigns, sends or receives is refused by name: that is a program, not a monitor.
+  Measured on six models from a consumer: completion (pan 1 and 0), an assert inside the claim
+  (0 and 1), and an accepting cycle (1 and 0, both under `pan -a`). A check that reported a
+  violation whenever a claim exists would answer 1 for all six.
 - **`priority N`**. pan runs only the highest-priority *enabled* process, so the filter is applied
   after enabledness is known: a blocked high-priority process does not hold up a low-priority one.
   Measured on a consumer's pair - a process that loops forever at priority 2 beside one that sets a
@@ -193,8 +195,7 @@ These are hard errors. No verdict is produced, so nothing about the model is cla
 - An atom that names no state variable, reported as `unsupported_property`, and an atom that is not
   even an expression, reported as `unparsable_formula` naming the fragment. `P[0]:x` (a remote
   local) lands here.
-- A `never` claim outside the supported shape: an `accept` label, or a claim body that is not a
-  sequence of guards.
+- A `never` claim whose body assigns, sends or receives, or contains an `unless`.
 
 ### Where this engine deliberately differs
 

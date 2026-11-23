@@ -99,7 +99,8 @@ pub const CONSTRUCTS: &[Construct] = &[
     // Worth recording what they actually test, because it is not what the name suggests: pan
     // reports "assertion violated" on the refuting model. The `accept_all` state sits behind an
     // infinite `do ... od` and is unreachable, so the verdict comes from the claim's own assert,
-    // not from an accepting cycle.
+    // not from an accepting cycle - which is why these two do not settle accept-cycle support on
+    // their own.
     Construct {
         name: "never_accept_holds",
         pan: Some(0),
@@ -109,6 +110,20 @@ pub const CONSTRUCTS: &[Construct] = &[
         name: "never_accept_refutes",
         pan: Some(1),
         source: "/* The rendezvous handshake sets got, so the claim reaches its assert. */\nchan c = [0] of { bit };\nbool got = false;\nactive proctype Sender() { c ! 1 }\nactive proctype Receiver() { c ? got }\nnever  {    /* <> (got) */\nT0_init:\n\tdo\n\t:: atomic { ((got)) -> assert(!((got))) }\n\t:: (1) -> goto T0_init\n\tod;\naccept_all:\n\tskip\n}\n",
+    },
+    // The cycle pair: the accept state is reachable and spins, so the claim has an accepting cycle
+    // even though it never completes and its asserts never fire. The oracle is `pan -a` - without
+    // it pan reports 0 for both files, and someone checking with plain pan would conclude the pair
+    // is vacuous.
+    Construct {
+        name: "never_cycle_accept",
+        pan: Some(1),
+        source: "/* The claim spins in an accept-labelled state forever: pan -a reports 1. */\nbyte x = 0;\nactive proctype P() { x = 1 }\nnever { accept_x: do :: (1) -> goto accept_x od }\n",
+    },
+    Construct {
+        name: "never_cycle_unreachable",
+        pan: Some(0),
+        source: "/* The accept state is unreachable, so there is no accepting cycle: pan -a reports 0. */\nbyte x = 0;\nactive proctype P() { x = 1 }\nnever { do :: (0) -> skip od; accept_x: skip }\n",
     },
 ];
 
