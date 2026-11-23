@@ -234,6 +234,12 @@ impl LuaGenerator {
                     // the model failed at run time.
                     let saved_pid = self.pid_override.replace(0);
                     for vd in Self::collect_var_decls(&i.body) {
+                        // The declared type, so that an arithmetic step on this variable is truncated
+                        // to it. Without the entry, `i++` on a byte wrote 256, 257, ... and a loop
+                        // over it had no bound at all - spin's own ex_1a.pml ran past two minutes here
+                        // and closes in 512 states in pan.
+                        self.var_types
+                            .insert(format!("init_{}", vd.name), vd.var_type.clone());
                         let default = default_value(&vd.var_type);
                         let init_str = match &vd.init {
                             Some(e) => self.expr_to_lua(e),

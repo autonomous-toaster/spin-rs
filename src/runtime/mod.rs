@@ -220,7 +220,7 @@ pub struct LuaModel {
     ///
     /// A jump step declares only the step counter as a dependency, which makes it look independent of
     /// every other process - and the reduction then drops the interleavings that a labelled loop needs.
-    has_labels: bool,
+    has_goto: bool,
     /// Names of the fields the state table actually carries, read once from the initial state.
     /// Reduction asks which of these a claim can observe, so it needs the real field names
     /// (p1_x, t1_done) rather than the Promela identifiers they came from.
@@ -361,9 +361,9 @@ impl LuaModel {
             crate::parser::ast::TopLevel::Init(i) => stmts_have_assert(&i.body),
             _ => false,
         });
-        let has_labels = model.declarations.iter().any(|d| match d {
-            crate::parser::ast::TopLevel::Proctype(p) => stmts_have_label(&p.body),
-            crate::parser::ast::TopLevel::Init(i) => stmts_have_label(&i.body),
+        let has_goto = model.declarations.iter().any(|d| match d {
+            crate::parser::ast::TopLevel::Proctype(p) => stmts_have_goto(&p.body),
+            crate::parser::ast::TopLevel::Init(i) => stmts_have_goto(&i.body),
             _ => false,
         });
 
@@ -401,7 +401,7 @@ impl LuaModel {
             process_count,
             eval_error: std::cell::RefCell::new(None),
             has_asserts,
-            has_labels,
+            has_goto,
             state_fields,
             priorities,
             atom_model: model.clone(),
@@ -554,7 +554,7 @@ impl Model for LuaModel {
         // computation sees it as independent of everything - and a body that loops back through a
         // label then loses the interleaving that puts two processes in the same critical section. The
         // reduction is a performance device; a model it makes appear correct is worse than a slow one.
-        if self.has_labels {
+        if self.has_goto {
             return Vec::new();
         }
         let all: std::collections::BTreeSet<String> = self.state_fields.iter().cloned().collect();
@@ -900,18 +900,21 @@ fn stmt_has_assert(s: &crate::parser::ast::Stmt) -> bool {
     }
 }
 
-/// Does any statement of this body use a label or a goto?
+/// Does any statement of this body jump?
 ///
 /// The reduction must not be applied to such a model: a jump declares only the step counter as a
 /// dependency, so it looks independent of every other process, and a body that loops back through a
 /// label loses the interleavings it exists to produce.
-fn stmts_have_label(body: &[crate::parser::ast::Stmt]) -> bool {
+///
+/// Only a `goto` counts. A label with no jump is a no-op step: it cannot close a cycle, so it cannot be
+/// the cycle the opt-out exists to prevent, and refusing to reduce every model that merely names a label
+/// was costing about half the wall clock of the whole Examples sweep. `ex_3c.pml` is the evidence that the
+/// opt-out still does its job where it matters - 858 states and the assertion, where reduced it found 77
+/// and none.
+fn stmts_have_goto(body: &[crate::parser::ast::Stmt]) -> bool {
     let mut found = false;
     crate::codegen::walk_stmts(body, &mut |s| {
-        if matches!(
-            s,
-            crate::parser::ast::Stmt::Label(_, _) | crate::parser::ast::Stmt::Goto(_, _)
-        ) {
+        if matches!(s, crate::parser::ast::Stmt::Goto(_, _)) {
             found = true;
         }
     });
