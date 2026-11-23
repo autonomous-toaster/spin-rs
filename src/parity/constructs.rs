@@ -173,6 +173,24 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(1),
         source: "chan c = [0] of { bit };\nbyte got = 0;\nactive proctype Receiver() { c ?? 1; got = 1 }\nltl p0 { <> ( got == 1 ) }\n",
     },
+    // A handler whose guard only becomes true *after* the body's second step, so the escape
+    // boundary is tested at a later step than the first. pan refutes: the handler preempts
+    // mid-body and sets y = 9. A counter off by one at this boundary would miss it and
+    // answer 0.
+    Construct {
+        name: "unless_straddle_mid",
+        pan: Some(1),
+        source: "byte x = 0;\nbyte y = 0;\nactive proctype P() { { x = 1; x = 2; x = 3 } unless { (x == 2); y = 9 } }\nltl p0 { [] ( y <= 2 ) }\n",
+    },
+    // The handler's guard becomes true only at the body's *last* step, and pan accepts: the
+    // escape exists while the body is mid-flight, so once the body has completed there is
+    // nothing left to preempt, and y stays 0. An engine that let the handler run after the
+    // body finished would answer 1 here.
+    Construct {
+        name: "unless_straddle_last",
+        pan: Some(0),
+        source: "byte x = 0;\nbyte y = 0;\nactive proctype P() { { x = 1; x = 2; x = 3 } unless { (x == 3); y = 9 } }\nltl p0 { [] ( y <= 2 ) }\n",
+    },
     // A handler of two statements: the second statement sets y = 9, which refutes the claim. An
     // engine that ran only the first statement would answer 0 against pan's 1.
     Construct {
