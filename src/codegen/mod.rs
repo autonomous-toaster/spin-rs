@@ -330,6 +330,33 @@ pub(crate) fn model_shape_refusal(model: &crate::parser::ast::PromelaModel) -> O
             }
             let mut es = Vec::new();
             stmt_exprs(s, &mut es);
+            // A call the emitter does not know becomes a Lua call to a global nothing defines, which
+            // fails at run time with "attempt to call a nil value". After inline expansion there is no
+            // such thing as a user-defined function left, so any call still here is unknown.
+            for e in &es {
+                let mut unknown: Option<String> = None;
+                walk_expr(e, &mut |x| {
+                    match x {
+                        E::FuncCall { name, .. } if unknown.is_none() => {
+                            unknown = Some(name.clone());
+                        }
+                        // pan's set_priority changes the scheduling order at run time; the priority
+                        // filter here reads the priorities declared on the proctype, so a model that
+                        // moves them would be scheduled by pan and not by us.
+                        E::SetPriority { .. } if unknown.is_none() => {
+                            unknown = Some("set_priority".to_string());
+                        }
+                        _ => {}
+                    }
+                });
+                if let Some(name) = unknown {
+                    found = Some(format!(
+                        "a call to '{}' is not implemented: a function this engine does not define would fail at run time, and set_priority also changes the scheduling order at run time; in '{}'",
+                        name, p
+                    ));
+                    return;
+                }
+            }
             for e in es {
                 let mut timed_out = false;
                 walk_expr(e, &mut |x| {

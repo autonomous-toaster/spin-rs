@@ -194,6 +194,8 @@ These are hard errors. No verdict is produced, so nothing about the model is cla
 | construct | why |
 |---|---|
 | `run P(...)` | a spawned process needs dynamic instances; the transition table is emitted per static instance, and there is no measured pan answer to encode against |
+| `set_priority(pid, n)` | it moves a process's scheduling priority at run time, and the priority filter reads the declared priorities |
+| a call to a function this engine does not define | it would fail at run time with a nil global; after inline expansion any remaining call is unknown |
 | `provided (expr)` | the gate agrees with pan on minimal models and hides a deadlock on spin's own `pathfinder.pml` (pan 1, this engine 0 from 6 states where dropping the clause gives 25 and agreement); a clause that hides a deadlock is a wrong verdict |
 | `timeout` | it is true only when no other process can move, and a guard emitted for one process cannot ask that; the branch used to be emitted as permanently false, which decided models against pan |
 | a proctype that declares parameters | the arguments are bound by `run`, or set to zero for an `active` process, and neither is in the state; a channel parameter used to crash at run time rather than refuse |

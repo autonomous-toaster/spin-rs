@@ -173,6 +173,15 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(1),
         source: "chan c = [0] of { bit };\nbyte got = 0;\nactive proctype Receiver() { c ?? 1; got = 1 }\nltl p0 { <> ( got == 1 ) }\n",
     },
+    // `set_priority` moves a process's scheduling priority at run time. The filter here reads the
+    // priorities declared on the proctype, so a model that moves them is scheduled by pan and not
+    // by us. The emitter also passed the arguments without the state, so it crashed rather than
+    // being wrong - either way, refused by name.
+    Construct {
+        name: "set_priority_call",
+        pan: Some(0),
+        source: "byte cnt;\nactive proctype P() priority 5 { set_priority(0, 8); cnt++ }\n",
+    },
     // A multi-declarator inside a body: `byte o, i;`. The statement parser took one name and left
     // the comma, which took the whole proctype down with it - while the same declaration at top
     // level parsed, because it went through a different production.
