@@ -92,6 +92,24 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(0),
         source: "/* The guard never holds, so the claim never completes: pan reports no error. */\nbyte x = 0;\n\nactive proctype P() {\n    x = 1\n}\n\nnever { (x == 7) }\n",
     },
+    // The pending pair: spin's own automaton for `<> (got)`, embedded. Refused today (it carries
+    // an `accept` label), so these rows assert nothing yet - and they are the ones that will say
+    // whether accept labels are encoded at all.
+    //
+    // Worth recording what they actually test, because it is not what the name suggests: pan
+    // reports "assertion violated" on the refuting model. The `accept_all` state sits behind an
+    // infinite `do ... od` and is unreachable, so the verdict comes from the claim's own assert,
+    // not from an accepting cycle.
+    Construct {
+        name: "never_accept_holds",
+        pan: Some(0),
+        source: "/* The property holds: got is never set, so the claim's only move is its self-loop. */\nbool got = false;\nactive proctype P() { skip }\nnever  {    /* <> (got) */\nT0_init:\n\tdo\n\t:: atomic { ((got)) -> assert(!((got))) }\n\t:: (1) -> goto T0_init\n\tod;\naccept_all:\n\tskip\n}\n",
+    },
+    Construct {
+        name: "never_accept_refutes",
+        pan: Some(1),
+        source: "/* The rendezvous handshake sets got, so the claim reaches its assert. */\nchan c = [0] of { bit };\nbool got = false;\nactive proctype Sender() { c ! 1 }\nactive proctype Receiver() { c ? got }\nnever  {    /* <> (got) */\nT0_init:\n\tdo\n\t:: atomic { ((got)) -> assert(!((got))) }\n\t:: (1) -> goto T0_init\n\tod;\naccept_all:\n\tskip\n}\n",
+    },
 ];
 
 /// What this engine answered for one construct.
@@ -168,20 +186,6 @@ mod tests {
             assert!(
                 err.contains(needle),
                 "{name} must be refused with '{needle}', got: {err}"
-            );
-        }
-    }
-
-    #[test]
-    fn zz_table() {
-        for c in CONSTRUCTS {
-            let (ours, both) = outcome(c);
-            println!(
-                "{:<22} pan={:<2} ours={:?}{}",
-                c.name,
-                c.pan.map(|n| n.to_string()).unwrap_or_else(|| "-".into()),
-                ours,
-                if both { " BOTH" } else { "" }
             );
         }
     }
