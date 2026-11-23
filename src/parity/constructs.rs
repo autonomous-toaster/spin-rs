@@ -173,6 +173,22 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(1),
         source: "chan c = [0] of { bit };\nbyte got = 0;\nactive proctype Receiver() { c ?? 1; got = 1 }\nltl p0 { <> ( got == 1 ) }\n",
     },
+    // The idiomatic response property, boxed: refuted here and by pan, because `b` never becomes
+    // 1 while `a` is 0 at a reachable state.
+    Construct {
+        name: "response_boxed",
+        pan: Some(1),
+        source: "byte a = 0;\nbyte b = 0;\nactive proctype P() { do :: true -> a = 1 od }\nltl p0 { [] ( a == 0 -> <> ( b == 1 ) ) }\n",
+    },
+    // The same property without the box: pan refutes it too (it evaluates the formula at the
+    // initial state, where a == 0, so the consequent is owed), and this engine declines it by
+    // name. A missing verdict on the idiomatic shape, recorded rather than guessed at - the two
+    // readings differ on the model where the antecedent only becomes true later.
+    Construct {
+        name: "response_unboxed",
+        pan: Some(1),
+        source: "byte a = 0;\nbyte b = 0;\nactive proctype P() { do :: true -> a = 1 od }\nltl p0 { a == 0 -> <> ( b == 1 ) }\n",
+    },
     // A proctype that declares parameters, started by `active`: pan binds every parameter to zero,
     // which is measurable rather than assumed. `run` still refuses, so a process whose arguments
     // come from a call has no verdict here yet.

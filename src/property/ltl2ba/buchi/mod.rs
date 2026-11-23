@@ -466,9 +466,17 @@ pub fn to_buchi_not(formula: &LtlFormula) -> Result<BuchiAutomaton, LtlError> {
             Ok(next_holds(name, !must_be_true))
         }
 
+        // `a -> <>b` written without an outer box. Measured with pan rather than reasoned about:
+        // for a model where `a` only becomes true later, pan accepts both the unboxed form and the
+        // boxed one differently - unboxed 0, boxed 1 - so pan evaluates an unboxed formula at the
+        // *initial state*, and the negation is `a at position 0 and never b`, which is not the
+        // automaton this matcher builds for `[] ( a -> <> b )`. Supporting it needs a
+        // start-state-sensitive automaton, so it declines by name and says what to write instead.
         LtlFormula::And(_, _) | LtlFormula::Or(_, _) => Err(LtlError::unsupported(
-            "liveness property",
-            Some("Only p, !p, []p, <>p and Xp are supported under negation"),
+            "a -> <> b without an outer []",
+            Some(
+                "pan evaluates an unwrapped formula at the initial state, so this is not the same property as [] ( a -> <> b ): measured on a model where a only becomes true later, the unwrapped form is pan 0 and the boxed one pan 1. Write the boxed form if you mean the response property, and know that it is the stronger of the two",
+            ),
         )),
     }
 }
