@@ -173,6 +173,20 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(1),
         source: "chan c = [0] of { bit };\nbyte got = 0;\nactive proctype Receiver() { c ?? 1; got = 1 }\nltl p0 { <> ( got == 1 ) }\n",
     },
+    // An increment as a guard: `:: i++`, which is how spin's own ex_1a.pml writes a loop body.
+    // The guard-position heuristic read `i` as a condition and left `++` for the `od`.
+    Construct {
+        name: "increment_as_guard",
+        pan: Some(0),
+        source: "byte i = 0;\nactive proctype P() { do :: i++ -> skip od }\n",
+    },
+    // A declaration inside `init`, whose locals are laid out under the `init_` prefix the body
+    // reads. Without it the body read a field that does not exist.
+    Construct {
+        name: "init_local",
+        pan: Some(0),
+        source: "byte g = 0;\ninit { byte i; i = 1; g = i }\nltl p0 { <> ( g == 1 ) }\n",
+    },
     // A local initialised from `_pid`. `_pid` is the id of the process whose transition this is, so
     // in the state layout - which lays out every instance of a proctype one after another - it is
     // the instance index. Emitting it as the per-transition constant failed the whole initial

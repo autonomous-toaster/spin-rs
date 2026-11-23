@@ -324,6 +324,13 @@ fn guard_body(input: Input) -> IResult<Input, Guard> {
                 Some('=') => probe.next() != Some('='),
                 Some('!') => probe.next() != Some('='),
                 Some('?') => true,
+                // A doubled operator is an increment or a decrement, which is a *statement*:
+                // `:: i++` and `:: i++ -> skip` are branches of spin's own ex_1a.pml. Read as a
+                // condition instead, `i` was consumed as the guard and the `++` was left for the
+                // `od` to choke on. A single `-` stays a condition, so that `:: x - 1 > 0 -> ...`
+                // is not turned into an always-enabled statement.
+                Some('+') => probe.next() == Some('+'),
+                Some('-') => probe.next() == Some('-'),
                 _ => false,
             }
         } else {

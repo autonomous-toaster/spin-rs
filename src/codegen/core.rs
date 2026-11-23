@@ -227,6 +227,22 @@ impl LuaGenerator {
                         self.pid_override = saved_pid;
                     }
                 }
+                TopLevel::Init(i) => {
+                    // An init block's own declarations. They live in the state under the prefix the
+                    // transition emitter uses for init's locals, and without this arm `byte i` inside
+                    // `init` was never in the state: `i++` then read a field that does not exist and
+                    // the model failed at run time.
+                    let saved_pid = self.pid_override.replace(0);
+                    for vd in Self::collect_var_decls(&i.body) {
+                        let default = default_value(&vd.var_type);
+                        let init_str = match &vd.init {
+                            Some(e) => self.expr_to_lua(e),
+                            None => default,
+                        };
+                        lines.push(format!("    state.init_{} = {}", vd.name, init_str));
+                    }
+                    self.pid_override = saved_pid;
+                }
                 TopLevel::ChanDecl { name, .. } => {
                     self.global_vars.insert(name.clone());
                     lines.push(format!("    state.{} = nil", name));
@@ -386,7 +402,12 @@ impl LuaGenerator {
                     // done even while the body was midway through.
                     self.current_done = Some("_done_init".to_string());
                     self.current_step = Some("_step_init".to_string());
+                    // init's own declarations live under the `init_` prefix, which is the name the
+                    // state layout gives them. Without this the body read `s.i` for a local declared
+                    // as `byte i`, and the model failed on an arithmetic operation over nil.
+                    let saved_proctype = self.current_proctype.replace("init".to_string());
                     self.emit_body_sequenced(&i.body, 0);
+                    self.current_proctype = saved_proctype;
                     self.current_done = None;
                     self.current_step = None;
                     self.emit("    return transitions");
