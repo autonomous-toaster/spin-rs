@@ -104,9 +104,12 @@ What does tell:
 
 1. the field check in `codegen::field_check` - a read of a field the layout does not declare fails by name,
    which is a presence test that needs no count;
-2. a read-back model whose claim observes the table's *contents*, e.g. `assert(_nr_pr == 1)` in the initial
-   state with the number derived from the table. Absent or empty, the assertion refutes; present and right,
-   it holds. That is also the step-3c oracle, so it is not throwaway.
+2. a read-back model whose assertion observes the table's *contents* - `assert(_nr_pr == 1)` in the
+   initial state, with the number derived from the table rather than from a counter. Absent or empty, the
+   assertion refutes; present and right, it holds. That is also the step-3c oracle, so it is not throwaway.
+   Write it as an **assertion**, not as a `[]` claim over the count: a consumer measured pan refuting
+   `[] ( _nr_pr <= 2 )` with one child alive, so the value a claim sees there is not the value an assertion
+   sees, and a claim-shaped oracle that disagrees with pan would be worse than no oracle at all.
 
 The count keeps the job it can do: any model whose count *moves* during 3.8a is a regression, and the
 166-model corpus is the instrument for that direction.
