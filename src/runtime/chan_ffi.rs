@@ -231,6 +231,25 @@ fn register_rendezvous(lua: &mlua::Lua) -> mlua::Result<()> {
     })?;
     lua.globals().set("_spin_chan_staged", staged)?;
 
+    // The value a stager is offering, by position, so a random receive can match against a constant
+    // before deciding to take the message.
+    let staged_value = lua.create_function(
+        move |_lua, (state, name, index): (mlua::Table, String, i64)| match state
+            .get::<mlua::Value>(name.as_str())?
+        {
+            mlua::Value::Table(t) => match t.get::<mlua::Value>("values")? {
+                mlua::Value::Table(values) => match values.get::<mlua::Value>(index)? {
+                    mlua::Value::Integer(v) => Ok(mlua::Value::Integer(v)),
+                    mlua::Value::Number(n) => Ok(mlua::Value::Integer(n as i64)),
+                    _ => Ok(mlua::Value::Nil),
+                },
+                _ => Ok(mlua::Value::Nil),
+            },
+            _ => Ok(mlua::Value::Nil),
+        },
+    )?;
+    lua.globals().set("_spin_chan_staged_value", staged_value)?;
+
     let pair = lua.create_function(move |_lua, (state, name): (mlua::Table, String)| {
         match state.get::<mlua::Value>(name.as_str())? {
             mlua::Value::Table(t) => {

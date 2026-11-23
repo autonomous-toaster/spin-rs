@@ -152,12 +152,18 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(0),
         source: "bool a = true;\nbool b = false;\nactive proctype P() { b = a; assert(b == 1) }\n",
     },
-    // An inspects-only receive with no sender: pan looks for an accepting cycle, and there is none
-    // because the claim never fires. Refused here.
+    // The consumer's two random-receive rows, verbatim. Both need `pan -a`: without it pan reports 0
+    // for both files, so a table built from plain pan records the same expectation twice and the pair
+    // stops discriminating.
+    Construct {
+        name: "poll_rendezvous",
+        pan: Some(0),
+        source: "chan c = [0] of { bit };\nbyte got = 0;\nactive proctype Sender() { c ! 1 }\nactive proctype Receiver() { c ?? 1; got = 1 }\nltl p0 { <> ( got == 1 ) }\n",
+    },
     Construct {
         name: "poll_no_sender",
         pan: Some(1),
-        source: "/* pan -a 1: no sender, so got never becomes 1. */\nchan c = [0] of { bit };\nbit got = 0;\nactive proctype R() { c ? [1]; got = 1 }\nltl p0 { <> ( got ) }\n",
+        source: "chan c = [0] of { bit };\nbyte got = 0;\nactive proctype Receiver() { c ?? 1; got = 1 }\nltl p0 { <> ( got == 1 ) }\n",
     },
     // A handler of two statements: the second statement sets y = 9, which refutes the claim. An
     // engine that ran only the first statement would answer 0 against pan's 1.

@@ -48,6 +48,10 @@ enum FNode {
     RdvRecv {
         channel: String,
         vars: Vec<String>,
+        /// Values the staged message must equal, for a random receive that names values rather than
+        /// variables (`c ?? 1`). spin picks a *matching* message; with one stager in flight that is a
+        /// guard on the staged values.
+        matches: Vec<String>,
         next: usize,
     },
     /// The handler of an `unless`: executable while the body is mid-flight, and taking it leaves
@@ -195,6 +199,21 @@ impl LuaGenerator {
                 nodes[at] = FNode::RdvRecv {
                     channel: self.channel_name(channel),
                     vars: self.rdv_recv_vars(target),
+                    matches: Vec::new(),
+                    next,
+                }
+            }
+            // A random receive that names values pairs with a stager offering those values: spin
+            // picks a matching message, and one stager in flight makes that a guard.
+            Stmt::Recv {
+                channel,
+                target: RecvTarget::RandomMatch(exprs),
+                ..
+            } if self.rendezvous.contains_key(&self.channel_name(channel)) => {
+                nodes[at] = FNode::RdvRecv {
+                    channel: self.channel_name(channel),
+                    vars: Vec::new(),
+                    matches: exprs.iter().map(|e| self.expr_to_lua(e)).collect(),
                     next,
                 }
             }
@@ -432,7 +451,7 @@ impl LuaGenerator {
     }
 
     /// The proctype name the stager reports in the message.
-    fn rendezvous_owner(&self, _channel: &str) -> String {
+    pub(crate) fn rendezvous_owner(&self, _channel: &str) -> String {
         self.current_proctype
             .clone()
             .unwrap_or_else(|| "init".to_string())
@@ -440,7 +459,7 @@ impl LuaGenerator {
 
     /// Which proctypes can be on the sending side of this channel, and how many instances each
     /// has.
-    fn rendezvous_senders(&self, channel: &str) -> Vec<(String, usize)> {
+    pub(crate) fn rendezvous_senders(&self, channel: &str) -> Vec<(String, usize)> {
         self.rendezvous.get(channel).cloned().unwrap_or_default()
     }
 
@@ -844,96 +863,13 @@ impl LuaGenerator {
                     channel,
                     values,
                     next,
-                } => {
-                    // Stage and stay put. The guard rejects a second stage, so the process blocks
-                    // here until a receiver takes it - which is what a capacity-0 send means.
-                    self.emit(&format!(
-                        "    -- step {}: rendezvous send on {}",
-                        i, channel
-                    ));
-                    self.emit(&format!(
-                        "    guard = function(s) return s.{} == {} and not _spin_chan_staged(s, '{}') end,",
-                        step_var, i, channel
-                    ));
-                    let mut args = vec![
-                        "s".to_string(),
-                        format!("'{}'", channel),
-                        format!("'{}'", self.rendezvous_owner(&channel)),
-                        "_spin_pid".to_string(),
-                        next.to_string(),
-                    ];
-                    args.extend(values);
-                    self.emit(&format!(
-                        "    effect = function(s) _spin_chan_stage({}) end,",
-                        args.join(", ")
-                    ));
-                    // It reads the channel and writes it; it does not touch the program counter,
-                    // because completing the send is the receiver's doing.
-                    let mut deps = self.deps_of(None, &[], &[]);
-                    deps.write_field(channel.clone());
-                    deps.reads.insert(channel.clone());
-                    self.emit_deps(&deps);
-                    self.emit(&format!("    label = \"body:step{}\",", i));
-                }
+                } => self.emit_rdv_send(i, &step_var, &channel, &values, next),
                 FNode::RdvRecv {
                     channel,
                     vars,
+                    matches,
                     next,
-                } => {
-                    self.emit(&format!(
-                        "    -- step {}: rendezvous receive on {}",
-                        i, channel
-                    ));
-                    self.emit(&format!(
-                        "    guard = function(s) return s.{} == {} and _spin_chan_staged(s, '{}') end,",
-                        step_var, i, channel
-                    ));
-                    let mut effect = format!("local _m = _spin_chan_pair(s, '{}'); ", channel);
-                    for (k, var) in vars.iter().enumerate() {
-                        effect.push_str(&format!("{} = _m.values[{}]; ", var, k + 1));
-                    }
-                    effect.push_str(&format!("s.{} = {}; ", step_var, next));
-                    // Release the stager: its continuation travelled in the message, and its
-                    // program counter is the only thing that makes the send complete.
-                    for (prefix, instances) in self.rendezvous_senders(&channel) {
-                        for instance in 0..instances {
-                            let stager = if instances == 1 {
-                                prefix.clone()
-                            } else {
-                                format!("{}{}", prefix, instance)
-                            };
-                            effect.push_str(&format!(
-                                "if _m.owner == '{}' and _m.pid == {} then s._step_{} = _m.cont end; ",
-                                prefix.trim_end_matches('_'),
-                                instance,
-                                stager
-                            ));
-                        }
-                    }
-                    self.emit(&format!("    effect = function(s) {} end,", effect));
-                    let mut deps = self.deps_of(None, &[], &[step_var.as_str()]);
-                    deps.reads.insert(channel.clone());
-                    deps.write_field(channel.clone());
-                    for var in &vars {
-                        if let Some(field) = var.strip_prefix("s.") {
-                            deps.write_field(field.to_string());
-                        }
-                    }
-                    // The stager's counter is written here, which no dependency model of one
-                    // process can see; declared so reduction cannot prune the handshake.
-                    for (prefix, instances) in self.rendezvous_senders(&channel) {
-                        for instance in 0..instances {
-                            let stager = if instances == 1 {
-                                prefix.clone()
-                            } else {
-                                format!("{}{}", prefix, instance)
-                            };
-                            deps.write_field(format!("_step_{}", stager));
-                        }
-                    }
-                    self.emit_deps(&deps);
-                    self.emit(&format!("    label = \"body:step{}\",", i));
-                }
+                } => self.emit_rdv_recv(i, &step_var, &channel, &vars, &matches, next),
                 FNode::UnlessEscape {
                     guard,
                     effect,

@@ -112,6 +112,7 @@ mod effects;
 mod effects_guards;
 mod expr_utils;
 mod flatten;
+mod flatten_rdv;
 pub mod optimize;
 mod stmts;
 mod stmts_atomic;
