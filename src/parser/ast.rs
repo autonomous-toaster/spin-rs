@@ -202,6 +202,10 @@ pub enum RecvTarget {
     Poll(Expression),
     /// Random receive (`??`): non-deterministically pick any message
     Random(Vec<String>),
+    /// A random receive whose argument is a value rather than a variable (`c ?? 1`), which spin
+    /// accepts. Held separately so that the generator can refuse the shape by name rather than the
+    /// parser failing with a character offset.
+    RandomMatch(Vec<Expression>),
 }
 
 /// Expressions.

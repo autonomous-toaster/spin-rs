@@ -6,7 +6,6 @@
 //! its own sequencing, so a `do` inside a sequence could not be expressed at all.
 
 use super::*;
-
 /// One step of a flattened proctype body.
 ///
 /// Control flow is resolved at generation time, so a nested selection is not a counter of its own
@@ -199,11 +198,16 @@ impl LuaGenerator {
                     next,
                 }
             }
-            // A poll, an eval-receive or a random receive on a capacity-0 channel inspects a staged
-            // message instead of taking one. The stage/release encoding has no inspect-only half, and
-            // letting the statement fall through to the buffered path made the guard read a queue
-            // that does not exist: the receive silently never fired and the claim was refuted where
-            // pan accepts. Refused by name instead.
+            // A random receive of a value: spin picks a matching message, and the meaning of a match
+            // has to be decided before one can be picked.
+            Stmt::Recv {
+                target: RecvTarget::RandomMatch(_),
+                ..
+            } => nodes[at] = FNode::Refuse("a random receive of a value is not implemented"),
+            // A poll or eval receive on a capacity-0 channel inspects a staged message instead of
+            // taking one, and the stage/release encoding has no inspect-only half. Refused by name.
+            // (v0.5.7 called this fall-through a wrong verdict; the pan 0 belonged to `c ?? 1`, and
+            // for `c ? [1]` pan reports 1 as this engine did.)
             Stmt::Recv {
                 channel, target, ..
             } if self.rendezvous.contains_key(&self.channel_name(channel))

@@ -508,7 +508,24 @@ fn recv_stmt(input: Input) -> IResult<Input, Stmt> {
     let (input, is_random) =
         alt((map(symbol("??"), |_| true), map(symbol("?"), |_| false)))(input)?;
     let (input, target) = if is_random {
-        map(separated_list1(symbol(","), ident), RecvTarget::Random)(input)?
+        // `c ?? x` receives into a variable; `c ?? 1` names a value, which spin also accepts and
+        // which has no encoding here. Parsing the second shape turns a parse error into a refusal
+        // that names the construct.
+        let (rest, args) = separated_list1(symbol(","), expr)(input)?;
+        let all_idents = args.iter().all(|a| matches!(a, Expression::Ident(_)));
+        let target = if all_idents {
+            RecvTarget::Random(
+                args.into_iter()
+                    .filter_map(|a| match a {
+                        Expression::Ident(s) => Some(s),
+                        _ => None,
+                    })
+                    .collect(),
+            )
+        } else {
+            RecvTarget::RandomMatch(args)
+        };
+        (rest, target)
     } else {
         alt((
             // `?[expr]` - poll receive: check without consuming

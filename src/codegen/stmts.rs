@@ -149,6 +149,19 @@ impl LuaGenerator {
     pub(crate) fn emit_recv_stmt(&mut self, channel: &Expression, target: &RecvTarget) {
         let chan_name = self.channel_to_lua(channel);
         match target {
+            // A random receive of a value has no encoding: spin picks a matching message, and this
+            // engine would have to decide what "matching" means before it can pick one. Refused by
+            // name rather than parsed and then guessed at.
+            RecvTarget::RandomMatch(_) => {
+                self.open_opaque_transition();
+                self.indent += 1;
+                self.emit(
+                    "    guard = function(s) error('a random receive of a value is not implemented') end,",
+                );
+                self.emit("    effect = function(s) end");
+                self.indent -= 1;
+                self.emit("    })");
+            }
             RecvTarget::VarList(vars) => {
                 let vars_str = vars.join(", ");
                 self.open_opaque_transition();
