@@ -130,6 +130,42 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(0),
         source: "/* An accept-labelled state named only by a branch no reachable state can satisfy. pan -a 0:\n   the edge exists, so a translation that reads a branch body instead of its condition makes the\n   accept state reachable and refutes a claim pan accepts. */\nbyte x = 0;\nactive proctype P() { x = 1 }\nnever {\nT0:\n    do\n    :: (x == 7) -> goto accept_x\n    :: (1)     -> goto T0\n    od;\naccept_x:\n    skip\n}\n",
     },
+    // The four boolean rows from the consumer's table: Promela has no boolean type, so `false` is
+    // the integer 0 and `true` is 1, on initialisation and on assignment.
+    Construct {
+        name: "assert_not_bool_false",
+        pan: Some(0),
+        source: "bool flag = false;\nactive proctype P() { assert(!flag) }\n",
+    },
+    Construct {
+        name: "assert_bool_equals_zero",
+        pan: Some(0),
+        source: "bool flag = false;\nactive proctype P() { assert(flag == 0) }\n",
+    },
+    Construct {
+        name: "assign_bool_literal",
+        pan: Some(1),
+        source: "bool flag = false;\nactive proctype P() { flag = true }\nltl p0 { [] ( !flag ) }\n",
+    },
+    Construct {
+        name: "assign_bool_to_bool",
+        pan: Some(0),
+        source: "bool a = true;\nbool b = false;\nactive proctype P() { b = a; assert(b == 1) }\n",
+    },
+    // An inspects-only receive with no sender: pan looks for an accepting cycle, and there is none
+    // because the claim never fires. Refused here.
+    Construct {
+        name: "poll_no_sender",
+        pan: Some(1),
+        source: "/* pan -a 1: no sender, so got never becomes 1. */\nchan c = [0] of { bit };\nbit got = 0;\nactive proctype R() { c ? [1]; got = 1 }\nltl p0 { <> ( got ) }\n",
+    },
+    // A handler of two statements: the second statement sets y = 9, which refutes the claim. An
+    // engine that ran only the first statement would answer 0 against pan's 1.
+    Construct {
+        name: "unless_multi_handler",
+        pan: Some(1),
+        source: "byte x = 0;\nbyte y = 0;\nactive proctype P() { { x = 1; y = 2 } unless { (x == 1); y = 9 } }\nltl p0 { [] ( y <= 2 ) }\n",
+    },
 ];
 
 /// What this engine answered for one construct.

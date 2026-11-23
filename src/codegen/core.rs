@@ -291,6 +291,12 @@ impl LuaGenerator {
                 _ => None,
             })
             .collect();
+        // Every capacity-0 channel is a rendezvous channel, whether or not some body sends on it: a
+        // receiver with no sender is exactly the shape a poll-on-a-rendezvous model has, and building
+        // this map only from send sites let that shape fall through to the buffered path.
+        for name in &zero_capacity {
+            self.rendezvous.entry(name.clone()).or_default();
+        }
         for decl in &model.declarations {
             if let TopLevel::Proctype(p) = decl {
                 let count = if p.active {
