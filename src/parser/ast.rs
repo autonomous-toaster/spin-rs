@@ -24,6 +24,10 @@ pub enum TopLevel {
     ChanDecl {
         name: String,
         capacity: i64,
+        /// How many fields one message carries, which decides whether a send or a receive has the
+        /// right number of values. pan rejects a mismatch at run time, so a model that has one has
+        /// no verdict to agree with; a refusal here is the honest answer, and it needs the count.
+        fields: usize,
         line: usize,
     },
     PreprocessorDirective(String),
@@ -39,6 +43,8 @@ pub enum TopLevel {
         size: i64,
         /// Messages each element can hold. Promela writes it as `chan c[2] = [1] of { bit }`.
         capacity: i64,
+        /// Fields per message, as for `ChanDecl`.
+        fields: usize,
         line: usize,
     },
     /// Mtype declaration: mtype = { name1, name2, ... }

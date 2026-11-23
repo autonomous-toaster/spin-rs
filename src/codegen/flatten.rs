@@ -11,7 +11,7 @@ use super::*;
 /// Control flow is resolved at generation time, so a nested selection is not a counter of its own
 /// but a step whose options jump elsewhere in the same step space. That is what lets a `do` sit
 /// inside a sequence, which the previous step machine could not express and refused.
-enum FNode {
+pub(crate) enum FNode {
     /// A statement that runs at one step and continues at `next`.
     Simple { stmt: Stmt, next: usize },
     /// A selection: one transition per option, each jumping to the branch it chose.
@@ -86,7 +86,7 @@ pub(crate) struct HandlerStepNode {
 /// legal, and the second is how a receive is written as a guard. The parser reports the first as a
 /// condition and the second as a body whose first statement is the guard, so both spellings are
 /// carried here and the emitter uses whichever is present.
-struct SelectOption {
+pub(crate) struct SelectOption {
     condition: Option<Expression>,
     /// The Lua guard derived from the first statement, already in state form.
     stmt_guard: Option<String>,
@@ -163,6 +163,12 @@ impl LuaGenerator {
         nodes: &mut Vec<FNode>,
         labels: &mut Vec<(String, usize)>,
     ) {
+        // Arity settles before any encoding: a model whose send or receive does not match its
+        // channel's declaration has no verdict pan would give, only a run-time rejection.
+        if let Some(node) = self.arity_refuse(s) {
+            nodes[at] = node;
+            return;
+        }
         match s {
             // A branch continues at the join; a loop body continues at its own selection, and a
             // break leaves it for `next`.
@@ -230,12 +236,6 @@ impl LuaGenerator {
                     next,
                 }
             }
-            // A random receive of a value: spin picks a matching message, and the meaning of a match
-            // has to be decided before one can be picked.
-            Stmt::Recv {
-                target: RecvTarget::RandomMatch(_),
-                ..
-            } => nodes[at] = FNode::Refuse("a random receive of a value is not implemented"),
             // A poll receive on a capacity-0 channel has no queue to inspect, and pan does not pair it
             // with a waiting sender either: measured, `c ? [1]` beside a sender leaves the claim about
             // the following statement refuted (pan 1, plain and -a), so the receiver waits. A step that
@@ -334,7 +334,7 @@ impl LuaGenerator {
                 self.flayout_seq(body, body_at, upd_at, next, nodes, labels);
                 self.flayout_stmt(update, upd_at, sel_at, brk, nodes, labels);
             }
-            Stmt::Run(_, _, _) => nodes[at] = FNode::Refuse("run"),
+            Stmt::Run(_, _, _) => nodes[at] = FNode::Refuse("run is not supported inside a body"),
             // `P unless Q`: Q has priority. Every step of the body is disabled exactly where Q is
             // executable, and one transition takes Q and leaves the body. The alternative encoding
             // - Q merely enabled alongside the body - explores runs where the body continues past
@@ -424,7 +424,7 @@ impl LuaGenerator {
     }
 
     /// The channel's Promela name, for the rendezvous helpers.
-    fn channel_name(&self, channel: &Expression) -> String {
+    pub(crate) fn channel_name(&self, channel: &Expression) -> String {
         match channel {
             Expression::Ident(n) => n.clone(),
             Expression::ArrayAccess { name, .. } => name.clone(),
@@ -625,6 +625,20 @@ impl LuaGenerator {
                             field(&v[0])
                         ),
                     ),
+                    // A random receive that names values searches the queue for the first
+                    // message whose fields equal them, and `?` alone only ever tests the head.
+                    // That difference is measurable with two messages present: `c ! 1; c ! 2;
+                    // c ? 2` blocks where `c ?? 2` takes the 2.
+                    RecvTarget::RandomMatch(exprs) => {
+                        let args: String = exprs
+                            .iter()
+                            .map(|e| format!(", {}", self.expr_to_lua(e)))
+                            .collect();
+                        (
+                            format!(" and _spin_chan_has_match(s, {}{})", chan, args),
+                            format!("_spin_chan_recv_match(s, {}{}); ", chan, args),
+                        )
+                    }
                     // A poll inspects the head without taking it, so it has a guard and no effect.
                     RecvTarget::Poll(e) => (
                         format!(
@@ -671,7 +685,11 @@ impl LuaGenerator {
         let total: usize = exec.iter().map(|s| self.fsize(s)).sum();
         let end = total;
         let mut nodes: Vec<FNode> = Vec::with_capacity(end + 1);
-        nodes.resize_with(end + 1, || FNode::Refuse("unreached"));
+        nodes.resize_with(end + 1, || {
+            FNode::Refuse(
+                "a step was laid out but never assigned a node: this is a bug in the layout",
+            )
+        });
         nodes[end] = FNode::Halt;
 
         let mut labels: Vec<(String, usize)> = Vec::new();
@@ -681,7 +699,10 @@ impl LuaGenerator {
         // the vector while emitting into it.
         #[allow(clippy::needless_range_loop)]
         for i in 0..nodes.len() {
-            let node = std::mem::replace(&mut nodes[i], FNode::Refuse("taken"));
+            let node = std::mem::replace(
+                &mut nodes[i],
+                FNode::Refuse("a step was emitted twice: this is a bug in the layout"),
+            );
             // A body step inside an `unless` is disabled exactly where the handler is
             // executable: pan gives the escape priority, so the body may not move.
             let preempt: String = self
@@ -935,14 +956,7 @@ impl LuaGenerator {
                     self.emit_opaque_deps();
                     self.emit(&format!("    label = \"body:step{}\",", i));
                 }
-                FNode::Refuse(why) => {
-                    self.emit(&format!(
-                        "    guard = function(s) error('{} is not supported inside a body') end,",
-                        why
-                    ));
-                    self.emit("    effect = function(s) end,");
-                    self.emit_opaque_deps();
-                }
+                FNode::Refuse(why) => self.emit_refuse_step(i, why),
                 FNode::Select { .. } => unreachable!("handled above"),
             }
             self.indent -= 1;

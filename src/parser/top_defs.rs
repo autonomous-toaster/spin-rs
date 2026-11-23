@@ -203,9 +203,9 @@ pub(crate) fn chan_array_decl(input: Input) -> IResult<Input, TopLevel> {
         let (i, _) = ws_char(']')(i)?;
         let (i, _) = keyword("of")(i)?;
         let (i, _) = ws_char('{')(i)?;
-        let (i, _ty) = var_type(i)?;
+        let (i, types) = separated_list1(symbol(","), message_field)(i)?;
         let (i, _) = ws_char('}')(i)?;
-        Ok((i, cap))
+        Ok((i, (cap, types.len())))
     })(input)?;
     let (input, _) = opt(symbol(";"))(input)?;
     Ok((
@@ -213,7 +213,8 @@ pub(crate) fn chan_array_decl(input: Input) -> IResult<Input, TopLevel> {
         TopLevel::ChannelArray {
             name: name.to_string(),
             size,
-            capacity: rest.unwrap_or(0),
+            capacity: rest.map(|(cap, _)| cap).unwrap_or(0),
+            fields: rest.map(|(_, n)| n).unwrap_or(1),
             line: 0,
         },
     ))
@@ -240,9 +241,10 @@ pub(crate) fn chan_decl(input: Input) -> IResult<Input, TopLevel> {
     let (input, _) = keyword("of")(input)?;
     let (input, _) = ws_char('{')(input)?;
     // A message may carry several typed fields, and a field type may be a named mtype. The types
-    // are parsed and not stored: a message is a list of values here, which is what send and
-    // receive carry.
-    let (input, _) = separated_list1(symbol(","), message_field)(input)?;
+    // are not stored - a message is a list of values here - but the *count* is, because pan rejects
+    // a send or a receive whose arity does not match the declaration and a model that does it has
+    // no verdict to agree with.
+    let (input, fields) = separated_list1(symbol(","), message_field)(input)?;
     let (input, _) = ws_char('}')(input)?;
     // The terminator is optional in Promela, and spin's own examples omit it.
     let (input, _) = opt(symbol(";"))(input)?;
@@ -251,6 +253,7 @@ pub(crate) fn chan_decl(input: Input) -> IResult<Input, TopLevel> {
         TopLevel::ChanDecl {
             name: name.to_string(),
             capacity,
+            fields: fields.len(),
             line: 0,
         },
     ))

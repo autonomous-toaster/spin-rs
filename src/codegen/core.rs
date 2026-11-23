@@ -14,6 +14,7 @@ impl LuaGenerator {
             current_done: None,
             current_step: None,
             rendezvous: std::collections::BTreeMap::new(),
+            channel_fields: std::collections::BTreeMap::new(),
             preempt: Vec::new(),
             var_types: std::collections::HashMap::new(),
             global_vars: std::collections::HashSet::new(),
@@ -289,6 +290,25 @@ impl LuaGenerator {
     pub(crate) fn emit_proctypes(&mut self, model: &PromelaModel) {
         // Which channels are rendezvous, and who can be on the sending side of each.
         self.rendezvous.clear();
+        self.channel_fields.clear();
+        for decl in &model.declarations {
+            match decl {
+                TopLevel::ChanDecl {
+                    name,
+                    fields,
+                    capacity,
+                    ..
+                } => {
+                    self.channel_fields.insert(name.clone(), *fields);
+                    // A type-less `chan c[N];` declares rendezvous elements.
+                    let _ = capacity;
+                }
+                TopLevel::ChannelArray { name, fields, .. } => {
+                    self.channel_fields.insert(name.clone(), *fields);
+                }
+                _ => {}
+            }
+        }
         let zero_capacity: std::collections::HashSet<String> = model
             .declarations
             .iter()

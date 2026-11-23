@@ -198,6 +198,44 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(1),
         source: "byte x = 0;\nbyte y = 0;\nactive proctype P() { { x = 1; y = 2 } unless { (x == 1); y = 9 } }\nltl p0 { [] ( y <= 2 ) }\n",
     },
+    // `?` tests the head and `??` searches the queue: with 1 at the head, `c ?? 2` takes the 2 and
+    // the following receive still finds a message, where `c ? 2` would block. Two receives after
+    // the random one is what makes the difference visible - one receive cannot tell a search
+    // from a head test, because either way a message is left behind.
+    Construct {
+        name: "buf_random_search",
+        pan: Some(1),
+        source: "chan c = [2] of { byte };\nbyte y = 0;\nbyte z = 0;\nbyte done = 0;\nactive proctype P() { c ! 1; c ! 2; c ?? 2; c ? y; c ? z; done = 1 }\nltl p0 { <> ( done ) }\n",
+    },
+    // The search starts at the head: with the queue [1, 2, 1] and `c ?? 1`, pan removes the
+    // *first* 1, leaving [2, 1], so the next receive binds 2. Removing the last match instead
+    // leaves [1, 2] and the assertion fails - measured, this is pan 0.
+    Construct {
+        name: "buf_random_first_match",
+        pan: Some(0),
+        source: "chan c = [3] of { byte };\nbyte a = 0;\nbyte b = 0;\nactive proctype P() { c ! 1; c ! 2; c ! 1; c ?? 1; c ? a; c ? b; assert(a == 2) }\n",
+    },
+    // A plain receive naming a value does not search: the head is 1, so it blocks and `done` is
+    // never set.
+    Construct {
+        name: "buf_match_head_only",
+        pan: Some(1),
+        source: "chan c = [2] of { byte };\nbyte y = 0;\nbyte done = 0;\nactive proctype P() { c ! 1; c ! 2; c ? 2; done = 1 }\nltl p0 { <> ( done ) }\n",
+    },
+    // The control: with the matching message at the head the same receive is enabled.
+    Construct {
+        name: "buf_match_head_ok",
+        pan: Some(0),
+        source: "chan c = [2] of { byte };\nbyte y = 0;\nbyte done = 0;\nactive proctype P() { c ! 2; c ! 1; c ? 2; done = 1 }\nltl p0 { <> ( done ) }\n",
+    },
+    // A two-field message received into one variable. pan rejects the arity at run time and
+    // reports 1; binding the first field and dropping the second decided 0 here. Refused by
+    // name, because matching pan's number would mean encoding pan's model error as a verdict.
+    Construct {
+        name: "buf_arity_mismatch",
+        pan: Some(1),
+        source: "chan c = [2] of { byte, byte };\nbyte a = 0;\nbyte done = 0;\nactive proctype P() { c ! 1, 7; c ! 2, 8; c ?? 2, 8; c ? a; done = 1 }\nltl p0 { <> ( done ) }\n",
+    },
     // A model that blocks at once, under a claim. pan's summary says "invalid end states -
     // (disabled by never claim)", so its answer is the claim's, not the model's: 0 here and 1 on
     // the [] ( x == 1 ) variant below. Reporting a model-level error refutes a plan whose

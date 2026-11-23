@@ -159,6 +159,8 @@ pub(crate) fn register_all(lua: &mlua::Lua, channels: Registry) -> mlua::Result<
     register_chan_recv_random(lua, Arc::clone(&channels))?;
     register_chan_poll(lua, Arc::clone(&channels))?;
     register_chan_recv_eval(lua, Arc::clone(&channels))?;
+    register_chan_has_match(lua, Arc::clone(&channels))?;
+    register_chan_recv_match(lua, Arc::clone(&channels))?;
     register_rendezvous(lua)?;
     Ok(())
 }
@@ -354,6 +356,60 @@ fn register_chan_recv_random(lua: &mlua::Lua, _channels: Registry) -> mlua::Resu
     Ok(())
 }
 
+/// The index of the first message whose leading fields equal `expected`, if any.
+///
+/// spin's random receive scans the queue from the head and takes the *first* match, which is why
+/// this is a search rather than a choice: measured on `c ! 1; c ! 2; c ! 1; c ?? 1`, pan removes
+/// the message at the head and leaves [2, 1], not the later 1. A pattern of bare variables matches
+/// every message, so for `c ?? x` the first match is the head - the same thing the plain receive
+/// does.
+fn match_index(queue: &[Vec<i64>], expected: &[i64]) -> Option<usize> {
+    queue.iter().position(|msg| {
+        msg.len() >= expected.len() && msg.iter().zip(expected).all(|(a, b)| a == b)
+    })
+}
+
+/// Read the values to match, which are every argument after (state, name).
+fn expected_values(args: &mlua::MultiValue, what: &str) -> mlua::Result<Vec<i64>> {
+    let mut out = Vec::new();
+    for value in args.clone().into_iter().skip(2) {
+        match value {
+            mlua::Value::Integer(i) => out.push(i),
+            mlua::Value::Number(n) => out.push(n as i64),
+            // Never guess at a non-numeric field: a silent skip would turn `c ?? 2` into
+            // `c ?? <anything>` and decide a model against a pattern nobody wrote.
+            other => {
+                return Err(mlua::Error::runtime(format!(
+                    "{}: a match value must be an integer, got {other:?}",
+                    what
+                )));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Is there a message matching these values? The guard half of `_spin_chan_recv_match`.
+fn register_chan_has_match(lua: &mlua::Lua, _channels: Registry) -> mlua::Result<()> {
+    let f = lua.create_function(move |_lua, args: mlua::MultiValue| {
+        let expected = expected_values(&args, "chan_has_match")?;
+        let (state, name, _) = state_and_name(args, "chan_has_match")?;
+        let queue = messages_of(&state, &name)?;
+        Ok(match_index(&queue, &expected).is_some())
+    })?;
+    lua.globals().set("_spin_chan_has_match", f)?;
+    Ok(())
+}
+
+/// Take the first message matching these values. The effect half.
+fn register_chan_recv_match(lua: &mlua::Lua, _channels: Registry) -> mlua::Result<()> {
+    let f = lua.create_function(move |lua, args: mlua::MultiValue| {
+        let expected = expected_values(&args, "chan_recv_match")?;
+        do_recv(lua, args, "chan_recv_match", |q| match_index(q, &expected))
+    })?;
+    lua.globals().set("_spin_chan_recv_match", f)?;
+    Ok(())
+}
 fn register_chan_recv_eval(lua: &mlua::Lua, _channels: Registry) -> mlua::Result<()> {
     let f = lua.create_function(move |lua, args: mlua::MultiValue| {
         // The expected value is the third argument; it must be read before the shared body

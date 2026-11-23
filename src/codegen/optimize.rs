@@ -804,6 +804,7 @@ mod tests {
             declarations: vec![TopLevel::ChanDecl {
                 name: "ch".to_string(),
                 capacity: 0,
+                fields: 1,
                 line: 0,
             }],
             source: None,
@@ -824,6 +825,7 @@ mod tests {
             declarations: vec![TopLevel::ChanDecl {
                 name: "ch".to_string(),
                 capacity: 1,
+                fields: 1,
                 line: 0,
             }],
             source: None,

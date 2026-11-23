@@ -85,6 +85,10 @@ pub(crate) struct LuaGenerator {
     /// which proctypes can be on the other side, hence this map, filled from the AST before any
     /// body is emitted.
     pub(crate) rendezvous: std::collections::BTreeMap<String, Vec<(String, usize)>>,
+    /// Fields per message, per channel name, from the declaration. pan refuses a send or a receive
+    /// whose value count differs from it at run time - there is no verdict to match - so the
+    /// generator refuses that shape by name instead of binding what it can and dropping the rest.
+    pub(crate) channel_fields: std::collections::BTreeMap<String, usize>,
     /// Ranges of a body's steps that an `unless` handler preempts, with the handler's guard.
     ///
     /// A body step inside one of these is disabled exactly where the handler is executable: pan's
@@ -113,6 +117,7 @@ mod effects_guards;
 mod expr_utils;
 mod flatten;
 mod flatten_rdv;
+mod flatten_refuse;
 mod flatten_unless;
 pub mod optimize;
 mod stmts;

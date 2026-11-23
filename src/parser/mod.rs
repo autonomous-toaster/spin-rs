@@ -486,18 +486,24 @@ fn send_stmt(input: Input) -> IResult<Input, Stmt> {
     } else {
         alt((map(expr, SendTarget::Value), map(ident, SendTarget::Ident)))(input)?
     };
-    let (input, args) = opt(delimited(
+    // Promela writes a multi-field send as `c ! a, b` - bare commas, no parentheses. Only the
+    // parenthesised form was accepted, so every model with a two-field message failed to parse at
+    // the comma and the message it carried was never modelled at all. Both spellings are accepted.
+    let (input, extra) = many0(preceded(symbol(","), expr))(input)?;
+    let (input, parenthesised) = opt(delimited(
         ws_char('('),
         separated_list0(symbol(","), expr),
         ws_char(')'),
     ))(input)?;
     let (input, _) = opt(symbol(";"))(input)?;
+    let mut args = extra;
+    args.extend(parenthesised.unwrap_or_default());
     Ok((
         input,
         Stmt::Send {
             channel: Box::new(channel),
             target: target_val,
-            args: args.unwrap_or_default(),
+            args,
             line: 0,
         },
     ))

@@ -142,9 +142,13 @@ categories below, because this engine answers three ways and only one of them is
 - **Types**: `bit`, `bool`, `byte`, `short`, `int`, `unsigned(n)`, `mtype`; values are truncated to
   the declared type on assignment (`byte x = 255; x = x + 1` leaves 0); `/` and `%` follow C, so
   `-7 % 2` is -1; a guard is true when it is non-zero, so `(n)` with `n == 0` is false.
-- **Channels**: buffered (`[N]`), arrays (`chan c[N] = [cap] of { t }`), send and receive as
-  statements and as guards, `len`/`full`/`empty`/`nfull`/`nempty`. A channel's queue is part of the
-  state, so a state always determines its own transitions.
+- **Channels**: buffered (`[N]`), arrays (`chan c[N] = [cap] of { t }`), multi-field messages
+  (`chan c = [2] of { byte, byte }`, sent as `c ! a, b`), send and receive as statements and as
+  guards, `len`/`full`/`empty`/`nfull`/`nempty`. A channel's queue is part of the state, so a state
+  always determines its own transitions. A receive that names a value tests the **head** only
+  (`c ? 2` blocks with 1 at the head even when a 2 is queued behind it), where `c ?? 2` **searches**
+  from the head and takes the first match - measured against pan with two messages in the queue,
+  where the difference is observable.
 - **`never` claims**, for a monitor body: guards, `assert`, `skip`, labels, `goto`, `do`/`od`,
   `if`/`fi`, `atomic`. The claim becomes an automaton run by the same product search as an LTL
   formula. A run is a violation when the claim completes, when an `assert` inside it fails, or when
@@ -187,6 +191,7 @@ These are hard errors. No verdict is produced, so nothing about the model is cla
 | construct | why |
 |---|---|
 | `run P(...)` | a spawned process needs dynamic instances; the transition table is emitted per static instance, and there is no measured pan answer to encode against |
+| a send or receive whose value count differs from the declared field count of its channel | pan rejects it at run time, so there is no verdict to match; binding the first field and dropping the rest decided 0 where pan reports 1 |
 | a poll or eval-receive on a rendezvous channel | the stage/release encoding pairs a send with a plain receive; a polling receive inspects rather than pairs |
 | a `never` claim whose body assigns, sends or receives | that is a program, not a monitor |
 | typedef records (`r.f`) | structured fields are not in the state |
