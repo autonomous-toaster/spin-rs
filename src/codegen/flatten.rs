@@ -90,6 +90,8 @@ impl LuaGenerator {
                     .sum();
                 1 + bodies
             }
+            // A block occupies exactly the steps of its statements.
+            Stmt::Block(body, _) => body.iter().map(|s| self.fsize(s)).sum::<usize>().max(1),
             // `unless` is the body plus one step for the handler.
             Stmt::Unless { body, handler, .. } => {
                 let body_size: usize = body.iter().map(|s| self.fsize(s)).sum();
@@ -197,6 +199,20 @@ impl LuaGenerator {
                     next,
                 }
             }
+            // A poll, an eval-receive or a random receive on a capacity-0 channel inspects a staged
+            // message instead of taking one. The stage/release encoding has no inspect-only half, and
+            // letting the statement fall through to the buffered path made the guard read a queue
+            // that does not exist: the receive silently never fired and the claim was refuted where
+            // pan accepts. Refused by name instead.
+            Stmt::Recv {
+                channel, target, ..
+            } if self.rendezvous.contains_key(&self.channel_name(channel))
+                && !matches!(target, RecvTarget::VarList(_)) =>
+            {
+                nodes[at] = FNode::Refuse(
+                    "a poll or eval receive on a rendezvous channel is not implemented",
+                )
+            }
             // A receive that binds several variables would need the message as a table; the
             // runtime hands back one value. Refused rather than binding the first and dropping the
             // rest.
@@ -206,6 +222,12 @@ impl LuaGenerator {
             } if v.len() > 1 => {
                 nodes[at] =
                     FNode::Refuse("a receive that binds more than one variable is not supported")
+            }
+            // A bare block is a sequence: lay the statements out in place, so the block costs no
+            // step and its statements interleave with the surrounding body exactly as if the braces
+            // were absent - which is what Promela means by them.
+            Stmt::Block(body, _) => {
+                self.flayout_seq(body, at, next, brk, nodes, labels);
             }
             Stmt::Break(_) => nodes[at] = FNode::Jump(brk),
             Stmt::Goto(l, _) => nodes[at] = FNode::Goto(l.clone()),

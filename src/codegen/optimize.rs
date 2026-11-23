@@ -418,7 +418,9 @@ pub fn is_deterministic(stmt: &Stmt) -> bool {
         Stmt::Printf(_, _, _) => true,
         Stmt::Assert(_, _) => true,
         Stmt::VarDecl(_) | Stmt::VarDecls(_) | Stmt::Label(_, _) => true,
-        Stmt::Atomic(body, _) | Stmt::DStep(body, _) => body.iter().all(is_deterministic),
+        Stmt::Atomic(body, _) | Stmt::DStep(body, _) | Stmt::Block(body, _) => {
+            body.iter().all(is_deterministic)
+        }
         Stmt::If(guards) => {
             // If with a single guard that has no condition (else) is deterministic
             guards.len() == 1 && guards[0].condition.is_none()

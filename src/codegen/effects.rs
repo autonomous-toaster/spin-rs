@@ -4,6 +4,12 @@ use crate::parser::ast::*;
 impl LuaGenerator {
     pub(crate) fn emit_effect_for_stmt(&mut self, stmt: &Stmt) {
         match stmt {
+            // A block is a sequence: the emitters below are the ones that lay out sequences.
+            Stmt::Block(body, _) => {
+                for s in body {
+                    self.emit_effect_for_stmt(s);
+                }
+            }
             Stmt::Assignment { target, value, .. } => self.emit_assignment_effect(target, value),
             Stmt::Skip(_) => self.emit_skip_effect(),
             Stmt::Break(_) => self.emit_break_effect(),

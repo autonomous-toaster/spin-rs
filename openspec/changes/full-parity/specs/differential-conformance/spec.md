@@ -80,9 +80,9 @@ WHEN T1.2 classifies the run
 THEN the outcome SHALL be decline and not agreement.
 
 ### Requirement: Baseline Before Rewrite
-T1.3 SHALL complete BEFORE T1.1 SHALL run.
+The baseline report SHALL record ALWAYS the outcome counts at the commit before the execution model changes (T1.3).
 
-The baseline is recorded at the commit before the execution model changes, so that the effect of the execution model is measured rather than claimed.
+The baseline exists so that the effect of the execution model is measured rather than claimed.
 
 #### Scenario: baseline recorded
 GIVEN the binary at the commit before the execution model changes
@@ -118,7 +118,9 @@ WHEN T5.7 has run
 THEN the verdict SHALL match pan's, and no accepting cycle SHALL be reported on the strength of a finished process.
 
 ### Requirement: The Old Path Retires Last
-The generator SHALL delete the old statement emitters AFTER the corpus and the gate pass on the new path (T2.9).
+The generator SHALL delete ALWAYS the old statement emitters only once the gate is green on the new path (T2.9).
+
+A green gate before the deletion makes a deletion that changes a verdict attributable.
 
 #### Scenario: deletion keeps the gate green
 GIVEN the corpus green on the flattened path

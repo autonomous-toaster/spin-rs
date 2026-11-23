@@ -160,6 +160,12 @@ pub enum Stmt {
         handler: Vec<Stmt>,
         line: usize,
     },
+    /// A bare block: a sequence of statements in braces, with no atomicity of its own.
+    ///
+    /// It is what `{ body } unless { handler }` is written with, and the parser had no statement
+    /// for it, so the whole model failed to parse with a character offset - a shape the consumer's
+    /// sweep counted as a malformed model of theirs rather than as a construct of ours.
+    Block(Vec<Stmt>, usize),
     Run(String, Vec<Expression>, usize),
     Label(String, usize),
     For {

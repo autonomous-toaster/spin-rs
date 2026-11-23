@@ -129,7 +129,9 @@ WHEN T2.3 has run
 THEN the process SHALL report no enabled transition, and the derived condition SHALL be the only reason.
 
 ### Requirement: Folds Retire With Their Cause
-The generator SHALL remove a shape-specific repair AFTER the control-flow graph covers the shape that the repair protected (T2.8, T2.10, T2.12, T2.13, T2.16).
+The generator SHALL remove ALWAYS a shape-specific repair only once the sequencing sweep covers the shape that the repair protected (T2.8).
+
+A removal that changes a verdict is attributable when the sweep covered the shape before the removal.
 
 The regression for a removed repair is held by the sequencing sweep, and a nested do, a fused region, a nested if and a trailing statement are covered by steps rather than by a special case.
 
@@ -147,6 +149,21 @@ A statement dropped from the step space is a silent wrong: the model runs, the s
 GIVEN a body containing a statement kind that the step machine does not encode
 WHEN T2.14 has run
 THEN the run SHALL fail with a diagnostic naming the statement kind, and no verdict SHALL be produced.
+
+### Requirement: A Nested Construct Is A Step
+The step space SHALL express ALWAYS a nested construct as a step of the enclosing body (T2.10, T2.12, T2.13, T2.16).
+
+A nested do, a fused region, a nested if and a statement after a for loop each occupy a position in the same step space rather than a counter or a special case of their own.
+
+#### Scenario: a nested do inside a sequence
+GIVEN a body of one assignment followed by a do loop
+WHEN T2.10 has run
+THEN the loop body SHALL occupy steps of the same step space as the assignment.
+
+#### Scenario: a fused region inside a sequence
+GIVEN a body of one assignment followed by an atomic region
+WHEN T2.12 has run
+THEN the region SHALL occupy one step and its statements SHALL NOT be separately reachable.
 
 ### Requirement: A Region Runs As One Step
 The generator SHALL fuse ALWAYS an atomic or d_step region into one transition, conjoining the guards and concatenating the effects (T2.4).

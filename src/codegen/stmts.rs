@@ -212,6 +212,11 @@ impl LuaGenerator {
     pub(crate) fn emit_stmts(&mut self, stmts: &[Stmt], depth: usize) {
         for stmt in stmts {
             match stmt {
+                // A block is a sequence: recurse rather than emit a transition for the braces.
+                Stmt::Block(body, _) => {
+                    self.emit_stmts(body, depth);
+                    continue;
+                }
                 Stmt::Assignment {
                     target,
                     field,
@@ -323,6 +328,8 @@ impl LuaGenerator {
     /// Extract guard expression for a statement (for combined guards in d_step/atomic)
     pub(crate) fn guard_for_stmt(&self, stmt: &Stmt) -> String {
         match stmt {
+            // A block has no guard of its own: its statements carry their guards.
+            Stmt::Block(..) => "true".to_string(),
             // `guard_for_stmt` is spliced into a generated guard whose state is `s`.
             Stmt::Send { channel, .. } => {
                 format!("not chan_full(s, {})", self.channel_to_lua(channel))

@@ -114,6 +114,7 @@ fn stmt_inner(input: Input) -> IResult<Input, Stmt> {
         printf_stmt,
         run_stmt,
         for_stmt,
+        block_stmt,
         skip_stmt,
         recv_stmt,
         var_decl_stmt,
@@ -159,6 +160,15 @@ fn incr_stmt(input: Input) -> IResult<Input, Stmt> {
         map(terminated(ident, symbol("++")), |name| build(name, 1)),
         map(terminated(ident, symbol("--")), |name| build(name, -1)),
     ))(input)
+}
+
+/// A bare block: `{ stmt; stmt }`.
+///
+/// A block is a sequence, not an atomic region: the statements inside run one at a time, as they do
+/// outside the braces.
+fn block_stmt(input: Input) -> IResult<Input, Stmt> {
+    let (input, body) = delimited(ws_char('{'), many0(stmt), ws_char('}'))(input)?;
+    Ok((input, Stmt::Block(body, 0)))
 }
 
 fn assignment_stmt(input: Input) -> IResult<Input, Stmt> {
