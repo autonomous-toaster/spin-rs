@@ -118,7 +118,12 @@ impl LuaGenerator {
                 // it saw that process's pid: Peterson's two instances both behaved as pid 1, and
                 // the mutual exclusion assertion was refuted.
                 if name == "_pid" {
-                    "_spin_pid".to_string()
+                    // In a transition this is the id of the process making it; in the state layout
+                    // there is no such process, and `_pid` is the instance being laid out.
+                    match self.pid_override {
+                        Some(pid) => pid.to_string(),
+                        None => "_spin_pid".to_string(),
+                    }
                 } else if self.global_vars.contains(name.as_str()) {
                     // Global variables are stored unprefixed in the state.
                     format!("{}.{}", self.state_var, name)

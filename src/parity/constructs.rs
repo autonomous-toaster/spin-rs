@@ -173,6 +173,21 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(1),
         source: "chan c = [0] of { bit };\nbyte got = 0;\nactive proctype Receiver() { c ?? 1; got = 1 }\nltl p0 { <> ( got == 1 ) }\n",
     },
+    // A local initialised from `_pid`. `_pid` is the id of the process whose transition this is, so
+    // in the state layout - which lays out every instance of a proctype one after another - it is
+    // the instance index. Emitting it as the per-transition constant failed the whole initial
+    // state, which is what ex_3a.pml hit.
+    Construct {
+        name: "pid_initialiser",
+        pan: Some(0),
+        source: "active [2] proctype p() { byte i = _pid; assert(i <= 1) }\n",
+    },
+    // The control: instance 1 has i == 1, so this assertion is refuted.
+    Construct {
+        name: "pid_initialiser_refutes",
+        pan: Some(1),
+        source: "active [2] proctype p() { byte i = _pid; assert(i == 0) }\n",
+    },
     // `set_priority` moves a process's scheduling priority at run time. The filter here reads the
     // priorities declared on the proctype, so a model that moves them is scheduled by pan and not
     // by us. The emitter also passed the arguments without the state, so it crashed rather than

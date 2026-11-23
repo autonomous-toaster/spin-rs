@@ -216,6 +216,11 @@ pub struct LuaModel {
     /// True when any process contains an assert, so the failure marker is observable and no
     /// claim may reduce away the transition that writes it.
     has_asserts: bool,
+    /// Does any body jump through a label?
+    ///
+    /// A jump step declares only the step counter as a dependency, which makes it look independent of
+    /// every other process - and the reduction then drops the interleavings that a labelled loop needs.
+    has_labels: bool,
     /// Names of the fields the state table actually carries, read once from the initial state.
     /// Reduction asks which of these a claim can observe, so it needs the real field names
     /// (p1_x, t1_done) rather than the Promela identifiers they came from.
@@ -360,6 +365,11 @@ impl LuaModel {
             crate::parser::ast::TopLevel::Init(i) => stmts_have_assert(&i.body),
             _ => false,
         });
+        let has_labels = model.declarations.iter().any(|d| match d {
+            crate::parser::ast::TopLevel::Proctype(p) => stmts_have_label(&p.body),
+            crate::parser::ast::TopLevel::Init(i) => stmts_have_label(&i.body),
+            _ => false,
+        });
 
         // Owner name to priority, for the processes that declare one. The owner is the prefix the
         // generator uses, which carries the instance number when there is more than one.
@@ -395,6 +405,7 @@ impl LuaModel {
             process_count,
             eval_error: std::cell::RefCell::new(None),
             has_asserts,
+            has_labels,
             state_fields,
             priorities,
             atom_model: model.clone(),
@@ -538,6 +549,16 @@ impl Model for LuaModel {
         // No fields means the initial state could not be read, so nothing is known about what
         // any claim observes. Returning no scopes leaves the search unreduced, which is correct.
         if self.state_fields.is_empty() {
+            return Vec::new();
+        }
+        // A model with goto or labels is not reduced.
+        //
+        // Measured on spin's own ex_3c.pml: reduced, 77 states and no error; unreduced, 858 states and
+        // the assertion pan reports (1). A jump step touches only the step counter, so the ample-set
+        // computation sees it as independent of everything - and a body that loops back through a
+        // label then loses the interleaving that puts two processes in the same critical section. The
+        // reduction is a performance device; a model it makes appear correct is worse than a slow one.
+        if self.has_labels {
             return Vec::new();
         }
         let all: std::collections::BTreeSet<String> = self.state_fields.iter().cloned().collect();
@@ -883,6 +904,23 @@ fn stmt_has_assert(s: &crate::parser::ast::Stmt) -> bool {
     }
 }
 
+/// Does any statement of this body use a label or a goto?
+///
+/// The reduction must not be applied to such a model: a jump declares only the step counter as a
+/// dependency, so it looks independent of every other process, and a body that loops back through a
+/// label loses the interleavings it exists to produce.
+fn stmts_have_label(body: &[crate::parser::ast::Stmt]) -> bool {
+    let mut found = false;
+    crate::codegen::walk_stmts(body, &mut |s| {
+        if matches!(
+            s,
+            crate::parser::ast::Stmt::Label(_, _) | crate::parser::ast::Stmt::Goto(_, _)
+        ) {
+            found = true;
+        }
+    });
+    found
+}
 fn stmts_have_assert(stmts: &[crate::parser::ast::Stmt]) -> bool {
     stmts.iter().any(stmt_has_assert)
 }

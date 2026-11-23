@@ -120,6 +120,13 @@ pub(crate) struct LuaGenerator {
     /// an index of a nil global, which failed the whole initial state and, before that failure was
     /// reported, made the model explore nothing and pass.
     pub(crate) state_var: String,
+    /// The value `_pid` takes while the state layout is being emitted.
+    ///
+    /// `_pid` is the id of the process whose transition this is, so in a transition it is a constant
+    /// of the emitted function. In the layout it is the *instance* index of the declaration being
+    /// laid out - which is why a local initialised from `_pid` (`pid k, i = _pid, j = 1 - _pid`) can be
+    /// emitted at all: it is a different constant per instance, not an unbound name.
+    pub(crate) pid_override: Option<i64>,
     pub(crate) inlines: std::collections::HashMap<String, crate::parser::ast::InlineDef>,
     /// Label step numbers for goto/break/label: label_name -> step_number
     pub(crate) label_steps: std::collections::HashMap<String, usize>,
@@ -307,27 +314,6 @@ pub(crate) fn model_shape_refusal(model: &crate::parser::ast::PromelaModel) -> O
             // bound - it is the id of the process whose transition this is. The initial state then
             // failed to build, which used to be swallowed into an empty state space and a clean
             // verdict. Refused by name until initialisers are evaluated per instance.
-            let decls: Vec<&crate::parser::ast::VarDecl> = match s {
-                crate::parser::ast::Stmt::VarDecl(d) => vec![d],
-                crate::parser::ast::Stmt::VarDecls(ds) => ds.iter().collect(),
-                _ => Vec::new(),
-            };
-            for d in decls {
-                let Some(init) = &d.init else { continue };
-                let mut uses_pid = false;
-                walk_expr(init, &mut |x| {
-                    if matches!(x, E::Ident(n) if n == "_pid") {
-                        uses_pid = true;
-                    }
-                });
-                if uses_pid {
-                    found = Some(format!(
-                        "a local variable initialised from _pid is not supported: the initialiser runs once for the whole state, and _pid is bound per instance; in '{}'",
-                        p
-                    ));
-                    return;
-                }
-            }
             let mut es = Vec::new();
             stmt_exprs(s, &mut es);
             // A call the emitter does not know becomes a Lua call to a global nothing defines, which

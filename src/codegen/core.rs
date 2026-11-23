@@ -19,6 +19,7 @@ impl LuaGenerator {
             var_types: std::collections::HashMap::new(),
             global_vars: std::collections::HashSet::new(),
             state_var: "s".to_string(),
+            pid_override: None,
             inlines: std::collections::HashMap::new(),
             label_steps: std::collections::HashMap::new(),
             do_exit_stack: Vec::new(),
@@ -156,6 +157,8 @@ impl LuaGenerator {
                         }
                         // Local variable declarations from body (prefixed with proctype name)
                         let local_vars = Self::collect_var_decls(&p.body);
+                        // From here to the end of the instance, `_pid` is this instance's number.
+                        let saved_pid = self.pid_override.replace(instance as i64);
                         for vd in local_vars {
                             self.var_types
                                 .insert(format!("{}_{}", prefix, vd.name), vd.var_type.clone());
@@ -221,6 +224,7 @@ impl LuaGenerator {
                                 ));
                             }
                         }
+                        self.pid_override = saved_pid;
                     }
                 }
                 TopLevel::ChanDecl { name, .. } => {
@@ -234,9 +238,6 @@ impl LuaGenerator {
                     }
                 }
                 TopLevel::MtypeDecl { names, .. } => {
-                    // The mapping is built from the *assigned* values, not from the position in the
-                    // list: they are the same thing today, and that is exactly how a printing table
-                    // drifts from the numbers that are actually in the state.
                     // Built from the *assigned* values, not from the position in the list: they are
                     // the same thing today, and that is exactly how a printing table drifts from the
                     // numbers that are actually in the state.
