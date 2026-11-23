@@ -180,7 +180,7 @@ categories below, because this engine answers three ways and only one of them is
   counter. The send therefore completes only when the handshake does - which is what makes a claim
   like `[] ( after -> handshake )` hold, and it does agree with pan. A poll or an eval-receive on a
   rendezvous channel still refuses.
-- **Proctypes**: several instances (`active [N]`), an `init` block, `provided (expr)`.
+- **Proctypes**: several instances (`active [N]`), an `init` block.
 - **Preprocessor**: object-like `#define`, including a macro that names another macro.
 - **Claims**: `[]p` over propositions, `<>p`, `->`, `<->`, and atoms that are expressions -
   comparisons, `&&`, `||`, `!` - evaluated against each state, in a safety claim and in a
@@ -194,6 +194,7 @@ These are hard errors. No verdict is produced, so nothing about the model is cla
 | construct | why |
 |---|---|
 | `run P(...)` | a spawned process needs dynamic instances; the transition table is emitted per static instance, and there is no measured pan answer to encode against |
+| `provided (expr)` | the gate agrees with pan on minimal models and hides a deadlock on spin's own `pathfinder.pml` (pan 1, this engine 0 from 6 states where dropping the clause gives 25 and agreement); a clause that hides a deadlock is a wrong verdict |
 | `timeout` | it is true only when no other process can move, and a guard emitted for one process cannot ask that; the branch used to be emitted as permanently false, which decided models against pan |
 | a proctype that declares parameters | the arguments are bound by `run`, or set to zero for an `active` process, and neither is in the state; a channel parameter used to crash at run time rather than refuse |
 | a send or receive whose value count differs from the declared field count of its channel | pan rejects it at run time, so there is no verdict to match; binding the first field and dropping the rest decided 0 where pan reports 1 |

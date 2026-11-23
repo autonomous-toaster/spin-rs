@@ -274,8 +274,14 @@ impl<M: Model> Checker<M> {
         // A model that declares processes but yields no transitions was never explored.
         // Reporting success here is the null check that makes a whole verification
         // pipeline meaningless, so it is an error, not a pass.
+        // Two different failures, and only one of them is excused by a claim. A model that explores
+        // *some* states and then blocks is answered by its claim, because pan disables invalid end
+        // states under a never claim. A model that produces no state at all has not been checked by
+        // anything, and reporting success there is how a state layout that fails during construction
+        // turned into a clean verdict.
+        let never_explored = storage.is_empty();
         if model_checks
-            && transitions_count == 0
+            && (never_explored || transitions_count == 0)
             && self.model.process_count() > 0
             // A traversal stopped by its budget has not established that nothing is enabled; it
             // established that it ran out. Reporting the model as unexplorable because the budget
@@ -292,7 +298,7 @@ impl<M: Model> Checker<M> {
             // deadlocks: pan reports 0 for a stuck model under `[](x == 0)` and 1 under
             // `[](x == 1)`, never a model-level error. Reporting one for a model whose claims
             // all hold refutes a plan whose constraints are satisfied.
-            && !self.model.has_claims()
+            && (never_explored || !self.model.has_claims())
         {
             violations.push(Violation {
                 property_name: "model".to_string(),

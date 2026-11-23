@@ -270,6 +270,21 @@ fn stmt_exprs<'a>(
 /// defines.
 pub(crate) fn model_shape_refusal(model: &crate::parser::ast::PromelaModel) -> Option<String> {
     use crate::parser::ast::{Expression as E, TopLevel};
+    // `provided` gates a process, and this implementation of that gate disagrees with pan on one
+    // model in spin's own Examples: pathfinder.pml refutes an invalid end state there (pan 1) and
+    // this engine explores 6 states and reports none, where dropping the clause gives 25 states and
+    // agreement on 0. Minimal `provided` models do agree, so the disagreement is in the interaction
+    // with a blocking atomic region and is not understood. A clause that hides a deadlock is a wrong
+    // verdict, so it refuses by name until it is.
+    if let Some(p) = model.declarations.iter().find_map(|d| match d {
+        TopLevel::Proctype(p) if p.provided.is_some() => Some(p),
+        _ => None,
+    }) {
+        return Some(format!(
+            "provided is not implemented: the clause gates proctype '{}', and this engine''s gate hides a deadlock pan reports (pathfinder.pml)",
+            p.name
+        ));
+    }
     for (name, body) in model.declarations.iter().filter_map(|d| match d {
         TopLevel::Proctype(p) => Some((p.name.clone(), &p.body)),
         TopLevel::Init(i) => Some(("init".to_string(), &i.body)),
@@ -280,6 +295,31 @@ pub(crate) fn model_shape_refusal(model: &crate::parser::ast::PromelaModel) -> O
         walk_stmts(body, &mut |s| {
             if found.is_some() {
                 return;
+            }
+            // A local's initialiser is evaluated once, into the state layout, where `_pid` is not
+            // bound - it is the id of the process whose transition this is. The initial state then
+            // failed to build, which used to be swallowed into an empty state space and a clean
+            // verdict. Refused by name until initialisers are evaluated per instance.
+            let decls: Vec<&crate::parser::ast::VarDecl> = match s {
+                crate::parser::ast::Stmt::VarDecl(d) => vec![d],
+                crate::parser::ast::Stmt::VarDecls(ds) => ds.iter().collect(),
+                _ => Vec::new(),
+            };
+            for d in decls {
+                let Some(init) = &d.init else { continue };
+                let mut uses_pid = false;
+                walk_expr(init, &mut |x| {
+                    if matches!(x, E::Ident(n) if n == "_pid") {
+                        uses_pid = true;
+                    }
+                });
+                if uses_pid {
+                    found = Some(format!(
+                        "a local variable initialised from _pid is not supported: the initialiser runs once for the whole state, and _pid is bound per instance; in '{}'",
+                        p
+                    ));
+                    return;
+                }
             }
             let mut es = Vec::new();
             stmt_exprs(s, &mut es);

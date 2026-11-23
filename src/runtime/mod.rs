@@ -417,8 +417,13 @@ impl Model for LuaModel {
         match runtime.init_state() {
             Ok(blob) => vec![StateBlob(blob)],
             Err(e) => {
-                log::error!("Failed to create initial state: {}", e);
-                vec![]
+                // A state that cannot be built is not an empty state space. Swallowing the error
+                // made the search explore nothing and report success - on a model whose initialisers
+                // reference `_pid`, which is bound per instance and not in the layout, the answer was
+                // "no errors" where pan refutes. Recorded so the caller reports it instead.
+                *self.eval_error.borrow_mut() =
+                    Some(format!("the initial state could not be built: {e}"));
+                Vec::new()
             }
         }
     }

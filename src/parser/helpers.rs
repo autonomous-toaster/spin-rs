@@ -1,6 +1,6 @@
 //! Parser helpers: whitespace skipping, keyword/identifier detection.
 
-use nom::{IResult, bytes::complete::tag, bytes::complete::take_while, character::complete::char};
+use nom::{IResult, bytes::complete::tag, character::complete::char};
 
 use super::Input;
 
@@ -55,20 +55,20 @@ pub(crate) fn decl_end(input: Input) -> IResult<Input, ()> {
     if let Ok((rest, _)) = symbol(";")(input) {
         return Ok((rest, ()));
     }
-    // A declaration immediately before the closing brace of a body: `{ byte q }`.
-    if let Ok((rest, _)) = skip_ws(input)
-        && rest.starts_with('}')
-    {
+    // The whitespace before the next token, which may include a line comment. If any of it is a
+    // newline the declaration has ended; if none of it is, the next token is on the same line and
+    // the declaration is unterminated. Skipping with `take_while` alone stopped at the `/` of a
+    // trailing comment, so `bool b[2]		// Boolean array` - a line from spin's own Exercises -
+    // failed to parse at the very first declaration.
+    let (rest, _) = skip_ws(input)?;
+    let consumed = &input[..input.len() - rest.len()];
+    if consumed.contains('\n') || rest.starts_with('}') {
         return Ok((rest, ()));
     }
-    let (rest, _) = take_while(|c: char| c == ' ' || c == '\t' || c == '\r')(input)?;
-    match rest.strip_prefix('\n') {
-        Some(after) => Ok((after, ())),
-        None => Err(nom::Err::Error(nom::error::Error::new(
-            input,
-            nom::error::ErrorKind::Char,
-        ))),
-    }
+    Err(nom::Err::Error(nom::error::Error::new(
+        input,
+        nom::error::ErrorKind::Char,
+    )))
 }
 pub(crate) fn symbol(s: &'static str) -> impl Fn(Input) -> IResult<Input, Input> {
     move |input: Input| {

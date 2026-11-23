@@ -173,6 +173,15 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(1),
         source: "chan c = [0] of { bit };\nbyte got = 0;\nactive proctype Receiver() { c ?? 1; got = 1 }\nltl p0 { <> ( got == 1 ) }\n",
     },
+    // `provided` gated a proctype's every step and agreed with pan on the minimal shapes - and then
+    // hid a deadlock on spin's own pathfinder.pml: pan 1, ours 0, from 6 states instead of 12.
+    // Dropping the clause gave 25 states and agreement, so the gate is too strong in combination
+    // with a blocking atomic region and the mechanism is not understood. Refused by name.
+    Construct {
+        name: "provided_blocking_atomic",
+        pan: Some(1),
+        source: "mtype = { free, busy };\nmtype mutex = free;\nbyte state = 0;\nactive proctype high() { do :: state = 1; atomic { mutex == free -> mutex = busy }; state = 2; atomic { state = 0; mutex = free } od }\nactive proctype low() provided (state == 0) { do :: atomic { mutex == free -> mutex = busy }; atomic { mutex = free } od }\n",
+    },
     // mtype constants are numbered from 1 in *reverse* declaration order - measured with pan, four
     // assertions per list - so `free` is 2 in a two-name list. Numbering from 0 in declaration
     // order put every constant one below spin's and turned this assert inside out.
