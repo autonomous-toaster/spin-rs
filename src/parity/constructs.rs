@@ -203,6 +203,25 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(1),
         source: "active proctype P(byte n) { assert(n == 1) }\n",
     },
+    // The type half of the name/type/receiver family, which a declaration-level check cannot reach: a
+    // type is a property of a *write*. 250 + 10 is 4 in a byte. The middle row is the discriminator -
+    // an engine that truncates nothing fails it - so these guard anything that changes how a write is
+    // emitted, and they pass because the truncation landed with the init locals in v0.5.29.
+    Construct {
+        name: "byte_write_truncates",
+        pan: Some(0),
+        source: "byte i = 250;\nactive proctype P() { i = i + 10; assert(i == 4) }\n",
+    },
+    Construct {
+        name: "byte_write_does_not_overflow",
+        pan: Some(1),
+        source: "byte i = 250;\nactive proctype P() { i = i + 10; assert(i == 260) }\n",
+    },
+    Construct {
+        name: "byte_write_bounded_claim",
+        pan: Some(0),
+        source: "byte i = 250;\nactive proctype P() { i = i + 10 }\nltl p0 { [] ( i <= 255 ) }\n",
+    },
     // An increment as a guard: `:: i++`, which is how spin's own ex_1a.pml writes a loop body.
     // The guard-position heuristic read `i` as a condition and left `++` for the `od`.
     Construct {
