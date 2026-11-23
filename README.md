@@ -158,8 +158,10 @@ categories below, because this engine answers three ways and only one of them is
   another step. Each body step is therefore disabled exactly where the handler is executable, and
   one transition takes the handler and leaves the body. The alternative - the handler merely
   enabled beside the body - explores runs where the body continues past the escape, which pan does
-  not: a consumer's model holds under pan and refutes under that encoding. A handler of more than
-  one statement is refused by name.
+  not: a consumer's model holds under pan and refutes under that encoding. A handler of several
+  statements can pause between them, so it carries its own counter (`_unless_<P>`): a body step is
+  disabled while the handler's next statement is executable, and the step that completes the
+  handler abandons the body. An empty handler, or one containing control flow, refuses by name.
 - **Rendezvous channels** (`[0]`). pan runs the send and the receive as one transition over two
   processes; this engine moves one process per transition, so the handshake is staged instead: the
   sender writes the message and its own continuation into the channel and does not advance, and the
@@ -180,10 +182,8 @@ These are hard errors. No verdict is produced, so nothing about the model is cla
 | construct | why |
 |---|---|
 | `run P(...)` | a spawned process needs dynamic instances; the transition table is emitted per static instance, and there is no measured pan answer to encode against |
-| a multi-statement `unless` handler | the handler would need its own program counter, since it can be suspended mid-way |
 | a poll or eval-receive on a rendezvous channel | the stage/release encoding pairs a send with a plain receive; a polling receive inspects rather than pairs |
 | a `never` claim whose body assigns, sends or receives | that is a program, not a monitor |
-| bare `{ ... }` block | not a statement the parser has, so the model fails to parse |
 | typedef records (`r.f`) | structured fields are not in the state |
 | `P@x` (remote variable) | the reference does not resolve |
 | `pc_value(pid)` | it exposes the checker's own statement numbering, which is not comparable with pan's |

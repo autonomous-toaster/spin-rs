@@ -32,6 +32,7 @@
 
 - [x] 3.1 Decide an else guard against the sibling guards
 - [x] 3.2 Give an unless escape priority over the body
+- [x] 3.2b Let an unless handler of several statements pause between them, on its own counter, with the body disabled while it can move
 - [ ] 3.3 Enable timeout only when no process can move
 - [x] 3.4 Enforce a provided clause on every transition
 - [ ] 3.5 Enforce the d_step restrictions
@@ -39,7 +40,7 @@
 - [ ] 3.7 Survey fairness against pan
 - [ ] 3.8 Refuse run pending a measured answer
 - [x] 3.9 Filter the enabled set to the highest-priority process
-- [ ] 3.10 Parse a bare block
+- [x] 3.10 Parse a bare block
 - [x] 3.11 Read a guard with Promela truthiness
 - [x] 3.12 Absorb a statement separator
 

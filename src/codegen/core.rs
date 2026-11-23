@@ -138,6 +138,12 @@ impl LuaGenerator {
                         // Per-proctype done flag and step counter for guard body
                         lines.push(format!("    state._done_{} = false", prefix));
                         lines.push(format!("    state._step_{} = 0", prefix));
+                        // Where a suspended unless handler stopped; 0 is "not started". Emitted
+                        // only for a body that has an unless, because the counter has no reader
+                        // otherwise and a field nothing reads is a lie waiting to be misread.
+                        if super::stmts_have_unless(&p.body) {
+                            lines.push(format!("    state._unless_{} = 0", prefix));
+                        }
                         // Program counter, for the goto/break emitters the never-claim path
                         // still uses. A flattened body resolves its jumps at generation time and
                         // does not read it.

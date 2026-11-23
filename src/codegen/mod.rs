@@ -113,6 +113,7 @@ mod effects_guards;
 mod expr_utils;
 mod flatten;
 mod flatten_rdv;
+mod flatten_unless;
 pub mod optimize;
 mod stmts;
 mod stmts_atomic;
@@ -122,6 +123,18 @@ mod tests;
 
 #[cfg(test)]
 mod expr_tests;
+
+/// Does this body contain an `unless`? Only then does the second counter have a reader.
+pub(crate) fn stmts_have_unless(body: &[crate::parser::ast::Stmt]) -> bool {
+    use crate::parser::ast::Stmt;
+    body.iter().any(|s| match s {
+        Stmt::Unless { .. } => true,
+        Stmt::If(gs) | Stmt::Do(gs) => gs.iter().any(|g| stmts_have_unless(&g.body)),
+        Stmt::Atomic(b, _) | Stmt::DStep(b, _) | Stmt::Block(b, _) => stmts_have_unless(b),
+        Stmt::For { body, .. } => stmts_have_unless(body),
+        _ => false,
+    })
+}
 
 /// The rendezvous channels a body sends on, found without laying the body out.
 fn sends_on(

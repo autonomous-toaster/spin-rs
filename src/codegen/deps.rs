@@ -18,7 +18,8 @@ use super::LuaGenerator;
 use super::optimize::{vars_in_expr, vars_read_by_stmt, vars_written_by_stmt};
 
 /// State fields that belong to the engine's control machinery rather than to the model.
-pub(crate) const INTERNAL_PREFIXES: &[&str] = &["_step_", "_done_", "_pc_", "_progress_"];
+pub(crate) const INTERNAL_PREFIXES: &[&str] =
+    &["_step_", "_done_", "_pc_", "_progress_", "_unless_"];
 
 /// Exact set of state fields a transition touches.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

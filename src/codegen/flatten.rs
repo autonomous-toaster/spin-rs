@@ -54,22 +54,32 @@ enum FNode {
         matches: Vec<String>,
         next: usize,
     },
-    /// The handler of an `unless`: executable while the body is mid-flight, and taking it leaves
-    /// the body for `next`.
-    UnlessEscape {
-        guard: String,
-        effect: String,
-        from: usize,
-        to: usize,
-        next: usize,
-    },
-    /// A step that is never enabled: the process blocks here. Used where pan blocks rather than
-    /// refuses, so that the model is decided instead of declined.
+    /// One statement of a handler that can be suspended between its statements.
+    ///
+    /// `_unless_<P>` records where the handler stopped; body steps are disabled while the handler
+    /// can move, and completing the handler abandons the body.
+    HandlerStep(HandlerStepNode),
+
+    /// A step that is never enabled: the process blocks here, where pan blocks rather than refuses.
     Blocked(&'static str),
     /// A construct with no encoding yet. Refused rather than reordered or dropped.
     Refuse(&'static str),
 }
 
+/// The fields of one handler step in an `unless`.
+pub(crate) struct HandlerStepNode {
+    /// The handler statement's own guard, without the leading `and`.
+    pub(crate) guard: String,
+    pub(crate) effect: String,
+    /// The handler position this step may run from; 0 is "not started".
+    pub(crate) expect: usize,
+    /// The handler position this step leaves behind; `None` completes the handler.
+    pub(crate) leave: Option<usize>,
+    pub(crate) from: usize,
+    pub(crate) to: usize,
+    /// Where the body is abandoned when this step completes the handler.
+    pub(crate) abandon_to: usize,
+}
 /// One branch of a selection.
 ///
 /// Promela lets a guard be an expression or a statement: `:: (x > 0) ->` and `:: c ? x ->` are both
@@ -333,26 +343,53 @@ impl LuaGenerator {
             Stmt::Unless { body, handler, .. } => {
                 let body_size: usize = body.iter().map(|s| self.fsize(s)).sum();
                 let body_end = at + body_size;
-                if handler.len() == 1 && is_simple_stmt(&handler[0]) {
+                // `unless { handler }` arrives as a bare block, which is a sequence: the handler's
+                // statements are what the counter steps through.
+                let handler: Vec<&Stmt> = match handler.as_slice() {
+                    [Stmt::Block(inner, _)] => inner.iter().collect(),
+                    other => other.iter().collect(),
+                };
+                // A handler of one statement completes in one step; a handler of several can pause
+                // between its statements, which is what the `_unless_<P>` counter records. Both
+                // shapes go through the same guard: the handler may move exactly where its next
+                // statement's guard holds, and while it can move the body may not.
+                if !handler.is_empty() && handler.iter().all(|s| is_simple_stmt(s)) {
                     self.flayout_seq(body, at, next, brk, nodes, labels);
-                    let (g, e) = self.fstmt_parts(&handler[0]);
-                    let guard = g.trim_start_matches(" and ").to_string();
-                    let guard = if guard.is_empty() {
-                        "true".to_string()
-                    } else {
-                        guard
-                    };
-                    self.preempt.push((at, body_end, guard.clone()));
-                    nodes[body_end] = FNode::UnlessEscape {
-                        guard,
-                        effect: e,
-                        from: at,
-                        to: body_end,
-                        next,
-                    };
+                    let mut ready = Vec::new();
+                    for (k, st) in handler.iter().enumerate() {
+                        let (g, e) = self.fstmt_parts(st);
+                        let guard = g.trim_start_matches(" and ").to_string();
+                        let guard = if guard.is_empty() {
+                            "true".to_string()
+                        } else {
+                            guard
+                        };
+                        let expect = if k == 0 { 0 } else { body_end + k - 1 };
+                        let last = k + 1 == handler.len();
+                        ready.push((expect, guard.clone()));
+                        nodes[body_end + k] = FNode::HandlerStep(HandlerStepNode {
+                            guard,
+                            effect: e,
+                            expect,
+                            leave: if last { None } else { Some(body_end + k) },
+                            from: at,
+                            to: body_end,
+                            abandon_to: next,
+                        });
+                    }
+                    // "the handler can move now" as a disjunction over its positions.
+                    let field = self.unless_field();
+                    let disjunction = ready
+                        .iter()
+                        .map(|(expect, guard)| {
+                            format!("(s.{} == {} and ({}))", field, expect, guard)
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" or ");
+                    self.preempt.push((at, body_end, disjunction));
                 } else {
                     nodes[at] = FNode::Refuse(
-                        "an unless handler with more than one statement is not supported",
+                        "an unless handler that is empty or contains control flow is not supported",
                     );
                 }
             }
@@ -362,6 +399,14 @@ impl LuaGenerator {
                     next,
                 }
             }
+        }
+    }
+
+    /// The field that records where a suspended `unless` handler stopped.
+    pub(crate) fn unless_field(&self) -> String {
+        match self.current_proctype {
+            Some(ref p) => format!("_unless_{}", p),
+            None => "_unless".to_string(),
         }
     }
 
@@ -882,28 +927,7 @@ impl LuaGenerator {
                     matches,
                     next,
                 } => self.emit_rdv_recv(i, &step_var, &channel, &vars, &matches, next),
-                FNode::UnlessEscape {
-                    guard,
-                    effect,
-                    from,
-                    to,
-                    next,
-                } => {
-                    self.emit(&format!(
-                        "    -- step {}: unless escape for steps {}..{}",
-                        i, from, to
-                    ));
-                    self.emit(&format!(
-                        "    guard = function(s) return s.{} >= {} and s.{} < {} and ({}) end,",
-                        step_var, from, step_var, to, guard
-                    ));
-                    self.emit(&format!(
-                        "    effect = function(s) {}s.{} = {} end,",
-                        effect, step_var, next
-                    ));
-                    self.emit_opaque_deps();
-                    self.emit(&format!("    label = \"body:step{}\",", i));
-                }
+                FNode::HandlerStep(node) => self.emit_handler_step(i, &step_var, &node),
                 FNode::Blocked(why) => {
                     self.emit(&format!("    -- step {}: blocked, {}", i, why));
                     self.emit("    guard = function(s) return false end,");
@@ -926,7 +950,6 @@ impl LuaGenerator {
         }
     }
 }
-
 /// A statement that can be folded into one transition: no control flow of its own.
 fn is_simple_stmt(s: &Stmt) -> bool {
     matches!(
