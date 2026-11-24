@@ -66,6 +66,23 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(1),
         source: "/* Same escape as unless.pml, but the claim is true only up to 2: the escape lets x reach 3,\n   so pan refutes. Together with unless.pml this brackets what the escape means. */\nbool stop = false;\nbyte x = 0;\n\nactive proctype P() {\n    do\n    :: x < 5 -> x++\n    od unless (x == 3)\n}\n\nltl p0 { [] ( x <= 2 ) }\n",
     },
+    // The escape carried as a *handler with statements* rather than a bare guard. The handler's
+    // guard is rendered to Lua before dependencies are declared, so its reads have to be carried
+    // separately or the transition declares none - and then the state projection drops a field the
+    // escape depends on, the escape never fires, and a claim about the handler's assignment reads
+    // clean. v0.5.37 shipped exactly that: it accepted this model in 4 states where v0.5.35 and pan
+    // refute it in 8. Reported by the consumer, whose fixture for a previous soundness hunt caught
+    // it; these two are that fixture and its block-shaped pair.
+    Construct {
+        name: "unless_handler_loop_refutes",
+        pan: Some(1),
+        source: "/* The escape is re-checked at the loop head with x already 3, so the handler runs and\n   y becomes 9. The claim y <= 2 is therefore refuted. */\nbyte x = 0;\nbyte y = 0;\n\nactive proctype P() {\n    do\n    :: true -> x = 1; x = 2; x = 3\n    od unless { (x == 3); y = 9 }\n}\n\nltl p0 { [] ( y <= 2 ) }\n",
+    },
+    Construct {
+        name: "unless_handler_block_holds",
+        pan: Some(0),
+        source: "/* The block form of the same escape: x is already 3 when the block runs, so the handler\n   never fires and y stays 0. pan accepts it, which brackets the loop case above. */\nbyte x = 0;\nbyte y = 0;\n\nactive proctype P() {\n    { x = 1; x = 2; x = 3 } unless { (x == 3); y = 9 }\n}\n\nltl p0 { [] ( y <= 2 ) }\n",
+    },
     Construct {
         name: "unless",
         pan: Some(0),

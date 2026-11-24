@@ -162,7 +162,11 @@ pub fn vars_written_by_stmt(stmt: &Stmt) -> HashSet<String> {
                 }
             }
         }
-        Stmt::Atomic(body, _) | Stmt::DStep(body, _) => {
+        // See vars_read_by_stmt: a bare block is how `unless { (x == 3); y = 9 }` parses its
+        // handler, so leaving Block out here made the handler's writes invisible too. Both halves
+        // matter - the read decides whether the escape can fire at all, the write decides whether
+        // the assignment is represented in the state.
+        Stmt::Atomic(body, _) | Stmt::DStep(body, _) | Stmt::Block(body, _) => {
             for s in body {
                 vars.extend(vars_written_by_stmt(s));
             }
@@ -216,12 +220,23 @@ pub fn vars_read_by_stmt(stmt: &Stmt) -> HashSet<String> {
                 }
             }
         }
-        Stmt::Atomic(body, _) | Stmt::DStep(body, _) => {
+        // A bare block is what `unless { (x == 3); y = 9 }` parses its escape guard into, and
+        // leaving Block out of this function made every variable named inside a block invisible to
+        // the dependency analysis. The consequence was not a missed optimization: an unless escape
+        // guarded on `x` was not recorded as reading `x`, so the state projection dropped it, the
+        // escape could never fire, and a claim about the handler's assignment read clean where pan
+        // refutes. Measured on
+        //   do :: true -> x = 1; x = 2; x = 3 od unless { (x == 3); y = 9 }
+        //   ltl p0 { [] ( y <= 2 ) }
+        // v0.5.35 reported 1 error in 8 states; with Block missing it reported 0 in 4.
+        Stmt::Atomic(body, _) | Stmt::DStep(body, _) | Stmt::Block(body, _) => {
             for s in body {
                 vars.extend(vars_read_by_stmt(s));
             }
         }
         Stmt::Unless { body, handler, .. } => {
+            // The escape guard ends up as the first statement of the handler (a Block holding an
+            // Expr), so walking the handler covers it - provided Block is itself walked above.
             for s in body {
                 vars.extend(vars_read_by_stmt(s));
             }

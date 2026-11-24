@@ -6,6 +6,7 @@
 //! its own sequencing, so a `do` inside a sequence could not be expressed at all.
 
 use super::*;
+use std::collections::BTreeSet;
 /// One step of a flattened proctype body.
 ///
 /// Control flow is resolved at generation time, so a nested selection is not a counter of its own
@@ -69,7 +70,13 @@ pub(crate) enum FNode {
 /// The fields of one handler step in an `unless`.
 pub(crate) struct HandlerStepNode {
     /// The handler statement's own guard, without the leading `and`.
+    ///
+    /// Rendered to a Lua string here, so the fields it reads travel separately in `reads`. Without
+    /// them the transition declares no reads, the projection drops a field the escape needs, and a
+    /// claim about the handler's assignment reads clean. See vars_read_by_stmt.
     pub(crate) guard: String,
+    /// State fields the handler statement reads, including its guard.
+    pub(crate) reads: BTreeSet<String>,
     pub(crate) effect: String,
     /// The handler position this step may run from; 0 is "not started".
     pub(crate) expect: usize,
@@ -335,8 +342,10 @@ impl LuaGenerator {
                         let expect = if k == 0 { 0 } else { body_end + k - 1 };
                         let last = k + 1 == handler.len();
                         ready.push((expect, guard.clone()));
+                        let reads = self.handler_step_reads(st);
                         nodes[body_end + k] = FNode::HandlerStep(HandlerStepNode {
                             guard,
+                            reads,
                             effect: e,
                             expect,
                             leave: if last { None } else { Some(body_end + k) },

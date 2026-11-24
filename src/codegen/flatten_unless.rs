@@ -29,7 +29,23 @@ impl LuaGenerator {
         deps.writes.insert(step_var.to_string());
         deps.reads.insert(step_var.to_string());
         deps.reads.insert(field);
+        // The guard is already a rendered Lua string here, so the fields it reads were collected
+        // while the handler statement was still an AST node. Without them the transition declares
+        // no reads and the projection drops a field the escape depends on.
+        deps.reads.extend(node.reads.iter().cloned());
         self.emit_deps(&deps);
         self.emit(&format!("    label = \"body:step{}\",", i));
+    }
+
+    /// The state fields one handler statement reads, in the generator's own field naming.
+    ///
+    /// This is the last point at which the statement is still an AST node; the guard and effect are
+    /// Lua strings from here on. `deps_of` maps them the same way the emitters do.
+    pub(crate) fn handler_step_reads(&self, st: &Stmt) -> std::collections::BTreeSet<String> {
+        let map = self.map_fn_pub();
+        crate::codegen::optimize::vars_read_by_stmt(st)
+            .into_iter()
+            .map(|v| map(&v))
+            .collect()
     }
 }
