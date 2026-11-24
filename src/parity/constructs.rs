@@ -73,6 +73,36 @@ pub const CONSTRUCTS: &[Construct] = &[
     // clean. v0.5.37 shipped exactly that: it accepted this model in 4 states where v0.5.35 and pan
     // refute it in 8. Reported by the consumer, whose fixture for a previous soundness hunt caught
     // it; these two are that fixture and its block-shaped pair.
+    Construct {
+        name: "assert_field_unread_by_any_claim",
+        pan: Some(1),
+        source: "/* The consumer's two-variant pair, variant A: no claim at all. x is written by A and read\n   only by an assert, so nothing but the assertion observes it. */\nbyte x = 0;\nactive proctype A() { do :: x = 1; x = 2 od }\nactive proctype B() { assert(x != 1) }\n",
+    },
+    Construct {
+        name: "assert_field_unread_claim_present",
+        pan: Some(1),
+        source: "/* Variant B: the SAME model and the same assertion, plus a claim that names x. Identical\n   verdict expected - if these two disagree, a claim-relative set is deciding whether an\n   assertion can be evaluated at all. */\nbyte x = 0;\nactive proctype A() { do :: x = 1; x = 2 od }\nactive proctype B() { assert(x != 1) }\nltl p0 { [] ( x >= 0 ) }\n",
+    },
+    Construct {
+        name: "assert_field_other_claim_names_y",
+        pan: Some(1),
+        source: "/* A claim that names a different variable entirely, so x is unread by the claim and must\n   still be retained for the assertion. */\nbyte x = 0;\nbyte y = 0;\nactive proctype A() { do :: x = 1; x = 2 od }\nactive proctype B() { assert(x != 1) }\nltl p0 { [] ( y == 0 ) }\n",
+    },
+    Construct {
+        name: "assert_field_in_atomic",
+        pan: Some(1),
+        source: "/* The assertion inside an atomic region. */\nbyte x = 0;\nactive proctype A() { do :: x = 1; x = 2 od }\nactive proctype B() { atomic { assert(x != 1) } }\n",
+    },
+    Construct {
+        name: "assert_field_in_unless_handler",
+        pan: Some(1),
+        source: "/* The assertion inside an unless handler - the position where this family was first seen. */\nbyte x = 0;\nbyte y = 0;\nactive proctype A() { do :: x = 1; x = 2 od }\nactive proctype B() { do :: (1) -> y = 1 od unless { (y == 1); assert(x != 1) } }\n",
+    },
+    Construct {
+        name: "assert_field_three_processes",
+        pan: Some(1),
+        source: "/* A third process writing the same variable, so the interleaving that violates the\n   assertion is reachable by more than one route. */\nbyte x = 0;\nactive proctype A() { do :: x = 1; x = 2 od }\nactive proctype B() { assert(x != 1) }\nactive proctype C() { do :: x = 3; x = 4 od }\n",
+    },
     // An assertion's inputs are a finding's inputs. The construct is "assert", the position is
     // where its read is evaluated: body, block, loop, branch, label. v0.5.38 accepted all five
     // shapes before these were added, because the always-visible set held where a failure is
