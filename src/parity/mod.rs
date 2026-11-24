@@ -13,6 +13,7 @@
 //!   already listed in `KNOWN_WRONG`, and warns when a listed one starts passing. That is
 //!   what keeps the list from rotting.
 
+pub mod chain;
 pub mod constructs;
 
 #[cfg(test)]

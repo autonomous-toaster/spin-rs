@@ -57,9 +57,29 @@ impl<M: Model> Checker<M> {
         let mut fairness = FairnessTracker::new(self.config.fairness_mode);
         let mut fairness_check_counter: usize = 0;
 
+        // The fields this claim can observe, or an empty set when there is no claim scope.
+        //
+        // A state is identified by its projection onto `visible`, so two states that differ only
+        // in a field this claim cannot read are one state for this claim. The *full* state still
+        // goes on the stack and is what `transitions` is called with: dropping a field from
+        // identity is correct, dropping it from the state would lose the bit for every later step.
+        //
+        // This is the IDENTITY set, not the reduction visibility set. They answer different
+        // questions: identity is "are these the same state", reduction is "can these transitions
+        // commute". Using the reduction set here collapses the state space; using this one there
+        // disables reduction entirely - measured at 141 vs 324 states on a three-process fan-out.
+        let visible: std::collections::BTreeSet<String> = match scope {
+            Some(sc) => sc.identity.clone(),
+            None => std::collections::BTreeSet::new(),
+        };
+        let identity = |state: &M::State| -> (u64, M::State) {
+            let projected = self.model.project(state, &visible);
+            (self.model.hash(&projected), projected)
+        };
+
         for s in init_states {
-            let h = self.model.hash(&s);
-            if storage.insert(h, &s) {
+            let (h, ident) = identity(&s);
+            if storage.insert(h, &ident) {
                 let idx = trail.len();
                 trail.push((String::new(), idx));
                 path_hashes.push(h);
@@ -214,7 +234,7 @@ impl<M: Model> Checker<M> {
                     }
                     let on_cycle = enabled
                         .iter()
-                        .any(|t| ancestors.contains(&self.model.hash(&t.next)));
+                        .any(|t| ancestors.contains(&identity(&t.next).0));
                     if on_cycle {
                         (0..enabled.len()).collect()
                     } else {
@@ -233,8 +253,8 @@ impl<M: Model> Checker<M> {
                     fairness.record_fired(&t.label);
                 }
 
-                let h = self.model.hash(&t.next);
-                if storage.insert(h, &t.next) {
+                let (h, ident) = identity(&t.next);
+                if storage.insert(h, &ident) {
                     let idx = trail.len();
                     trail.push((t.label.clone(), state_idx));
                     path_hashes.push(h);
@@ -360,8 +380,12 @@ impl<M: Model> Checker<M> {
                 },
                 kind: UnverifiedKind::StateBudget,
                 reason: match scope {
+                    // The share is named as a share, and the floor is named when it applied:
+                    // a caller who set a budget smaller than the claim count is exploring more
+                    // states than they asked for, and must be told rather than left to add up
+                    // `states_explored` and find it above their own limit.
                     Some(_) => format!(
-                        "search stopped at the state limit of {} before the state space closed; that is this claim's share of the run's budget",
+                        "search stopped at the state limit of {} before the state space closed; that is this claim's share of the run's budget (one state per claim is always granted, so a total budget below the claim count is raised)",
                         budget
                     ),
                     None => format!(
@@ -472,9 +496,40 @@ impl<M: Model> Checker<M> {
 
             match crate::property::LtlFormula::parse(formula_str) {
                 Ok(formula) => {
-                    let checker =
-                        crate::property::PropertyChecker::new_ltl(&self.model, formula, prop_name);
-                    match checker.check_liveness() {
+                    // Each liveness claim gets a share of the run's budget, for the same reason
+                    // the safety traversal does: one claim must not consume the pool, and an
+                    // unbounded traversal is not a traversal a caller can bound.
+                    // The claim's identity set, so the liveness product hashes projected states
+                    // too. Without it a liveness-only model pays the full 2^k while the safety
+                    // path has already been reduced: measured 10232 states on a ten-task chain
+                    // against 102 with the projection, same verdict.
+                    let identity = self
+                        .model
+                        .reduction_scopes()
+                        .into_iter()
+                        .find(|s| s.name == prop_name)
+                        .map(|s| s.identity)
+                        .unwrap_or_default();
+                    let mut checker =
+                        crate::property::PropertyChecker::new_ltl(&self.model, formula, prop_name)
+                            .with_max_states(self.config.max_states)
+                            .with_identity(identity);
+                    let found = checker.check_liveness();
+                    // An exhausted search is not a satisfied claim. This check comes first:
+                    // `Ok(None)` means "no accepting cycle found", which is only a verdict when
+                    // the space actually closed.
+                    if checker.exhausted() {
+                        result.unverified.push(Unverified::new(
+                            prop_name.to_string(),
+                            UnverifiedKind::StateBudget,
+                            format!(
+                                "the liveness search stopped at the state budget of {} before the product space closed, so this claim has no verdict; without a ceiling the same search does not terminate",
+                                self.config.max_states
+                            ),
+                        ));
+                        continue;
+                    }
+                    match found {
                         Ok(Some(violation)) => {
                             result.errors += 1;
                             result.violations.push(violation);

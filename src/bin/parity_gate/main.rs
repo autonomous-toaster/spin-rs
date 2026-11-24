@@ -44,9 +44,14 @@ fn run() -> i32 {
     if let Some(path) = dir {
         return run_directory(Path::new(&path));
     }
+    if args.iter().any(|a| a == "--chain") {
+        return run_chain();
+    }
 
     if baseline == gate {
-        eprintln!("usage: parity_gate --baseline | --gate [--filter <substr>]");
+        eprintln!(
+            "usage: parity_gate --baseline | --gate [--filter <substr>] | --chain | --dir <path>"
+        );
         return 2;
     }
 
@@ -319,6 +324,32 @@ fn pan_errors(dir: &Path, claim: Option<&str>) -> Option<usize> {
     parse_errors(&String::from_utf8_lossy(&out.stdout))
 }
 
+/// pan prints `N states, stored` among its totals.
+///
+/// Returned separately from the error count because the two answer different questions. A verdict
+/// says whether the engines agree; a state count says what the agreement cost. On the consumer's
+/// chain shape pan refutes in 3 states where we explore 11254 - the verdicts agree and the counts
+/// do not, so a gate that only reads errors cannot see the defect.
+fn parse_states(text: &str) -> Option<usize> {
+    for line in text.lines() {
+        if let Some(pos) = line.find("states, stored") {
+            let digits: String = line[..pos]
+                .trim_end()
+                .chars()
+                .rev()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
+            if !digits.is_empty() {
+                return digits.parse().ok();
+            }
+        }
+    }
+    None
+}
+
 /// pan prints `errors: N` at the end of a line that also carries the state-vector size.
 fn parse_errors(text: &str) -> Option<usize> {
     for line in text.lines() {
@@ -539,5 +570,112 @@ fn write_baseline(rows: &[Row]) {
         eprintln!("could not write {}: {e}", path.display());
     } else {
         println!("\nbaseline written to {}", path.display());
+    }
+}
+
+/// Measure the consumer's chain shape and print the state-count table, in both probe directions.
+///
+/// Two columns of pan matter and they are not the same column of information:
+///
+/// - `pan errors` says whether the engines agree. It is 1 for the refuting direction and 0 for the
+///   closing one, and our engine agrees in both - so the verdict says nothing about the cost.
+/// - `pan states` says what the agreement cost. It is 3 in the refuting direction because pan stops
+///   at the violation, and 37/49/61/73 in the closing direction because the space must close.
+///
+/// The state-count property is measured on the closing direction only, and this mode prints the
+/// direction on every row so a swapped fixture is visible in the output rather than invisible.
+fn run_chain() -> i32 {
+    if !oracle_available() {
+        eprintln!(
+            "no oracle: spin and gcc must be on PATH. Refusing to report on an unmeasured fixture."
+        );
+        return 2;
+    }
+    let root = std::env::temp_dir().join("spin_rs_chain");
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::create_dir_all(&root);
+
+    println!(
+        "{:<10} {:<10} {:>8} {:>10} {:>10} {:>9}",
+        "fixture", "direction", "ours", "pan states", "pan errors", "elapsed"
+    );
+    for chain in spin_rs::parity::chain::all() {
+        let name = format!("chain{}_{}", chain.n, chain.direction.label());
+        let dir = root.join(&name);
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join("m.pml"), &chain.source);
+
+        let start = std::time::Instant::now();
+        let (ours, states) = ours_state_count(&chain.source);
+        let elapsed = start.elapsed().as_secs_f64();
+
+        let (pan_states, pan_errors, _) = pan_measure(&dir);
+        println!(
+            "{:<10} {:<10} {:>8} {:>10} {:>10} {:>8.3}s",
+            format!("N={}", chain.n),
+            chain.direction.label(),
+            match ours {
+                Ours::Verdict(n) => n.to_string(),
+                Ours::Decline => "decline".to_string(),
+                Ours::Refuse => "refuse".to_string(),
+            },
+            pan_states.map_or_else(|| "?".to_string(), |s| s.to_string()),
+            pan_errors.map_or_else(|| "?".to_string(), |e| e.to_string()),
+            elapsed,
+        );
+        println!(
+            "           {} states explored (pan {} states stored)",
+            states.map_or_else(|| "?".to_string(), |s| s.to_string()),
+            pan_states.map_or_else(|| "?".to_string(), |s| s.to_string()),
+        );
+    }
+    0
+}
+
+/// pan's stored-state count and error count for the model in `dir`.
+fn pan_measure(dir: &Path) -> (Option<usize>, Option<usize>, bool) {
+    let built = Command::new("spin")
+        .args(["-a", "m.pml"])
+        .current_dir(dir)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !built {
+        return (None, None, false);
+    }
+    let compiled = Command::new("gcc")
+        .args(["-w", "-o", "pan", "pan.c"])
+        .current_dir(dir)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !compiled {
+        return (None, None, false);
+    }
+    let mut cmd = Command::new("./pan");
+    cmd.arg("-a");
+    let Some(out) = run_with_timeout(&mut cmd, dir, 120) else {
+        return (None, None, false);
+    };
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    (parse_states(&text), parse_errors(&text), true)
+}
+
+/// Our verdict and our explored state count, in one run.
+fn ours_state_count(source: &str) -> (Ours, Option<usize>) {
+    let cfg = spin_rs::CheckerConfig {
+        max_states: 300_000,
+        ..Default::default()
+    };
+    match spin_rs::verify_with_config(source, &cfg) {
+        Ok(r) => {
+            let outcome = if r.unverified.is_empty() {
+                Ours::Verdict(r.errors)
+            } else {
+                Ours::Decline
+            };
+            (outcome, Some(r.states_explored))
+        }
+        Err(_) => (Ours::Refuse, None),
     }
 }

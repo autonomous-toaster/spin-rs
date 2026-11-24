@@ -25,7 +25,14 @@ pub use channel::LuaChannel;
 mod builtin_ffi;
 mod chan_ffi;
 
+mod layout;
 mod serialize;
+
+// The layout helpers are used throughout this module; re-exported so the call sites stay short.
+use layout::{
+    is_control_field, parse_done_flags, parse_state_keys, stmts_have_assert, stmts_have_goto,
+    visible_fields,
+};
 pub(crate) use serialize::{serialize_table, state_literal};
 
 /// Wrapper to make Lua operations return anyhow::Result by boxing the non-Send error.
@@ -65,11 +72,20 @@ impl LuaRuntime {
     /// Load generated Lua source into the runtime.
     pub fn load_source(&mut self, generated: &GeneratedLua) -> anyhow::Result<()> {
         let preamble = r#"
+-- A state table is flat: every value is a scalar. The recursive form below calls type() on
+-- every field of every copy, and _spin_clone runs once per enabled transition per state, which
+-- makes it one of the two hottest functions in the search. The shallow path is taken when no
+-- value is a table, and the recursive form is kept for models that do nest.
 function _spin_clone(t)
     if type(t) ~= 'table' then return t end
     local copy = {}
+    local nested = false
     for k, v in pairs(t) do
-        copy[k] = _spin_clone(v)
+        if type(v) == 'table' then nested = true
+        else copy[k] = v end
+    end
+    if nested then
+        for k, v in pairs(t) do copy[k] = _spin_clone(v) end
     end
     return copy
 end
@@ -113,6 +129,86 @@ end
             .or_insert_with(|| LuaChannel::new(capacity));
     }
 
+    /// Rebuild a state table from its serialized form without compiling a Lua chunk.
+    ///
+    /// The blob is `{key:value,...}` with flat scalar values, so each entry is a plain field
+    /// assignment. Compiling `do local s={...} return s end` per state visit was ~100x pan's
+    /// per-state cost on its own: one Lua parse and compile for every state explored.
+    ///
+    /// Entries whose value is a nested table or is not a literal fall back to the compiling path,
+    /// so this is a fast path and not a second implementation of the parser.
+    fn table_from_blob(&self, blob: &str) -> anyhow::Result<mlua::Table> {
+        let table = self.lua.create_table()?;
+        let inner = blob
+            .strip_prefix('{')
+            .and_then(|s| s.strip_suffix('}'))
+            .unwrap_or(blob);
+        if inner.trim().is_empty() {
+            return Ok(table);
+        }
+        for entry in inner.split(',') {
+            let Some((key, value)) = entry.split_once(':') else {
+                return self.table_from_blob_slow(blob);
+            };
+            let key = key.trim().trim_matches('"');
+            let value = value.trim();
+            // A nested table or an unexpected shape is not handled here.
+            if value.starts_with('{') || value.contains(['{', '}']) {
+                return self.table_from_blob_slow(blob);
+            }
+            let v = match value {
+                "true" => mlua::Value::Boolean(true),
+                "false" => mlua::Value::Boolean(false),
+                "nil" => mlua::Value::Nil,
+                _ => {
+                    let unquoted = value.trim_matches('"');
+                    match unquoted.parse::<i64>() {
+                        Ok(i) => mlua::Value::Integer(i),
+                        Err(_) => match unquoted.parse::<f64>() {
+                            Ok(f) => mlua::Value::Number(f),
+                            // A string value: keep it exactly as serialized.
+                            Err(_) => mlua::Value::String(self.lua.create_string(unquoted)?),
+                        },
+                    }
+                }
+            };
+            table.set(key, v)?;
+        }
+        Ok(table)
+    }
+
+    /// The compiling path, used when a state carries a nested table.
+    fn table_from_blob_slow(&self, blob: &str) -> anyhow::Result<mlua::Table> {
+        lua_ok(
+            self.lua
+                .load(format!(
+                    "do local s={{}}; {} return s end",
+                    state_literal(blob)
+                ))
+                .eval(),
+        )
+    }
+
+    /// Every field any transition in the table reads, disabled transitions included.
+    ///
+    /// `_spin_get_transitions` returns the whole table and the guard filter is applied in Rust, so
+    /// reading `reads` here sees transitions no state enables yet. Expanding a state instead is not
+    /// equivalent: on the initial state of a two-process model only the first process's step is
+    /// present, because the other is blocked - and the blocked process's guard is exactly the
+    /// dependency being looked for.
+    pub fn all_read_fields(&self, state_blob: &str) -> anyhow::Result<Vec<String>> {
+        let state = self.table_from_blob(state_blob)?;
+        let get_fn: mlua::Function = lua_ok(self.lua.globals().get("_spin_get_transitions"))?;
+        let trans_table: mlua::Table = lua_ok(get_fn.call(state.clone()))?;
+        let mut out = std::collections::BTreeSet::new();
+        for pair_result in trans_table.pairs::<mlua::Value, mlua::Table>() {
+            let (_idx, t) = lua_ok(pair_result)?;
+            let reads: Vec<String> = t.get("reads").unwrap_or_default();
+            out.extend(reads);
+        }
+        Ok(out.into_iter().collect())
+    }
+
     /// Create initial state table and return serialized form.
     pub fn init_state(&self) -> anyhow::Result<String> {
         let init_fn: mlua::Function = lua_ok(self.lua.globals().get("_spin_init_state"))?;
@@ -129,23 +225,23 @@ end
         &self,
         state_blob: &str,
     ) -> anyhow::Result<Vec<EnabledTransition>> {
-        // Reconstruct Lua state table from serialized blob
-        let state: mlua::Table = lua_ok(
-            self.lua
-                .load(format!(
-                    "do local s={{}}; {} return s end",
-                    state_literal(state_blob)
-                ))
-                .eval(),
-        )?;
+        // Reconstruct the state table without compiling a chunk. This is the per-state hot path:
+        // one Lua compile per state visit was the largest single cost of the search.
+        let state = self.table_from_blob(state_blob)?;
 
-        let get_fn: mlua::Function = lua_ok(self.lua.globals().get("_spin_get_transitions"))?;
-        let trans_table: mlua::Table = lua_ok(get_fn.call(state.clone()))?;
+        // One crossing per state: the expansion evaluates every guard, clones the state and
+        // applies the effect inside Lua, then hands back only the enabled successors.
+        //
+        // Doing the same work from Rust costs one crossing per transition, and on a wide model
+        // that is dozens per state. Measured at 422 fields: 991us of a 1031us state expansion was
+        // the crossings; the string parse and projection the earlier work suspected were 40us of
+        // it between them. The guard semantics (a guard is enabled when non-zero, nil is
+        // disabled, a boolean is taken as itself) are preserved inside _spin_expand.
+        let expand_fn: mlua::Function = lua_ok(self.lua.globals().get("_spin_expand"))?;
+        let expanded: mlua::Table = lua_ok(expand_fn.call(state))?;
 
         let mut results = Vec::new();
-
-        let pair_iter = trans_table.pairs::<mlua::Value, mlua::Table>();
-        for pair_result in pair_iter {
+        for pair_result in expanded.pairs::<mlua::Value, mlua::Table>() {
             let (_idx, t) = lua_ok(pair_result)?;
             let label: String = t.get("label").unwrap_or_default();
             let deps = crate::engine::checker::TransitionDeps {
@@ -156,39 +252,10 @@ end
                 opaque: t.get("opaque").unwrap_or(true),
                 owner: t.get("owner").unwrap_or_default(),
             };
-            let guard_fn: mlua::Function = lua_ok(t.get("guard"))?;
-            let effect_fn: mlua::Function = lua_ok(t.get("effect"))?;
-
-            // Evaluate guard.
-            //
-            // Promela expressions are numeric: a guard is enabled when it is non-zero.
-            // Reading the result as a Rust bool is wrong because mlua maps every
-            // non-nil, non-boolean value to true, so a guard that evaluates to 0
-            // (disabled) was treated as enabled. That made guarded assignments fire
-            // unconditionally, e.g. a transition guarded by (a && b) taking while both
-            // were zero.
-            let guard_val: mlua::Value = lua_ok(guard_fn.call(state.clone()))?;
-            let enabled = match guard_val {
-                mlua::Value::Boolean(b) => b,
-                mlua::Value::Integer(i) => i != 0,
-                mlua::Value::Number(n) => n != 0.0,
-                mlua::Value::Nil => false,
-                _ => true,
-            };
-            if !enabled {
-                continue;
-            }
-
-            // Clone state and apply effect
-            let clone_fn: mlua::Function = lua_ok(self.lua.globals().get("_spin_clone"))?;
-            let new_state: mlua::Table = lua_ok(clone_fn.call(state.clone()))?;
-            lua_ok(effect_fn.call::<mlua::Value>(new_state.clone()))?;
-
-            // Serialize new state
-            let blob = lua_ok(serialize_table(&new_state))?;
+            let next_state: mlua::Table = lua_ok(t.get("next_state"))?;
             results.push(EnabledTransition {
                 label,
-                next_state: blob,
+                next_state: lua_ok(serialize_table(&next_state))?,
                 deps,
             });
         }
@@ -216,6 +283,20 @@ pub struct LuaModel {
     /// True when any process contains an assert, so the failure marker is observable and no
     /// claim may reduce away the transition that writes it.
     has_asserts: bool,
+    /// Does the model declare a channel? Channel contents are not in the state vector, so a
+    /// projection would lose the queue and merge states that differ only in occupancy.
+    has_channels: bool,
+    /// Fields that a *guard* reads, and which therefore decide which transitions are enabled.
+    ///
+    /// A claim that does not name `fB` still cannot merge two states that differ in a field some
+    /// guard branches on: the enabled transition set would be different, so the merged state
+    /// silently loses every transition behind the false branch. Measured on
+    ///   bool fA, fB;
+    ///   active proctype A() { do :: (1) -> fA = 1 od }
+    ///   active proctype B() { do :: (fA) -> fB = 1; break od }
+    ///   ltl p { [] ( !fB ) }
+    /// where projecting onto the claim's own variables dropped `fA` and lost the violation.
+    guard_fields: Vec<String>,
     /// Does any body jump through a label?
     ///
     /// A jump step declares only the step counter as a dependency, which makes it look independent of
@@ -361,6 +442,23 @@ impl LuaModel {
             crate::parser::ast::TopLevel::Init(i) => stmts_have_assert(&i.body),
             _ => false,
         });
+        // Does the model declare a channel?
+        //
+        // Channel contents are *not* part of the serialized state: they live in the Lua runtime's
+        // shared registry, outside the state vector. So state identity already under-describes a
+        // model with channels, and projecting on top of that makes two states that differ only in
+        // queue occupancy indistinguishable. Measured: the rendezvous model
+        // `chan c = [0] of { bit }; ... ltl p0 { [] ( !got ) }` went from 6 states and 1 error to
+        // 1 state and 0 errors. A projection of a state that does not contain everything is not a
+        // reduction.
+        let has_channels = model.declarations.iter().any(|d| {
+            matches!(
+                d,
+                crate::parser::ast::TopLevel::ChanDecl { .. }
+                    | crate::parser::ast::TopLevel::ChannelArray { .. }
+                    | crate::parser::ast::TopLevel::Typedef { .. }
+            )
+        });
         let has_goto = model.declarations.iter().any(|d| match d {
             crate::parser::ast::TopLevel::Proctype(p) => stmts_have_goto(&p.body),
             crate::parser::ast::TopLevel::Init(i) => stmts_have_goto(&i.body),
@@ -394,6 +492,18 @@ impl LuaModel {
             Err(_) => Vec::new(),
         };
 
+        // Every field any transition's guard reads.
+        //
+        // Collected by expanding the initial state once. The runtime's transition table is
+        // constructed by the generator with declared `reads` sets, so one expansion sees every
+        // transition that exists - they are all present before any guard is evaluated.
+        //
+        // Cheap: it is one enumeration at construction, against a search that expands thousands.
+        let guard_fields: Vec<String> = match runtime.init_state() {
+            Ok(init) => runtime.all_read_fields(&init).unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
+
         Ok(Self {
             runtime: std::cell::RefCell::new(runtime),
             ltl_formulas,
@@ -401,6 +511,8 @@ impl LuaModel {
             process_count,
             eval_error: std::cell::RefCell::new(None),
             has_asserts,
+            has_channels,
+            guard_fields,
             has_goto,
             state_fields,
             priorities,
@@ -469,6 +581,26 @@ impl Model for LuaModel {
                 vec![]
             }
         }
+    }
+
+    fn project(
+        &self,
+        state: &StateBlob,
+        visible: &std::collections::BTreeSet<String>,
+    ) -> StateBlob {
+        // Three cases where the state is returned unchanged, and each one is a correctness
+        // boundary rather than a caution:
+        //
+        // 1. An empty visible set means the caller does not know what the claim observes.
+        // 2. A model with channels keeps its queue contents outside the serialized state, so the
+        //    state vector already under-describes the system before any projection. Merging two
+        //    states that differ only in queue occupancy loses transitions outright - measured as
+        //    a rendezvous model going from 6 states and 1 error to 1 state and 0 errors.
+        // 3. A model whose initial state could not be read has no field list to project on.
+        if visible.is_empty() || self.has_channels || self.state_fields.is_empty() {
+            return state.clone();
+        }
+        StateBlob(crate::runtime::serialize::project_blob(&state.0, visible))
     }
 
     fn hash(&self, state: &StateBlob) -> u64 {
@@ -557,6 +689,15 @@ impl Model for LuaModel {
         if self.has_goto {
             return Vec::new();
         }
+        // A model with channels is not reduced at all.
+        //
+        // The same reason the projection is disabled for these models, and it is the same root
+        // cause: the state vector does not carry channel contents. Reduction reasons about
+        // independence from declared reads and writes, and an unmodelled queue makes two
+        // genuinely dependent steps look independent.
+        if self.has_channels {
+            return Vec::new();
+        }
         let all: std::collections::BTreeSet<String> = self.state_fields.iter().cloned().collect();
         // A model with no claim observes nothing: its only findings are deadlocks and assertion
         // failures, and an assertion failure is encoded as a disabled transition, so both are
@@ -566,31 +707,92 @@ impl Model for LuaModel {
             // A model with no claim observes nothing except its own assertions, which are
             // findings like any other. Leaving the marker out would let the reduction prune the
             // transition that records a failure.
-            let mut visible = std::collections::BTreeSet::new();
-            if self.has_asserts {
-                visible.insert("_failed_assert".to_string());
-            }
+            // With no claim there is nothing to project onto: every variable can enable a guard,
+            // so dropping one stops the search progressing. The projection's premise is that a
+            // claim cannot observe a field; with no claim that premise is false for every field.
+            //
+            // Measured: projecting onto the control fields alone made
+            //   byte n = 0; active proctype P() { do :: (n < 10) -> n = n + 1 od }
+            // with max_depth 3 explore one state and never reach the depth limit it exists to
+            // report. The set is returned whole and projection is the identity for such a model.
+            let identity: std::collections::BTreeSet<String> =
+                self.state_fields.iter().cloned().collect();
             return vec![ReductionScope {
                 name: "model".to_string(),
-                visible,
+                // Reduction still sees only what a finding can read. Widening this disabled the
+                // ample-set computation on every model, which is the defect this field split
+                // exists to prevent.
+                visible: {
+                    let mut v = std::collections::BTreeSet::new();
+                    if self.has_asserts {
+                        v.insert("_failed_assert".to_string());
+                    }
+                    v
+                },
+                identity,
                 liveness: false,
             }];
         }
         let mut out = Vec::new();
         for f in &self.ltl_formulas {
-            // Liveness claims are checked by the nested-DFS path, which is never reduced: an
-            // accepting cycle can consist entirely of invisible internal transitions, so
-            // reducing it would hide the very violation the claim looks for.
-            if !crate::engine::checker::dfs::is_safety_formula(&f.formula) {
-                continue;
-            }
+            // A liveness claim is never REDUCED: an accepting cycle can consist entirely of
+            // invisible internal transitions, so an ample set would hide the very violation the
+            // claim looks for. But it is still projected for state IDENTITY.
+            //
+            // Those are different operations and the distinction matters here. Reduction removes
+            // transitions, so an invisible cycle can disappear. Projection only merges states the
+            // claim cannot tell apart; the cycle still exists in the projected graph, and the
+            // fields that decide which transitions are enabled are retained below. Skipping the
+            // claim entirely made a liveness-only model pay the full 2^k: measured 10232 states on
+            // a ten-task chain against 102 with the projection, same verdict.
+            let is_safety = crate::engine::checker::dfs::is_safety_formula(&f.formula);
             let name = f.name.clone().unwrap_or_else(|| "ltl".to_string());
             let visible =
                 visible_fields(&f.formula, &self.state_fields).unwrap_or_else(|| all.clone());
+            // State identity is a *different* question from reduction visibility, and the two
+            // sets must not be merged. See ReductionScope::identity.
+            let mut identity = visible.clone();
+            // Control-flow fields are visible to every claim, whether or not the claim names them.
+            //
+            // A claim observes the variables it mentions, but state *identity* is not the same set:
+            // the program counters and step counters decide which transitions are enabled, so two
+            // states that agree on `x` and disagree on `_pc_P` are different states that a
+            // projection must not merge. Measured with only the claim-visible set, the model
+            //   byte x = 0; active proctype P() { do :: x < 5 -> x++ od unless (x == 3) }
+            //   ltl p0 { [] ( x <= 2 ) }
+            // collapsed to a single state and reported zero errors where pan reports one.
+            for field in &self.state_fields {
+                if is_control_field(field) {
+                    identity.insert(field.clone());
+                }
+            }
+            // A field any guard branches on is visible to every claim, whether or not the claim
+            // names it. The claim decides which *violations* matter; the guards decide which
+            // *transitions* exist. Merging two states that differ in a guard field loses the
+            // transitions behind the branch that is false in one of them.
+            //
+            // This is the same trap the cycle proviso documents for reduction, in a different
+            // place: reduction can keep an invisible field because it reasons per transition, but
+            // a state projection drops the field for the whole run.
+            identity.extend(self.guard_fields.iter().cloned());
+            // The assertion marker is visible to every claim, whether or not the claim names it.
+            //
+            // This is not an over-approximation for the reduction's benefit: `check_violation`
+            // reads it before the claim gate and reports the failure whatever the claim says, so a
+            // field that can change a finding must not be droppable from state identity. Task 2.8
+            // asserts it, and leaving it out would let a hidden bit hide an assertion failure -
+            // the same trap the `has_goto` guard above documents for reduction.
+            if self.has_asserts {
+                identity.insert("_failed_assert".to_string());
+            }
             out.push(ReductionScope {
                 name,
                 visible,
-                liveness: false,
+                identity,
+                // A liveness claim is never reduced, whatever its identity set is. The checker
+                // already refuses to reduce when this is true, which is what keeps the accepting
+                // cycle intact while the projection still merges indistinguishable states.
+                liveness: !is_safety,
             });
         }
         out
@@ -701,127 +903,6 @@ impl Model for LuaModel {
 
 // ─── Reduction scopes ───────────────────────────────────────────
 
-/// A formula token that names no model variable.
-const LTL_KEYWORDS: &[&str] = &[
-    "true",
-    "false",
-    "nil",
-    "U",
-    "V",
-    "W",
-    "X",
-    "skip",
-    "always",
-    "eventually",
-    "until",
-];
-
-/// Field names carried by a serialized state blob.
-fn parse_state_keys(blob: &str) -> Vec<String> {
-    let inner = blob.trim_start_matches('{').trim_end_matches('}');
-    let mut out = Vec::new();
-    for entry in inner.split(',') {
-        let entry = entry.trim();
-        if let Some(colon) = entry.find(':') {
-            let key = entry[..colon].trim().trim_matches('"');
-            if !key.is_empty() {
-                out.push(key.to_string());
-            }
-        }
-    }
-    out
-}
-
-/// Every identifier a formula mentions.
-fn formula_identifiers(formula: &str) -> Vec<String> {
-    let bytes = formula.as_bytes();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i] as char;
-        if c.is_ascii_alphabetic() || c == '_' {
-            let start = i;
-            while i < bytes.len() && {
-                let c = bytes[i] as char;
-                c.is_ascii_alphanumeric() || c == '_'
-            } {
-                i += 1;
-            }
-            out.push(formula[start..i].to_string());
-        } else {
-            i += 1;
-        }
-    }
-    out
-}
-
-/// The state fields whose change can alter a safety claim's truth value.
-///
-/// Returns None when an identifier cannot be resolved to any field the state carries, so the
-/// caller can fall back to treating everything as visible. Guessing in that situation - treating
-/// an unresolved atom as visible-not-relevant - is how a reduced search loses a violation.
-fn visible_fields(
-    formula: &str,
-    state_fields: &[String],
-) -> Option<std::collections::BTreeSet<String>> {
-    let mut out = std::collections::BTreeSet::new();
-    for ident in formula_identifiers(formula) {
-        if LTL_KEYWORDS.contains(&ident.as_str()) {
-            continue;
-        }
-        // A proctype local x is stored as p1_x, so a formula naming x observes every process's
-        // copy. Over-approximating here costs reduction; under-approximating would be unsound.
-        let suffix = format!("_{}", ident);
-        let mut matched = false;
-        for field in state_fields {
-            if *field == ident || field.ends_with(&suffix) {
-                out.insert(field.clone());
-                matched = true;
-            }
-        }
-        if !matched {
-            return None;
-        }
-    }
-    if out.is_empty() { None } else { Some(out) }
-}
-
-// ─── Parsing helpers ────────────────────────────────────────────
-
-/// Parse `_done_<name>` flags from a state blob to determine how many
-/// processes are still running (_done == false) vs done (_done == true).
-/// Returns (total_done_flags_found, running_count).
-fn parse_done_flags(blob: &str) -> (usize, usize) {
-    // State blob format: {key:val,key:val,...}
-    // Look for _done_<name>:true or _done_<name>:false patterns
-    let mut total = 0usize;
-    let mut running = 0usize;
-    let mut pos = 0;
-    while let Some(start) = blob[pos..].find("_done_") {
-        let actual_pos = pos + start;
-        // Find the value after this key: look for ':' then check next token
-        if let Some(colon_pos) = blob[actual_pos..].find(':') {
-            let val_start = actual_pos + colon_pos + 1;
-            // Value is true, false, or a quoted version
-            let rest = &blob[val_start..];
-            if rest.starts_with("true") || rest.starts_with("\"true\"") {
-                total += 1;
-                // Process is done
-            } else if rest.starts_with("false") || rest.starts_with("\"false\"") {
-                total += 1;
-                running += 1;
-            }
-        }
-        pos = actual_pos + 7; // advance past "_done_"
-        if pos >= blob.len() {
-            break;
-        }
-    }
-    (total, running)
-}
-
-// ─── Convenience ────────────────────────────────────────────────
-
 /// Wrap an evaluation failure so callers can downcast it instead of matching text.
 fn typed_eval_failure(detail: String) -> anyhow::Error {
     anyhow::Error::new(crate::engine::checker::VerifyError::EvalFailed { detail })
@@ -868,6 +949,8 @@ impl LuaModel {
 }
 
 #[cfg(test)]
+mod projection_tests;
+#[cfg(test)]
 mod tests;
 
 /// The assertion recorded in a state, if the state carries one.
@@ -884,42 +967,4 @@ fn parse_assert_failure(blob: &str) -> Option<String> {
     let value = after_colon.trim_start_matches([' ', '"']);
     let end = value.find(['"', ',']).unwrap_or(value.len());
     Some(value[..end].to_string())
-}
-
-fn stmt_has_assert(s: &crate::parser::ast::Stmt) -> bool {
-    use crate::parser::ast::Stmt;
-    match s {
-        Stmt::Assert(_, _) => true,
-        Stmt::If(gs) | Stmt::Do(gs) => gs.iter().any(|g| stmts_have_assert(&g.body)),
-        Stmt::Atomic(b, _) | Stmt::DStep(b, _) => stmts_have_assert(b),
-        Stmt::Unless { body, handler, .. } => stmts_have_assert(body) || stmts_have_assert(handler),
-        Stmt::For {
-            init, update, body, ..
-        } => stmt_has_assert(init) || stmt_has_assert(update) || stmts_have_assert(body),
-        _ => false,
-    }
-}
-
-/// Does any statement of this body jump?
-///
-/// The reduction must not be applied to such a model: a jump declares only the step counter as a
-/// dependency, so it looks independent of every other process, and a body that loops back through a
-/// label loses the interleavings it exists to produce.
-///
-/// Only a `goto` counts. A label with no jump is a no-op step: it cannot close a cycle, so it cannot be
-/// the cycle the opt-out exists to prevent, and refusing to reduce every model that merely names a label
-/// was costing about half the wall clock of the whole Examples sweep. `ex_3c.pml` is the evidence that the
-/// opt-out still does its job where it matters - 858 states and the assertion, where reduced it found 77
-/// and none.
-fn stmts_have_goto(body: &[crate::parser::ast::Stmt]) -> bool {
-    let mut found = false;
-    crate::codegen::walk_stmts(body, &mut |s| {
-        if matches!(s, crate::parser::ast::Stmt::Goto(_, _)) {
-            found = true;
-        }
-    });
-    found
-}
-fn stmts_have_assert(stmts: &[crate::parser::ast::Stmt]) -> bool {
-    stmts.iter().any(stmt_has_assert)
 }

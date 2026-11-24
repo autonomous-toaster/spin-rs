@@ -241,6 +241,14 @@ pub struct PropertyChecker<'a, M: Model> {
     model: &'a M,
     property_name: String,
     formula: Option<LtlFormula>,
+    /// States this claim's liveness search may insert. Large until a caller sets one, so an
+    /// existing caller that never sets it behaves exactly as it did.
+    max_states: usize,
+    /// Did the last search stop at its ceiling instead of closing?
+    exhausted: bool,
+    /// Fields that distinguish two states for this claim, for hashing and storage. Empty means
+    /// hash the whole state.
+    identity: std::collections::BTreeSet<String>,
 }
 
 /// Convert from property::LtlFormula to ltl2ba::formula::LtlFormula
@@ -291,6 +299,10 @@ impl<'a, M: Model> PropertyChecker<'a, M> {
             model,
             property_name: name.to_string(),
             formula: Some(formula),
+            // No ceiling until a caller sets one, so an existing caller behaves as it did.
+            max_states: usize::MAX,
+            exhausted: false,
+            identity: std::collections::BTreeSet::new(),
         }
     }
 
@@ -300,11 +312,43 @@ impl<'a, M: Model> PropertyChecker<'a, M> {
             model,
             property_name: name.to_string(),
             formula: None,
+            max_states: usize::MAX,
+            exhausted: false,
+            identity: std::collections::BTreeSet::new(),
         }
     }
 
+    /// Set the fields that distinguish two states for this claim.
+    pub fn with_identity(mut self, identity: std::collections::BTreeSet<String>) -> Self {
+        self.identity = identity;
+        self
+    }
+
+    /// The hash of a state under this claim's projection.
+    fn projected_hash(&self, state: &<M as Model>::State) -> u64 {
+        if self.identity.is_empty() {
+            self.model.hash(state)
+        } else {
+            self.model.hash(&self.model.project(state, &self.identity))
+        }
+    }
+
+    /// Bound this claim's liveness search by the number of states it may insert.
+    pub fn with_max_states(mut self, max_states: usize) -> Self {
+        self.max_states = max_states;
+        self
+    }
+
+    /// Did the last liveness search stop at its ceiling instead of closing?
+    ///
+    /// True means the claim has no verdict: the space did not close, so the absence of an
+    /// accepting cycle is not a proof that there is none.
+    pub fn exhausted(&self) -> bool {
+        self.exhausted
+    }
+
     /// Run nested DFS to check for liveness violations (accepting cycles).
-    pub fn check_liveness(&self) -> anyhow::Result<Option<Violation>> {
+    pub fn check_liveness(&mut self) -> anyhow::Result<Option<Violation>> {
         let Some(formula) = &self.formula else {
             return Ok(None);
         };
@@ -374,11 +418,18 @@ impl<'a, M: Model> PropertyChecker<'a, M> {
         let mut violations = Vec::new();
 
         for init_state in init_states {
-            let init_hash = self.model.hash(&init_state);
+            let init_hash = self.projected_hash(&init_state);
             let init_product = ProductState::new(init_state.clone(), 0, init_hash);
 
-            let mut dfs = NestedDFS::new().with_name(self.property_name.clone());
-            if let Some(violation) = dfs.check::<M>(self.model, &buchi, init_product) {
+            let mut dfs = NestedDFS::new()
+                .with_name(self.property_name.clone())
+                .with_max_states(self.max_states)
+                .with_identity(self.identity.clone());
+            let found = dfs.check::<M>(self.model, &buchi, init_product);
+            if dfs.exhausted() {
+                self.exhausted = true;
+            }
+            if let Some(violation) = found {
                 violations.push(violation);
                 break; // Found a violation, stop searching
             }
@@ -432,7 +483,7 @@ pub fn verify_ltl(
 
     let formula = LtlFormula::parse(ltl_formula)?;
     let model = LuaModel::from_source(source)?;
-    let checker = PropertyChecker::new_ltl(&model, formula, property_name);
+    let mut checker = PropertyChecker::new_ltl(&model, formula, property_name);
     checker.check_liveness()
 }
 

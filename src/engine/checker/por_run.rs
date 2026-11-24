@@ -57,7 +57,30 @@ impl<M: Model> Checker<M> {
         };
         // One share per claim, at least one state each so a very small budget still gives every
         // claim the chance to be refuted rather than silently nothing.
+        //
+        // The floor is what makes `max_states` smaller than the claim count a *specified* case
+        // rather than an accident: every claim gets one state, so the run can explore more states
+        // than the caller asked for. The overshoot is reported below rather than left for the
+        // caller to discover by summing `states_explored` and finding it above their budget.
         let share = (self.config.max_states / scopes.len().max(1)).max(1);
+        // A budget of zero asks for no search at all. Silence was the old behaviour: the floor
+        // raised it to one state per claim and the run explored states anyway, so a caller who
+        // passed 0 to mean "do not run" was told the run was bounded while it was not.
+        if self.config.max_states == 0 {
+            for scope in &scopes {
+                result.unverified.push(
+                    Unverified::new(
+                        scope.name.clone(),
+                        UnverifiedKind::StateBudget,
+                        "max_states is 0, so no search was performed; a budget of zero is not a licence to explore one state per claim, and every claim is reported undecided rather than silently bounded"
+                            .to_string(),
+                    )
+                    .with_usage(0, Some(0)),
+                );
+            }
+            result.elapsed_secs = start.elapsed().as_secs_f64();
+            return result;
+        }
         // Why the remaining claims will not be checked. "Stopped" is not one condition: a run can
         // stop because it refuted a claim, or because the budget ran out, and telling a caller
         // that a claim was skipped because of a violation when there was none is a false report.

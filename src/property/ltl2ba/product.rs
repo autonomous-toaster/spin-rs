@@ -109,6 +109,33 @@ where
     M: Model<State = S>,
     S: Clone + Hash,
 {
+    sync_transitions_projected(
+        model,
+        state,
+        model_transitions,
+        buchi,
+        buchi_state,
+        &std::collections::BTreeSet::new(),
+    )
+}
+
+/// `sync_transitions` with a state projection applied to the successor hash.
+///
+/// The projection keys the visited sets, so it has to be applied where the hash is computed and
+/// not only where the state is stored - otherwise the product graph is built over unprojected
+/// states and nothing is merged.
+pub fn sync_transitions_projected<S, M>(
+    model: &M,
+    state: &S,
+    model_transitions: &[Transition<S>],
+    buchi: &BuchiAutomaton,
+    buchi_state: usize,
+    identity: &std::collections::BTreeSet<String>,
+) -> Vec<ProductTransition<S>>
+where
+    M: Model<State = S>,
+    S: Clone + Hash,
+{
     let mut product_transitions = Vec::new();
 
     // A terminated system is not the end of the run: Promela lets the never claim stutter,
@@ -128,7 +155,11 @@ where
 
     for model_trans in transitions {
         let next_state = model_trans.next.clone();
-        let next_hash = model.hash(&next_state);
+        let next_hash = if identity.is_empty() {
+            model.hash(&next_state)
+        } else {
+            model.hash(&model.project(&next_state, identity))
+        };
 
         // Evaluate atomic propositions in the SUCCESSOR state. Reading them from the
         // source state made each [] obligation behave like X: the automaton advanced on

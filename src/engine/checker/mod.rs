@@ -100,6 +100,28 @@ pub trait Model {
         Vec::new()
     }
 
+    /// Project a state onto the fields one claim can observe, for state identity.
+    ///
+    /// Two states that differ only in fields the claim cannot read are the same state *for that
+    /// claim*, and pan's dead-variable analysis stores them once. Without this a model whose
+    /// generated code carries a bit no claim reads doubles per such bit: measured at 694 / 2806 /
+    /// 11254 / 45046 states on a chain of 6 / 8 / 10 / 12 tasks where pan stores 37 / 49 / 61 / 73.
+    ///
+    /// The projection decides *state identity*, so it must be applied before hashing and before
+    /// storing, and the same projection must be used for the key and the value.
+    ///
+    /// Soundness is the caller's responsibility in one direction only: `visible` comes from
+    /// `reduction_scopes` and already contains every field `check_violation` can read for this
+    /// run. Returning the state unchanged is always correct, only slower, so the default is the
+    /// identity and an incomplete projection is a bug in the model, not in this contract.
+    fn project(
+        &self,
+        state: &Self::State,
+        _visible: &std::collections::BTreeSet<String>,
+    ) -> Self::State {
+        state.clone()
+    }
+
     /// Number of process instances the model declares, or 0 if unknown.
     ///
     /// Used to reject a search that explored nothing. A model with processes but no
@@ -147,7 +169,26 @@ pub struct ReductionScope {
     /// Claim name, used to attribute findings and budget shortfalls.
     pub name: String,
     /// State fields whose change can alter this claim's truth value.
+    ///
+    /// This is what partial order reduction reasons about: two transitions that touch only fields
+    /// outside this set are invisible to the claim and may be commuted. It MUST stay the claim's
+    /// own variables. Widening it towards state identity disables reduction - measured, a
+    /// three-process fan-out went from 141 states to 324 with POR on and identical 729 with it off,
+    /// because every transition then touched something "visible" and no ample set could be formed.
     pub visible: std::collections::BTreeSet<String>,
+    /// State fields that distinguish two states for this claim, for state identity (hashing and
+    /// storage) rather than for reduction.
+    ///
+    /// A superset of `visible`. It also carries the control-flow fields and every field a guard
+    /// branches on, because two states that agree on the claim's variables but disagree on a
+    /// program counter are different states: merging them stops the search progressing or loses
+    /// the transition behind a false guard.
+    ///
+    /// The two sets are deliberately separate. Reduction asks "can I commute these transitions?",
+    /// which is a question about the claim. Identity asks "are these the same state?", which is a
+    /// question about the whole program. Answering the second with the first collapses the state
+    /// space; answering the first with the second disables reduction.
+    pub identity: std::collections::BTreeSet<String>,
     /// True when the claim is a liveness property. Reduction is disabled for these: an accepting
     /// cycle can be invisible, so hiding one loses the violation.
     pub liveness: bool,

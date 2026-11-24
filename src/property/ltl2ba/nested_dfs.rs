@@ -31,6 +31,26 @@ pub struct NestedDFS<S> {
     trail: Vec<String>,
     /// Maximum search depth (optional)
     max_depth: Option<usize>,
+    /// Maximum number of states the search may insert, or None for no ceiling.
+    ///
+    /// Depth is not a substitute: a wide product closes deep and stays slow, which is exactly the
+    /// shape a per-claim budget has to bound. Counted over `visited1`, the outer set, because that
+    /// is the set whose growth is the run's cost.
+    max_states: Option<usize>,
+    /// Fields that distinguish two states for the searched claim, for hashing and storage.
+    ///
+    /// Empty means "hash the whole state", which is what every caller did before the projection
+    /// existed. A liveness claim is never *reduced*, but it is still projected: merging states the
+    /// claim cannot tell apart does not remove the accepting cycle, it only stops the search
+    /// counting states that differ solely in fields no guard and no claim reads.
+    identity: std::collections::BTreeSet<String>,
+    /// Did the search stop at `max_states` before the space closed?
+    ///
+    /// `check` returns `Option<Violation>`, where `None` used to mean both "closed, no accepting
+    /// cycle" and "did not finish". A caller cannot tell those apart, so a partial search read as a
+    /// satisfied claim - which is worse than a hang, because it is silent. The flag is read after
+    /// the run and reported by the caller as `Unverified`.
+    exhausted: bool,
     /// Name reported on a violation. It must be the claim's own name, otherwise a
     /// per-property caller cannot attribute the violation and drops it.
     property_name: String,
@@ -51,6 +71,9 @@ where
             stack2: Vec::new(),
             trail: Vec::new(),
             max_depth: None,
+            max_states: None,
+            identity: std::collections::BTreeSet::new(),
+            exhausted: false,
             property_name: "ltl".to_string(),
             _phantom: PhantomData,
         }
@@ -66,6 +89,27 @@ where
     pub fn with_max_depth(mut self, max_depth: usize) -> Self {
         self.max_depth = Some(max_depth);
         self
+    }
+
+    /// Set the fields that distinguish two states, for hashing and storage.
+    pub fn with_identity(mut self, identity: std::collections::BTreeSet<String>) -> Self {
+        self.identity = identity;
+        self
+    }
+
+    /// Bound the search by the number of states it may insert.
+    pub fn with_max_states(mut self, max_states: usize) -> Self {
+        self.max_states = Some(max_states);
+        self
+    }
+
+    /// Did the last search stop at its state ceiling instead of closing?
+    ///
+    /// False means the space closed and `check` returning `None` is a real verdict. True means the
+    /// search was cut short and the claim has no verdict at all - the caller must report it as
+    /// unverified rather than counting it with the satisfied claims.
+    pub fn exhausted(&self) -> bool {
+        self.exhausted
     }
 
     /// Run nested DFS to check for liveness violations.
@@ -114,10 +158,22 @@ where
     where
         M: Model<State = S>,
     {
-        // Check depth limit
+        // Check depth limit. Pruning at depth leaves successors unexplored, so this also means
+        // the search did not close; it is reported the same way as the state ceiling.
         if let Some(max) = self.max_depth
             && depth >= max
         {
+            self.exhausted = true;
+            return None;
+        }
+
+        // Check the state ceiling before inserting. Stopping here means the space did not close,
+        // so the absence of an accepting cycle is not a verdict.
+        if let Some(max) = self.max_states
+            && !self.visited1.contains(&hash)
+            && self.visited1.len() >= max
+        {
+            self.exhausted = true;
             return None;
         }
 
@@ -179,6 +235,16 @@ where
     {
         if self.visited2.contains(&hash) {
             return None; // Already explored by inner DFS
+        }
+
+        // The inner search is part of the same run's cost, so it shares the same ceiling. Counting
+        // both sets against one budget is what makes the bound a bound on the run, not on one of
+        // its two traversals.
+        if let Some(max) = self.max_states
+            && self.visited1.len() + self.visited2.len() >= max
+        {
+            self.exhausted = true;
+            return None;
         }
 
         if std::env::var("SPINRS_DEBUG_LTL").is_ok() {
@@ -251,8 +317,15 @@ where
     where
         M: Model<State = S>,
     {
-        use crate::property::ltl2ba::product::sync_transitions;
-        sync_transitions(model, state, model_transitions, buchi, buchi_state)
+        use crate::property::ltl2ba::product::sync_transitions_projected;
+        sync_transitions_projected(
+            model,
+            state,
+            model_transitions,
+            buchi,
+            buchi_state,
+            &self.identity,
+        )
     }
 }
 

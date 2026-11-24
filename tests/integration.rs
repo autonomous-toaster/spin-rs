@@ -821,3 +821,125 @@ pub mod benchmarks {
         }
     }
 }
+
+// ─── The consumer's chain shape: the pan oracle ────────────────────────────
+
+/// pan's stored-state count for one model, built from source at test time.
+///
+/// Vendoring the numbers would let them drift away from what pan actually does on the fixture we
+/// currently generate, and the fixture is the thing under test. `None` means the oracle is not
+/// installed, which is reported rather than silently treated as a pass.
+fn pan_states(source: &str, dir: &std::path::Path) -> Option<(usize, usize)> {
+    std::fs::create_dir_all(dir).ok()?;
+    std::fs::write(dir.join("m.pml"), source).ok()?;
+    let ok = |out: std::process::Output| out.status.success();
+    if !ok(std::process::Command::new("spin")
+        .args(["-a", "m.pml"])
+        .current_dir(dir)
+        .output()
+        .ok()?)
+    {
+        return None;
+    }
+    if !ok(std::process::Command::new("gcc")
+        .args(["-w", "-o", "pan", "pan.c"])
+        .current_dir(dir)
+        .output()
+        .ok()?)
+    {
+        return None;
+    }
+    let out = std::process::Command::new("./pan")
+        .arg("-a")
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let states = text
+        .lines()
+        .find(|l| l.contains("states, stored"))
+        .and_then(|l| {
+            let pos = l.find("states, stored")?;
+            l[..pos].split_whitespace().last()?.parse::<usize>().ok()
+        })?;
+    let errors = text.lines().find(|l| l.contains("errors:")).and_then(|l| {
+        let pos = l.find("errors:")?;
+        let rest = l[pos + "errors:".len()..].trim_start();
+        rest.chars()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>()
+            .parse::<usize>()
+            .ok()
+    })?;
+    Some((states, errors))
+}
+
+fn oracle_ready() -> bool {
+    std::process::Command::new("spin")
+        .arg("-V")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+        && std::process::Command::new("gcc")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+}
+
+/// pan's refutation depth on the refuting probe is 3 states, and its closing count is linear.
+///
+/// This is the asymmetry that a verdict-only gate cannot see: both directions agree on the verdict
+/// (1 error vs 0), and only the state counts differ. Asserting the counts here means a fixture
+/// edit that makes the probe stop refuting is caught by the oracle rather than by a reviewer
+/// noticing two green runs.
+#[test]
+fn chain_probe_directions_are_what_the_oracle_says() {
+    use spin_rs::parity::chain::{Direction, build};
+    if !oracle_ready() {
+        eprintln!("skipping: spin and gcc are required to measure the chain fixtures");
+        return;
+    }
+    let root = std::env::temp_dir().join("spin_rs_chain_oracle");
+    let _ = std::fs::remove_dir_all(&root);
+
+    // The refuting probe stops at the violation. 3 states at every size is the pinned fact.
+    for &n in &[6usize, 8, 10] {
+        let dir = root.join(format!("ref{n}"));
+        let (states, errors) = pan_states(&build(n, Direction::Refuting).source, &dir)
+            .unwrap_or_else(|| panic!("pan could not measure the refuting fixture at n={n}"));
+        assert_eq!(errors, 1, "refuting n={n} should be a violation");
+        assert_eq!(
+            states, 3,
+            "refuting n={n}: pan stops at the violation, expected 3 states"
+        );
+    }
+
+    // The closing probe explores the space, and pan's count is linear in tasks.
+    let mut pan_closing = Vec::new();
+    for &n in &[6usize, 8, 10] {
+        let dir = root.join(format!("close{n}"));
+        let (states, errors) = pan_states(&build(n, Direction::Closing).source, &dir)
+            .unwrap_or_else(|| panic!("pan could not measure the closing fixture at n={n}"));
+        assert_eq!(
+            errors, 0,
+            "closing n={n} must hold in every reachable state"
+        );
+        pan_closing.push((n, states));
+    }
+    let expected = [(6usize, 37usize), (8, 49), (10, 61)];
+    assert_eq!(
+        pan_closing, expected,
+        "pan's closing counts moved; the baseline in baseline.md is stale"
+    );
+
+    // Linear, not geometric: each two tasks add a constant, not a multiple.
+    let deltas: Vec<i64> = pan_closing
+        .windows(2)
+        .map(|w| w[1].1 as i64 - w[0].1 as i64)
+        .collect();
+    assert!(
+        deltas.iter().all(|&d| d == 12),
+        "pan's growth is not linear: {deltas:?}"
+    );
+}
