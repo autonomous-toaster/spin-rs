@@ -112,10 +112,16 @@ pub const CONSTRUCTS: &[Construct] = &[
     // Reverting Block in stmt_has_assert turns block_noclaim red on its own.
     //
     // The third fix in that patch - the assert-read fields added to the reduction's visible set -
-    // is NOT reached by any fixture here. Every shape above still agrees with pan with it reverted.
+    // is NOT reached by any fixture here, and instrumenting the ample-set call showed why rather
+    // than merely that. Ample sets DO shrink while an assert-read field is visible (nine times on
+    // one shape), so the condition is reachable; but the writer of the asserted field is excluded
+    // by the write conflict with _failed_assert anyway, so the verdict does not depend on the field
+    // being in the visible set. Stripping x from visible entirely - leaving only _failed_assert -
+    // still gives pan's verdict on every shape tried.
+    //
     // It is kept because a writer of a field an assert reads is plainly not independent of that
-    // assert, but it should be described as unproven rather than covered: no fixture exercises the
-    // ample-set choice that would need it.
+    // assert, and because "the current conflict rule happens to cover it" is a property of that
+    // rule rather than of the projection. It is described as unexercised, not as covered.
     //
     // An assertion's inputs are a finding's inputs. The construct is "assert", the position is
     // where its read is evaluated: body, block, loop, branch, label. v0.5.38 accepted all five
