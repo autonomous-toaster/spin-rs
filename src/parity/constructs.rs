@@ -103,6 +103,20 @@ pub const CONSTRUCTS: &[Construct] = &[
         pan: Some(1),
         source: "/* A third process writing the same variable, so the interleaving that violates the\n   assertion is reachable by more than one route. */\nbyte x = 0;\nactive proctype A() { do :: x = 1; x = 2 od }\nactive proctype B() { assert(x != 1) }\nactive proctype C() { do :: x = 3; x = 4 od }\n",
     },
+    // MUTATION-TESTED: which fix covers which of these cells. Sweeping the set with a fix reverted
+    // is the only evidence that the corpus can see this class at all - ten shapes agreeing with pan
+    // on a healthy build proves nothing about whether the gate would notice a regression.
+    //
+    // Reverting the _failed_assert entry in the claim-free identity set turns SIX of them red:
+    // body_noclaim, if_noclaim, block_noclaim, assert2procs, assert_atomic, assert_unless_handler.
+    // Reverting Block in stmt_has_assert turns block_noclaim red on its own.
+    //
+    // The third fix in that patch - the assert-read fields added to the reduction's visible set -
+    // is NOT reached by any fixture here. Every shape above still agrees with pan with it reverted.
+    // It is kept because a writer of a field an assert reads is plainly not independent of that
+    // assert, but it should be described as unproven rather than covered: no fixture exercises the
+    // ample-set choice that would need it.
+    //
     // An assertion's inputs are a finding's inputs. The construct is "assert", the position is
     // where its read is evaluated: body, block, loop, branch, label. v0.5.38 accepted all five
     // shapes before these were added, because the always-visible set held where a failure is
