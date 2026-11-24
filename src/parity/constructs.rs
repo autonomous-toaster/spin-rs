@@ -73,6 +73,36 @@ pub const CONSTRUCTS: &[Construct] = &[
     // clean. v0.5.37 shipped exactly that: it accepted this model in 4 states where v0.5.35 and pan
     // refute it in 8. Reported by the consumer, whose fixture for a previous soundness hunt caught
     // it; these two are that fixture and its block-shaped pair.
+    // An assertion's inputs are a finding's inputs. The construct is "assert", the position is
+    // where its read is evaluated: body, block, loop, branch, label. v0.5.38 accepted all five
+    // shapes before these were added, because the always-visible set held where a failure is
+    // *recorded* but not what the check *reads*, and because _failed_assert appears only after a
+    // failure so it was absent from the identity set built at initialisation.
+    Construct {
+        name: "assert_field_hidden_by_reduction",
+        pan: Some(1),
+        source: "/* x is written by A and read only by an assert, and the model has no claim. pan refutes\n   because B can observe x == 1 between A's two writes. */\nbyte x = 0;\nactive proctype A() { do :: x = 1; x = 2 od }\nactive proctype B() { assert(x != 1) }\n",
+    },
+    Construct {
+        name: "assert_in_block_field",
+        pan: Some(1),
+        source: "/* The same assert nested in a bare block, which is where a container-walking omission\n   hides it. */\nbyte x = 0;\nactive proctype A() { do :: x = 1; x = 2 od }\nactive proctype B() { { assert(x != 1) } }\n",
+    },
+    Construct {
+        name: "assert_in_do_field",
+        pan: Some(1),
+        source: "/* The assert one step into a do loop rather than first in the body. */\nbyte x = 0;\nactive proctype A() { do :: x = 1; x = 2 od }\nactive proctype B() { do :: (1) -> assert(x != 1); break od }\n",
+    },
+    Construct {
+        name: "assert_in_if_field",
+        pan: Some(1),
+        source: "/* The assert inside an if branch. */\nbyte x = 0;\nactive proctype A() { do :: x = 1; x = 2 od }\nactive proctype B() { if :: (1) -> assert(x != 1) fi }\n",
+    },
+    Construct {
+        name: "assert_behind_label",
+        pan: Some(1),
+        source: "/* The assert reached through a label jump. */\nbyte x = 0;\nactive proctype A() { do :: x = 1; x = 2 od }\nactive proctype B() { goto chk; chk: assert(x != 1) }\n",
+    },
     Construct {
         name: "unless_handler_loop_refutes",
         pan: Some(1),

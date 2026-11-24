@@ -98,7 +98,12 @@ pub(crate) fn stmt_has_assert(s: &crate::parser::ast::Stmt) -> bool {
     match s {
         Stmt::Assert(_, _) => true,
         Stmt::If(gs) | Stmt::Do(gs) => gs.iter().any(|g| stmts_have_assert(&g.body)),
-        Stmt::Atomic(b, _) | Stmt::DStep(b, _) => stmts_have_assert(b),
+        // Block joins Atomic and DStep here for the same reason it joined them in
+        // vars_read_by_stmt: a bare block is an ordinary container, and skipping it makes an
+        // assert inside one invisible to the whole engine. Measured: an assert in a block gave
+        // has_asserts=false, so no failure marker was written and the model accepted where pan
+        // refutes.
+        Stmt::Atomic(b, _) | Stmt::DStep(b, _) | Stmt::Block(b, _) => stmts_have_assert(b),
         Stmt::Unless { body, handler, .. } => stmts_have_assert(body) || stmts_have_assert(handler),
         Stmt::For {
             init, update, body, ..
@@ -182,3 +187,81 @@ pub(crate) fn parse_done_flags(blob: &str) -> (usize, usize) {
 }
 
 // ─── Convenience ────────────────────────────────────────────────
+
+/// The model variables an `assert` expression reads.
+///
+/// An assertion is a finding, so the fields its condition reads MUST be visible to reduction: a
+/// writer of such a field is not independent of the assert that reads it, and commuting the two
+/// away loses the violation entirely.
+///
+/// Measured on
+///   byte x = 0;
+///   active proctype A() { do :: x = 1; x = 2 od }
+///   active proctype B() { assert(x != 1) }
+/// with no claim: pan refutes in 11 states, the reduced search accepted in 10. The always-visible
+/// set held only `_failed_assert`, which is where a failure is *recorded*, not what the check
+/// *reads* - so A's write of x looked independent of B's assert.
+pub(crate) fn assert_reads(
+    stmts: &[crate::parser::ast::Stmt],
+) -> std::collections::BTreeSet<String> {
+    use crate::parser::ast::Stmt;
+    fn expr_vars(e: &crate::parser::ast::Expression, out: &mut std::collections::BTreeSet<String>) {
+        out.extend(crate::codegen::optimize::vars_in_expr(e));
+        // A compound expression's operands are covered by vars_in_expr.
+    }
+    fn walk(s: &Stmt, out: &mut std::collections::BTreeSet<String>) {
+        match s {
+            Stmt::Assert(e, _) => expr_vars(e, out),
+            Stmt::If(gs) | Stmt::Do(gs) => {
+                for g in gs {
+                    if let Some(c) = &g.condition {
+                        expr_vars(c, out);
+                    }
+                    for s in &g.body {
+                        walk(s, out);
+                    }
+                }
+            }
+            Stmt::Atomic(b, _) | Stmt::DStep(b, _) | Stmt::Block(b, _) => {
+                for s in b {
+                    walk(s, out);
+                }
+            }
+            Stmt::Unless { body, handler, .. } => {
+                for s in body.iter().chain(handler.iter()) {
+                    walk(s, out);
+                }
+            }
+            Stmt::For {
+                init, update, body, ..
+            } => {
+                walk(init, out);
+                walk(update, out);
+                for s in body {
+                    walk(s, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = std::collections::BTreeSet::new();
+    for s in stmts {
+        walk(s, &mut out);
+    }
+    out
+}
+
+/// The state fields any `assert` in the model reads, across every proctype and `init`.
+pub(crate) fn model_assert_reads(
+    model: &crate::parser::ast::PromelaModel,
+) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    for d in &model.declarations {
+        match d {
+            crate::parser::ast::TopLevel::Proctype(p) => out.extend(assert_reads(&p.body)),
+            crate::parser::ast::TopLevel::Init(i) => out.extend(assert_reads(&i.body)),
+            _ => {}
+        }
+    }
+    out
+}

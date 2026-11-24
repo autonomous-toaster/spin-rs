@@ -283,6 +283,11 @@ pub struct LuaModel {
     /// True when any process contains an assert, so the failure marker is observable and no
     /// claim may reduce away the transition that writes it.
     has_asserts: bool,
+    /// The state fields any `assert` expression reads.
+    ///
+    /// A finding's inputs must be visible to reduction: a writer of a field an assert reads is not
+    /// independent of the assert. `_failed_assert` records the failure; these are what decides it.
+    assert_field_reads: Vec<String>,
     /// Does the model declare a channel? Channel contents are not in the state vector, so a
     /// projection would lose the queue and merge states that differ only in occupancy.
     has_channels: bool,
@@ -442,6 +447,10 @@ impl LuaModel {
             crate::parser::ast::TopLevel::Init(i) => stmts_have_assert(&i.body),
             _ => false,
         });
+        // Fields the asserts read. Computed once: reduction needs them on every traversal and the
+        // answer cannot change during a search.
+        let assert_field_reads: Vec<String> =
+            layout::model_assert_reads(model).into_iter().collect();
         // Does the model declare a channel?
         //
         // Channel contents are *not* part of the serialized state: they live in the Lua runtime's
@@ -511,6 +520,7 @@ impl LuaModel {
             process_count,
             eval_error: std::cell::RefCell::new(None),
             has_asserts,
+            assert_field_reads,
             has_channels,
             guard_fields,
             has_goto,
@@ -715,8 +725,22 @@ impl Model for LuaModel {
             //   byte n = 0; active proctype P() { do :: (n < 10) -> n = n + 1 od }
             // with max_depth 3 explore one state and never reach the depth limit it exists to
             // report. The set is returned whole and projection is the identity for such a model.
-            let identity: std::collections::BTreeSet<String> =
+            let mut identity: std::collections::BTreeSet<String> =
                 self.state_fields.iter().cloned().collect();
+            // _failed_assert is not in the initial state's field list - it appears only once an
+            // assertion has failed - so building identity from state_fields alone makes the failed
+            // state project onto the same identity as the state before it, and the search
+            // deduplicates the violation away.
+            //
+            // Measured on a claim-free model:
+            //   byte x = 0;
+            //   active proctype A() { do :: x = 1; x = 2 od }
+            //   active proctype B() { assert(x != 1) }
+            // pan refutes in 11 states; with _failed_assert absent from identity the reduced search
+            // accepted in 10.
+            if self.has_asserts {
+                identity.insert("_failed_assert".to_string());
+            }
             return vec![ReductionScope {
                 name: "model".to_string(),
                 // Reduction still sees only what a finding can read. Widening this disabled the
@@ -726,6 +750,9 @@ impl Model for LuaModel {
                     let mut v = std::collections::BTreeSet::new();
                     if self.has_asserts {
                         v.insert("_failed_assert".to_string());
+                        // What the asserts READ, not only where a failure is recorded. A writer of
+                        // a field an assert reads is not independent of that assert.
+                        v.extend(self.assert_field_reads.iter().cloned());
                     }
                     v
                 },
