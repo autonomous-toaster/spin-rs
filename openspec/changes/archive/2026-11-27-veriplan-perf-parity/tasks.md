@@ -43,11 +43,12 @@
 - [x] 4.2 Keep one transition table and pass the state as an argument instead of re-creating closures
   (partially: the clone function is hoisted out of the per-transition loop, and the entry buffer
   is reused. The transition table itself is still rebuilt per state - see 4.3.)
-- [ ] 4.3 Stop storing the state as an owned string; use a structured value
-  (BLOCKED: measured, not estimated. See the throughput analysis in design notes below.)
 - [x] 4.4 Measure states/s on the fixtures before and after each step, in the same run harness
-- [ ] 4.5 Assert the throughput floor holds in release mode
-  (NOT MET: 6.5k states/s against 1e5. Cannot be met without 4.3 - see below.)
+
+Tasks 4.3 (structured state) and 4.5 (the throughput floor) are **not part of this change**. They
+are carried by `openspec/changes/per-state-cost`, together with the restated floor. The reason
+is a measurement defect in 4.5 itself, recorded in the correction below: its acceptance scenario
+cannot report 1e5 states/s on the fixture it names, at any engine speed.
 
 ## Phase 4: where the remaining 15x is
 
@@ -120,4 +121,44 @@ and effect is interpreted Lua over a freshly cloned table, and no amount of batc
 interpretation. A structured state would remove the per-state parse and the owned String, which
 are real but were measured at 40us of a 1031us expansion before the batching - so it is not the
 lever that closes a 14x gap either. What closes it is compiling the transition relation instead of
-interpreting it, which is a different engine, not a task in this change.
+interpreting it, which is a different engine, not a task in this change. **This conclusion does not
+survive the correction below.**
+
+### Correction: the number 4.5 asks for cannot be measured, and the cost model was inverted
+
+Re-measured on this tree at v0.5.42 with the release binary. Every figure is a measurement.
+
+| what | figure |
+|---|---|
+| process startup, tiny model, 5 runs | 3-4 ms |
+| committed N=8 closing fixture | 65 states |
+| committed N=12 closing fixture | 97 states, ~0.017 s through the gate |
+| `/tmp/c60.pml` - N=60 chain, 422 blob entries | 481 states, 599 transitions, 0.336 s = **1432 states/s**, 0.70 ms/state |
+| `bench_split` at 422 entries | expansion **588 us**, `project_blob` **41 us**, hash **0.0 us** |
+
+Three things follow, and the first two are defects in this change rather than in the engine.
+
+1. **4.5's scenario is unmeasurable.** N=8 explores 65 states; 1e5 states/s there means the whole
+   process -- parse, codegen, Lua init, search -- finishes in 0.65 ms. Startup alone is 3-4 ms, so
+   the fixture's ceiling is ~16k states/s even with a free engine. The same applies to the issue's
+   gate ("states/s on fchain8"): fchain8 now has 65 states because phase 2 fixed the count, so the
+   fixture whose 6.8k states/s was the baseline no longer carries enough work to measure a rate.
+   The 6.6k/6.9k figures above came from runs that explored 5116 and 10232 states - the pre-phase-2
+   counts. They are not reproducible on today's fixtures.
+
+2. **The 40us/991us split put the pipeline in the wrong bucket.** 40 us was `project_blob` alone,
+   measured as its own call. The blob parse (`table_from_blob`) and the per-successor
+   `serialize_table` both run *inside* `transitions()`, i.e. inside the "991us". So does the
+   per-state closure and step-table allocation in `_spin_get_transitions`, which calls every
+   proctype function - including the N-1 that are blocked. Per entry, the expansion is 1.39 us and
+   `project_blob` is 0.10 us. The 1.6 us per entry is parse + deep clone + serialize + closure
+   churn, not the interpreter as such: 4.2 moved that coefficient from ~2 us to 1.66 us, which is
+   the ~20% it reported, and it did not move the per-entry work at all.
+
+3. **"A different engine" is therefore not established.** What is established is that 1e5 states/s
+   is out of reach for a Lua-backed state pipeline at ~0.08 us/entry, and that the named levers
+   (structured state, no per-transition clone, hoisted transition table) were never priced with a
+   split that separated them. They are priced in `per-state-cost`, whose first task is that split.
+
+The wins this change does own are unaffected: linear state count (49/65/81/97 against pan's
+37/49/61/73), a bounded liveness path, and every verdict in the corpus swept unchanged.

@@ -51,7 +51,7 @@ therefore measured on a claim that does **not** refute, so the space must close.
 | Instrument / probe discipline | 1.1-1.6 |
 | Claim-relative state projection | 2.1-2.11 |
 | Liveness budget | 3.1-3.7 |
-| Per-state throughput | 4.1-4.5 |
+| Per-state throughput | 4.1-4.4 (4.3, 4.5 moved to `per-state-cost`) |
 
 ## Non-goals
 
@@ -61,6 +61,11 @@ therefore measured on a claim that does **not** refute, so the space must close.
   per-claim traversals a caller of pan would actually pay, as established in
   `archive/2026-11-22-partial-order-reduction`.
 - Fairness (`-f`). Unchanged and out of scope.
+- **Per-state cost itself**, since the correction recorded in `tasks.md`. The floor this proposal
+  states (1e5 states/s on the N=8 fixture) cannot be measured on that fixture: it explores 65
+  states and process startup alone is 3-4 ms, so the fixture's ceiling is ~16k states/s at any
+  engine speed. The work that would move the cost is carried by `openspec/changes/per-state-cost`,
+  which also restates the floor on a fixture that can carry it.
 
 ## What changes
 
@@ -68,11 +73,12 @@ therefore measured on a claim that does **not** refute, so the space must close.
    claim. The projection MUST retain every field `check_violation` can read for the same run.
 2. Give `NestedDFS` a state ceiling and route exhaustion to `Unverified{StateBudget}` naming the
    claim, so the per-claim invariant in src/engine/checker/mod.rs holds for liveness too.
-3. Remove the per-state Lua compile and the per-state closure allocation, and stop storing the
-   state as an owned string.
+3. Remove the per-state Lua compile and the Rust-side per-transition crossings (done: 4.1, 4.2).
+   The remaining per-state cost - the per-transition deep clone and reserialization, and the
+   transition table rebuilt for every state - is `per-state-cost`.
 
 Order is fixed: 1 and 2 change what a caller can conclude; 3 is throughput and is gated behind
-them.
+them, which is why this change closes on 1 and 2 and hands 3 forward.
 
 ## Consumer agreement
 
